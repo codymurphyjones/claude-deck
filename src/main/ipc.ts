@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from 'electron'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -210,6 +210,10 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
         return `data:${type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`
       }
       return undefined
+    },
+    'clipboard.writeImage': (_e, dataUrl: string) => {
+      const png = nativeImage.createFromDataURL(dataUrl).toPNG()
+      return clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })])
     },
     'clipboard.writeText': (_e, t: string) => clipboard.writeText(t),
     'clipboard.readText': () => clipboard.readText(),

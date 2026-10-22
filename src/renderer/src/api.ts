@@ -120,6 +120,7 @@ export const api = {
   },
   clipboard: {
     readImage: c<string | undefined>('clipboard.readImage'),
+    writeImage: c<void, [string]>('clipboard.writeImage'),
     writeText: c<void, [string]>('clipboard.writeText'),
     readText: c<string>('clipboard.readText')
   },

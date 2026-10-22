@@ -13,7 +13,7 @@ import type {
   ToastMessage,
   UpdateState
 } from '@shared/types'
-import type { JobDef, JobRun } from '@shared/jobs'
+import type { JobDef, JobRun, JobSource } from '@shared/jobs'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import { api, errMsg, type Library, type LiveSession } from './api'
 
@@ -105,6 +105,8 @@ export interface UiState {
   jobRunFor: false | { root: string; slug: string; step?: number }
   /** Routine designer: same as jobEdit, without a repo. */
   routineEdit: false | { slug?: string; draft?: JobDef }
+  /** A routine or job list item to highlight briefly (e.g. after pasting a job card). */
+  flash?: { kind: JobSource; slug: string }
   /** Run dialog for a routine; `cwd` pre-selects the target repo. */
   routineRunFor: false | { slug?: string; cwd?: string; step?: number }
   prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }

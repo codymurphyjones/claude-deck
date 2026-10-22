@@ -17,6 +17,7 @@ import {
 import type { Automation } from '@shared/types'
 import { api } from '../api'
 import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, toast, useStore } from '../store'
+import { copyJobCard } from '../jobClipboard'
 import { Icon } from './Icon'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
@@ -50,6 +51,9 @@ export function useRoutines(enabled = true): JobDef[] | undefined {
   }, [enabled])
   return defs
 }
+
+/** Ref for a list item being highlighted (store `flash`): bring it into view. */
+export const scrollToFlash = (el: HTMLElement | null): void => el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 
 const STEP_ICON: Record<JobStepStatus, [string, string]> = {
   passed: ['check', 'var(--success)'],
@@ -97,6 +101,7 @@ export function JobsView() {
   const jobs = useJobs(root)
   const runs = useStore((s) => s.jobRuns)
   const [openRun, setOpenRun] = useState<string | null>(null)
+  const flashing = useStore((s) => (s.flash?.kind === 'repo' ? s.flash.slug : undefined))
   useNow(20_000)
   const rootRuns = runs.filter((r) => r.root === root && !r.source)
   const lastRun = (slug: string): JobRun | undefined => rootRuns.find((r) => r.slug === slug)
@@ -154,7 +159,11 @@ export function JobsView() {
             return (
               <div
                 key={j.slug}
-                className="list-item"
+                data-card-kind="repo"
+                data-card-slug={j.slug}
+                data-card-root={root}
+                ref={flashing === j.slug ? scrollToFlash : undefined}
+                className={`list-item ${flashing === j.slug ? 'flash' : ''}`}
                 style={{ alignItems: 'flex-start' }}
                 onClick={() => set({ jobEdit: { root, slug: j.slug } })}
                 onContextMenu={(e) =>
@@ -164,6 +173,7 @@ export function JobsView() {
                     { label: 'Edit…', icon: 'edit', onClick: () => set({ jobEdit: { root, slug: j.slug } }) },
                     { label: 'Schedule…', icon: 'clock', onClick: () => scheduleJob(root, j) },
                     { label: 'Save as routine…', icon: 'wand', onClick: () => void saveAsRoutine(j) },
+                    { label: 'Copy', icon: 'copy', hint: 'Ctrl+C', onClick: () => void copyJobCard('repo', j) },
                     { separator: true },
                     { label: 'Delete', icon: 'trash', danger: true, onClick: () => void deleteJob(root, j) }
                   ])

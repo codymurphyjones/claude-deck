@@ -541,6 +541,16 @@ label.check {
 .list-item.active {
   background: var(--active);
 }
+.list-item.flash {
+  animation: listFlash 2.4s var(--ease);
+}
+@keyframes listFlash {
+  0%,
+  45% {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+}
 .list-item .actions {
   display: none;
   gap: 2px;

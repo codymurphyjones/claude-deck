@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { buildRoutineChatPrompt, buildStepPrompt, newJob, stepsToRun, type JobDef, type JobRunOptions } from '@shared/jobs'
+import { buildRoutineChatPrompt, buildStepPrompt, newJob, stepsToRun, type JobRunOptions } from '@shared/jobs'
 import { api } from '../api'
-import { activeSession, attempt, loadJobs, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
+import { activeSession, attempt, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
-import { deleteRoutine, designRoutineInChat, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, startRun, useRoots, useRoutines } from './Jobs'
+import { copyJobCard } from '../jobClipboard'
+import { deleteRoutine, designRoutineInChat, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
 // Routines are app-level jobs (~/.claude-deck/routines) that run against any repo,
@@ -14,22 +15,12 @@ async function openRoutinesFolder(): Promise<void> {
   if (dir) void api.shell.openPath(dir)
 }
 
-async function copyToRepo(j: JobDef, root: string): Promise<void> {
-  const existing = await loadJobs(root)
-  if (existing.some((x) => x.slug === j.slug)) {
-    const c = await api.dialog.confirm(`"${j.slug}" already exists in this repo's repo_jobs. Replace it?`, undefined, ['Replace', 'Cancel'])
-    if (c !== 0) return
-  }
-  await attempt(() => api.jobs.save(root, j), 'Copied to repo_jobs')
-}
-
 // ------------------------------------------------------------------ sidebar
 export function RoutinesView() {
   const routines = useRoutines()
-  const roots = useRoots()
-  const home = useStore((s) => s.homedir)
   const runs = useStore((s) => s.jobRuns)
   const [openRun, setOpenRun] = useState<string | null>(null)
+  const flashing = useStore((s) => (s.flash?.kind === 'routine' ? s.flash.slug : undefined))
   useNow(20_000)
   const routineRuns = runs.filter((r) => r.source === 'routine')
   const lastRun = (slug: string) => routineRuns.find((r) => r.slug === slug)
@@ -75,7 +66,10 @@ export function RoutinesView() {
           return (
             <div
               key={j.slug}
-              className="list-item"
+              data-card-kind="routine"
+              data-card-slug={j.slug}
+              ref={flashing === j.slug ? scrollToFlash : undefined}
+              className={`list-item ${flashing === j.slug ? 'flash' : ''}`}
               style={{ alignItems: 'flex-start' }}
               onClick={() => set({ routineEdit: { slug: j.slug } })}
               onContextMenu={(e) =>
@@ -83,8 +77,7 @@ export function RoutinesView() {
                   { label: 'Run…', icon: 'play', onClick: () => runRoutine(j.slug) },
                   { label: 'Edit…', icon: 'edit', onClick: () => set({ routineEdit: { slug: j.slug } }) },
                   { label: 'Schedule…', icon: 'clock', onClick: () => scheduleRoutine(j, activeSession()?.root) },
-                  ...(roots.length ? [{ separator: true }] : []),
-                  ...roots.slice(0, 8).map((r) => ({ label: `Copy to repo jobs: ${shortPath(r, home)}`, icon: 'copy', onClick: () => void copyToRepo(j, r) })),
+                  { label: 'Copy', icon: 'copy', hint: 'Ctrl+C', onClick: () => void copyJobCard('routine', j) },
                   { separator: true },
                   { label: 'Delete', icon: 'trash', danger: true, onClick: () => void deleteRoutine(j) }
                 ])

@@ -7,6 +7,7 @@ import { addSessionToTabs, focusSessionTab, get, loadJobs, loadRoutines, openFol
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
+import { copyPointedJobCard, isTypingTarget, pasteJobCard } from './jobClipboard'
 
 let combos = new Map<string, string>()
 
@@ -23,6 +24,17 @@ function applyLook(): void {
 function handleKey(e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return false
   const combo = eventCombo(e)
+  // Ctrl+V outside text fields pastes a copied routine / repo job card.
+  if (combo === 'Ctrl+V' && !combos.has(combo) && !get().popoutSessionId && !isTypingTarget(e.target)) {
+    e.preventDefault()
+    void pasteJobCard()
+    return true
+  }
+  // Ctrl+C on a routine / repo job (hovered, or open in the designer) copies it as an image card.
+  if (combo === 'Ctrl+C' && !combos.has(combo) && !isTypingTarget(e.target) && copyPointedJobCard()) {
+    e.preventDefault()
+    return true
+  }
   const cmd = combos.get(combo)
   if (!cmd) return false
   // Let plain typing shortcuts work inside text fields.
