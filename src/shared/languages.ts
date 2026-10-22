@@ -56,7 +56,7 @@ const INTERPRETERS: [RegExp, string][] = [
 /** Markdown fence tags people use that aren't highlight.js names or aliases. */
 const FENCE_ALIAS: Record<string, string> = {
   sh: 'bash', shell: 'bash', zsh: 'bash', console: 'bash', terminal: 'bash', fish: 'bash', ps1: 'powershell', pwsh: 'powershell', ps: 'powershell',
-  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', node: 'javascript', py: 'python', python3: 'python', rs: 'rust', golang: 'go',
+  luau: 'lua', ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', node: 'javascript', py: 'python', python3: 'python', rs: 'rust', golang: 'go',
   'c++': 'cpp', 'c#': 'csharp', cs: 'csharp', 'f#': 'fsharp', 'objective-c': 'objectivec', objc: 'objectivec',
   yml: 'yaml', toml: 'ini', env: 'ini', dotenv: 'ini', hcl: 'ini', terraform: 'ini', html: 'xml', vue: 'xml', svelte: 'xml', svg: 'xml',
   jsonc: 'json', json5: 'json', md: 'markdown', mdx: 'markdown', gql: 'graphql', proto: 'protobuf', docker: 'dockerfile', make: 'makefile',

@@ -1,6 +1,7 @@
 import { Lexer, Marked, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { highlight, langForFile } from '../highlight'
+import { tagFences } from './fenceLang'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
@@ -69,7 +70,7 @@ md.use({
       if (lang === 'mermaid') return `<div class="md-mermaid"><pre class="md-src">${esc(t.text)}</pre></div>`
       if (lang === 'chart') return `<div class="md-chart"><pre class="md-src">${esc(t.text)}</pre></div>`
       const hl = lang === 'diff' ? diffHtml(t.text) : highlight(t.text, lang || (file ? langFromPath(file) : undefined))
-      const label = file ? `<span class="code-file" data-path="${esc(file)}">${esc(file)}</span>` : `<span class="code-lang">${esc(lang || 'text')}</span>`
+      const label = file ? `<span class="code-file" data-path="${esc(file)}">${esc(file)}</span>` : `<span class="code-lang">${esc(lang && lang !== 'plaintext' ? lang : 'text')}</span>`
       return `<div class="code-block"><div class="code-head">${label}<button class="code-copy" data-copy="${esc(t.text)}" title="Copy">Copy</button></div><pre><code class="hljs${lang === 'diff' ? ' diff' : ''}">${hl}</code></pre></div>`
     },
     codespan(t: Tokens.Codespan) {
@@ -135,7 +136,10 @@ function closeOpenFence(text: string): string {
 
 export function renderMarkdown(text: string, streaming = false): string {
   const src = streaming ? closeOpenFence(text) : text
-  const html = md.parse(src, { async: false }) as string
+  // Lex and parse separately so untagged fences can get a language in between.
+  const tokens = md.lexer(src, md.defaults)
+  tagFences(tokens, (ts, cb) => md.walkTokens(ts, cb))
+  const html = md.parser(tokens, md.defaults)
   return DOMPurify.sanitize(html, {
     ADD_TAGS: ['details', 'summary', 'kbd', 'semantics', 'annotation', 'math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac', 'mtext', 'mspace', 'mover', 'munder', 'msqrt', 'mtable', 'mtr', 'mtd'],
     ADD_ATTR: ['data-path', 'data-line', 'data-copy', 'data-src', 'target', 'aria-hidden', 'encoding'],
