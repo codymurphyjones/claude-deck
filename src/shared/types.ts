@@ -229,7 +229,7 @@ export interface Settings {
   defaultPermissionMode: string
   claudePath: string
   shell: string
-  worktrees: { root: string; keep: number; autoDelete: boolean; branchPrefix: string }
+  worktrees: { root: string; keep: number; autoDelete: boolean; branchPrefix: string; cleanupMerged: boolean; deleteRemoteMerged: boolean }
   mesh: {
     enabled: boolean
     claimMode: 'ask' | 'deny' | 'off'

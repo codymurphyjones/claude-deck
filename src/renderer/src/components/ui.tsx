@@ -223,6 +223,27 @@ export function useNow(ms = 30_000): number {
   return n
 }
 
+/**
+ * Run one async action at a time: calls made while one is running are dropped (a ref, so a
+ * fast double-click can't get in before the re-render). `pending` is for disabling buttons.
+ */
+export function useExclusive(): [pending: boolean, run: (fn: () => Promise<unknown>) => Promise<void>] {
+  const running = useRef(false)
+  const [pending, setPending] = useState(false)
+  const run = async (fn: () => Promise<unknown>): Promise<void> => {
+    if (running.current) return
+    running.current = true
+    setPending(true)
+    try {
+      await fn()
+    } finally {
+      running.current = false
+      setPending(false)
+    }
+  }
+  return [pending, run]
+}
+
 export function shortPath(p: string, home: string): string {
   if (home && p.toLowerCase().startsWith(home.toLowerCase())) return '~' + p.slice(home.length)
   return p

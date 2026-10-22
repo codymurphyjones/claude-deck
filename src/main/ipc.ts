@@ -16,6 +16,7 @@ import * as gh from './github/ghService'
 import * as repo from './git/repoService'
 import type { CommitAction, StashAction } from '@shared/repo'
 import { archiveProjectChats, emitLibrary, removeProject, updateChat, updateProject } from './library'
+import type { LoadResult } from './loading/progressiveLoader'
 import { claudeHome, locateClaude, runtime } from './runtime'
 import type { SessionService } from './sessions/sessionService'
 import { insights, listTranscripts, searchTranscripts } from './transcripts/transcriptService'
@@ -57,7 +58,23 @@ async function listProjectFiles(root: string): Promise<string[]> {
   return files
 }
 
-const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|woff2?|ttf|otf|mp[34]|mov|avi|wasm|bin)$/i
+/** Progressive loads in flight, by the renderer-chosen load id. */
+const loads = new Map<string, AbortController>()
+
+/** Run a progressive load, sending each batch to the caller on `load:batch` as it is ready. */
+async function progressive<T>(e: IpcMainInvokeEvent, loadId: string, start: (emit: (records: T[]) => void, signal: AbortSignal) => Promise<LoadResult>): Promise<LoadResult> {
+  const ctl = new AbortController()
+  loads.set(loadId, ctl)
+  try {
+    return await start((records) => {
+      if (!ctl.signal.aborted && !e.sender.isDestroyed()) e.sender.send('load:batch', loadId, records)
+    }, ctl.signal)
+  } finally {
+    loads.delete(loadId)
+  }
+}
+
+const BINARY_EXT =/\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|woff2?|ttf|otf|mp[34]|mov|avi|wasm|bin)$/i
 
 export function registerIpc(deps: { sessions: SessionService; auth: AuthService; scheduler: Scheduler; jobs: JobService; processes: ProcessService; windows: WindowManager }): void {
   const { sessions, auth, scheduler, jobs, processes, windows } = deps
@@ -265,6 +282,9 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     // ---- git ----
     'git.info': (_e, cwd: string) => git.info(cwd),
     'git.diff': (_e, cwd: string, view: DiffView, opts: { ref?: string; base?: string }) => git.diff(cwd, view, opts),
+    'load.gitDiff': (e, loadId: string, cwd: string, view: DiffView, opts: { ref?: string; base?: string }) =>
+      progressive(e, loadId, (emit, signal) => git.diffProgressive(cwd, view, opts, emit, signal)),
+    'load.cancel': (_e, loadId: string) => loads.get(loadId)?.abort(),
     'git.applyHunk': (_e, cwd: string, file: DiffFile, idx: number, action: 'stage' | 'unstage' | 'revert') => git.applyHunk(cwd, file, idx, action),
     'git.applyFile': (_e, cwd: string, file: DiffFile, action: 'stage' | 'unstage' | 'revert') => git.applyFile(cwd, file, action),
     'git.applyAll': (_e, cwd: string, action: 'stage' | 'unstage' | 'revert') => git.applyAll(cwd, action),

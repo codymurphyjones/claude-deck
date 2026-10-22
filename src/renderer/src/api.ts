@@ -31,6 +31,7 @@ import type { ChatItem, ChatMeta } from '@shared/chat'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import type { BranchInfo, CommitAction, CurrentPr, RemoteInfo, RepoStatus, StashAction, StashInfo, TagInfo } from '@shared/repo'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
+import type { LoadResult } from '@shared/progressive'
 
 interface Bridge {
   call: (method: string, ...args: unknown[]) => Promise<unknown>
@@ -167,6 +168,10 @@ export const api = {
     commits: c<CommitInfo[], [string]>('git.commits'),
     createPr: c<string, [string, { title?: string; body?: string; draft?: boolean; base?: string }]>('git.createPr'),
     generateCommitMessage: c<string, [string]>('git.generateCommitMessage')
+  },
+  /** Progressive loads: batches arrive on `load:batch`; use loadProgressive() in ./progressive. */
+  load: {
+    gitDiff: c<LoadResult, [string, string, DiffView, { ref?: string; base?: string }]>('load.gitDiff')
   },
   worktree: {
     delete: c<void, [string]>('worktree.delete'),

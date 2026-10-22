@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { buildFilePatch, buildHunkPatch, parseUnifiedDiff } from '@shared/diff'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
+import { Batcher, fromProcess, loadProgressive, type LoadResult } from '../loading/progressiveLoader'
 import { run, which } from '../util'
 
 const git = (cwd: string, args: string[], input?: string, timeout = 60_000) =>
@@ -88,11 +89,16 @@ export async function recentCommits(cwd: string, n = 30): Promise<CommitInfo[]> 
     })
 }
 
-async function untrackedDiffs(root: string): Promise<DiffFile[]> {
+async function untrackedDiffs(root: string, onFile?: (f: DiffFile) => void, signal?: AbortSignal): Promise<DiffFile[]> {
   const r = await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])
   const files = r.stdout.split('\0').filter(Boolean).slice(0, 200)
   const out: DiffFile[] = []
+  const add = (d: DiffFile): void => {
+    out.push(d)
+    onFile?.(d)
+  }
   for (const f of files) {
+    if (signal?.aborted) break
     const full = path.join(root, f)
     let size = 0
     try {
@@ -101,7 +107,7 @@ async function untrackedDiffs(root: string): Promise<DiffFile[]> {
       continue
     }
     if (size > 1024 * 1024) {
-      out.push({ oldPath: f, newPath: f, headerLines: [], hunks: [], binary: true, status: 'untracked', additions: 0, deletions: 0 })
+      add({ oldPath: f, newPath: f, headerLines: [], hunks: [], binary: true, status: 'untracked', additions: 0, deletions: 0 })
       continue
     }
     const d = await git(root, ['diff', '--no-color', '--no-ext-diff', '--no-index', '--', '/dev/null', f])
@@ -110,9 +116,9 @@ async function untrackedDiffs(root: string): Promise<DiffFile[]> {
       p.status = 'untracked'
       p.newPath = f
       p.oldPath = f
-      out.push(p)
+      add(p)
     }
-    if (!parsed.length) out.push({ oldPath: f, newPath: f, headerLines: [], hunks: [], binary: false, status: 'untracked', additions: 0, deletions: 0 })
+    if (!parsed.length) add({ oldPath: f, newPath: f, headerLines: [], hunks: [], binary: false, status: 'untracked', additions: 0, deletions: 0 })
   }
   return out
 }
@@ -144,6 +150,50 @@ export async function diff(cwd: string, view: DiffView, opts: { ref?: string; ba
       return parseUnifiedDiff(r.stdout)
     }
   }
+}
+
+/**
+ * Same result as `diff`, delivered progressively: files are emitted as soon as their part
+ * of the output has arrived. A small diff comes out as a single batch.
+ */
+export async function diffProgressive(cwd: string, view: DiffView, opts: { ref?: string; base?: string }, emit: (files: DiffFile[]) => void, signal?: AbortSignal): Promise<LoadResult> {
+  const root = (await toplevel(cwd)) ?? cwd
+  const base = ['diff', '--no-color', '--no-ext-diff', '-U3', '--find-renames']
+  let args: string[] | undefined
+  let untracked = false
+  switch (view) {
+    case 'unstaged':
+      args = base
+      untracked = true
+      break
+    case 'staged':
+      args = [...base, '--cached']
+      break
+    case 'commit':
+      args = ['show', '--no-color', '--no-ext-diff', '--format=', '--find-renames', opts.ref || 'HEAD']
+      break
+    case 'branch': {
+      const target = opts.base || 'main'
+      const mb = await git(root, ['merge-base', 'HEAD', target])
+      if (mb.code !== 0) throw new Error(`No merge base with ${target}`)
+      args = [...base, mb.stdout.trim()]
+      untracked = true
+      break
+    }
+    case 'lastTurn':
+      if (opts.ref) args = [...base, opts.ref]
+      break
+  }
+  const result: LoadResult = args
+    ? await loadProgressive(fromProcess('git', ['-c', 'core.quotepath=false', ...args], { cwd: root, signal }), (seg) => parseUnifiedDiff(seg), emit, { format: 'unified-diff', signal })
+    : { format: 'unified-diff', records: 0, chars: 0, batches: 0 }
+  if (untracked && !signal?.aborted) {
+    const batcher = new Batcher(emit)
+    const extra = await untrackedDiffs(root, (f) => batcher.add(f), signal)
+    batcher.flush()
+    result.records += extra.length
+  }
+  return result
 }
 
 /** Snapshot the working tree (tracked changes) without touching it. */

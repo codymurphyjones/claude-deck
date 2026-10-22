@@ -4,7 +4,8 @@ import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
 import { askText, attempt, toast, useStore } from '../store'
 import { Icon } from './Icon'
-import { Seg } from './ui'
+import { Seg, useExclusive } from './ui'
+import { loadProgressive, type ProgressiveLoad } from '../progressive'
 import { highlightDiffLines, langForFile } from '../highlight'
 
 /** Files with more diff lines than this are shown without highlighting. */
@@ -36,10 +37,13 @@ export function DiffList({
   onComment,
   viewed,
   onToggleViewed,
-  root
+  root,
+  busy
 }: {
   files: DiffFile[]
   readOnly?: boolean
+  /** An action is running: action buttons are disabled. */
+  busy?: boolean
   view?: DiffView
   onAction?: (f: DiffFile, hunk: number | null, a: Action) => void
   comments?: Comment[]
@@ -95,17 +99,17 @@ export function DiffList({
               {!readOnly && onAction && (
                 <span className="row" style={{ gap: 2 }} onClick={(e) => e.stopPropagation()}>
                   {view !== 'staged' && (
-                    <button className="icon-btn sm" title="Stage file" onClick={() => onAction(f, null, 'stage')}>
+                    <button className="icon-btn sm" title="Stage file" disabled={busy} onClick={() => onAction(f, null, 'stage')}>
                       <Icon name="plus" size={13} />
                     </button>
                   )}
                   {view === 'staged' && (
-                    <button className="icon-btn sm" title="Unstage file" onClick={() => onAction(f, null, 'unstage')}>
+                    <button className="icon-btn sm" title="Unstage file" disabled={busy} onClick={() => onAction(f, null, 'unstage')}>
                       <Icon name="minus" size={13} />
                     </button>
                   )}
                   {view === 'unstaged' && (
-                    <button className="icon-btn sm" title="Revert file" onClick={() => onAction(f, null, 'revert')}>
+                    <button className="icon-btn sm" title="Revert file" disabled={busy} onClick={() => onAction(f, null, 'revert')}>
                       <Icon name="undo" size={13} />
                     </button>
                   )}
@@ -123,17 +127,17 @@ export function DiffList({
                       {!readOnly && onAction && f.status !== 'untracked' && (
                         <span className="actions">
                           {view !== 'staged' && (
-                            <button className="btn sm" onClick={() => onAction(f, hi, 'stage')}>
+                            <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'stage')}>
                               Stage
                             </button>
                           )}
                           {view === 'staged' && (
-                            <button className="btn sm" onClick={() => onAction(f, hi, 'unstage')}>
+                            <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'unstage')}>
                               Unstage
                             </button>
                           )}
                           {view === 'unstaged' && (
-                            <button className="btn sm danger" onClick={() => onAction(f, hi, 'revert')}>
+                            <button className="btn sm danger" disabled={busy} onClick={() => onAction(f, hi, 'revert')}>
                               Revert
                             </button>
                           )}
@@ -228,6 +232,10 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState('')
   const reqRef = useRef(0)
+  const loadRef = useRef<ProgressiveLoad | undefined>(undefined)
+  const [acting, exclusive] = useExclusive()
+
+  useEffect(() => () => loadRef.current?.cancel(), [])
 
   const repos = useMemo(() => {
     const p = projects.find((x) => x.id === session?.projectId)
@@ -250,8 +258,16 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
       }
       const b = base || gi.defaultBranch || 'main'
       if (!base) setBase(b)
-      const d = await api.git.diff(repo, view, { ref: view === 'lastTurn' ? session?.turnSnapshot : ref, base: b })
-      if (req === reqRef.current) setFiles(d)
+      // Files render as they arrive. The first batch replaces what's shown, so a refresh
+      // doesn't blank the list while it reloads.
+      loadRef.current?.cancel()
+      const pl = loadProgressive<DiffFile>(
+        (id) => api.load.gitDiff(id, repo, view, { ref: view === 'lastTurn' ? session?.turnSnapshot : ref, base: b }),
+        (batch, first) => req === reqRef.current && setFiles((cur) => (first ? batch : [...(cur ?? []), ...batch]))
+      )
+      loadRef.current = pl
+      const r = await pl.done
+      if (req === reqRef.current && !r.records) setFiles([])
       if (view === 'commit' && !commits.length) setCommits(await api.git.commits(repo))
     } catch (e) {
       if (req === reqRef.current) {
@@ -282,24 +298,28 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
     if (session?.status === 'idle') void load()
   }, [session?.status])
 
-  const act = async (f: DiffFile, hunk: number | null, a: Action): Promise<void> => {
-    if (!repo) return
-    if (a === 'revert' && (await api.dialog.confirm(`Revert ${hunk === null ? 'all changes in' : 'this hunk of'} ${f.newPath}?`, 'This discards the changes from your working tree.', ['Revert', 'Cancel'])) !== 0) return
-    try {
-      if (hunk === null) await api.git.applyFile(repo, f, a)
-      else await api.git.applyHunk(repo, f, hunk, a)
-    } catch (e) {
-      toast(errMsg(e), 'error')
-    }
-    void load()
-  }
+  // One action at a time, held until the reload shows the result, so a double-click can't
+  // stage (or revert) the same change twice.
+  const act = (f: DiffFile, hunk: number | null, a: Action): Promise<void> =>
+    exclusive(async () => {
+      if (!repo) return
+      if (a === 'revert' && (await api.dialog.confirm(`Revert ${hunk === null ? 'all changes in' : 'this hunk of'} ${f.newPath}?`, 'This discards the changes from your working tree.', ['Revert', 'Cancel'])) !== 0) return
+      try {
+        if (hunk === null) await api.git.applyFile(repo, f, a)
+        else await api.git.applyHunk(repo, f, hunk, a)
+      } catch (e) {
+        toast(errMsg(e), 'error')
+      }
+      await load()
+    })
 
-  const all = async (a: Action): Promise<void> => {
-    if (!repo) return
-    if (a === 'revert' && (await api.dialog.confirm('Revert ALL uncommitted changes?', 'Tracked changes are discarded and untracked files are deleted. This cannot be undone.', ['Revert all', 'Cancel'])) !== 0) return
-    await attempt(() => api.git.applyAll(repo, a))
-    void load()
-  }
+  const all = (a: Action): Promise<void> =>
+    exclusive(async () => {
+      if (!repo) return
+      if (a === 'revert' && (await api.dialog.confirm('Revert ALL uncommitted changes?', 'Tracked changes are discarded and untracked files are deleted. This cannot be undone.', ['Revert all', 'Cancel'])) !== 0) return
+      await attempt(() => api.git.applyAll(repo, a))
+      await load()
+    })
 
   const sendComments = (): void => {
     if (!session || !comments.length) return
@@ -431,16 +451,16 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           <span className="grow" />
           {view === 'unstaged' && (
             <>
-              <button className="btn sm" onClick={() => all('stage')}>
+              <button className="btn sm" disabled={acting} onClick={() => all('stage')}>
                 Stage all
               </button>
-              <button className="btn sm danger" onClick={() => all('revert')}>
+              <button className="btn sm danger" disabled={acting} onClick={() => all('revert')}>
                 Revert all
               </button>
             </>
           )}
           {view === 'staged' && (
-            <button className="btn sm" onClick={() => all('unstage')}>
+            <button className="btn sm" disabled={acting} onClick={() => all('unstage')}>
               Unstage all
             </button>
           )}
@@ -454,7 +474,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         {files === null ? (
           <div className="empty-note">Loading diff…</div>
         ) : (
-          <DiffList files={files} view={view} onAction={view === 'unstaged' || view === 'staged' ? act : undefined} comments={comments} onComment={(c) => setComments((cs) => [...cs, c])} root={repo} />
+          <DiffList files={files} view={view} onAction={view === 'unstaged' || view === 'staged' ? act : undefined} busy={acting} comments={comments} onComment={(c) => setComments((cs) => [...cs, c])} root={repo} />
         )}
       </div>
       {comments.length > 0 && (

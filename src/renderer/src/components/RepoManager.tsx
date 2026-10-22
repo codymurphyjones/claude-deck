@@ -6,7 +6,7 @@ import { activeSession, askText, attempt, openSession, set, toast, useStore, typ
 import { Icon } from './Icon'
 import { useRoots } from './Jobs'
 import { DiffList } from './ReviewPane'
-import { Modal, openMenu, openMenuAt, shortPath, Switch } from './ui'
+import { Modal, openMenu, openMenuAt, shortPath, Switch, useExclusive } from './ui'
 
 // Repo manager: stage and commit, branches, history, stashes, tags, remotes and the
 // current branch's pull request, for any project folder (not tied to a chat).
@@ -146,6 +146,7 @@ export function RepoView() {
   const { data, error, loading, load, more } = useRepo(root)
   const [open, setOpen] = useState<Record<string, boolean>>({ conflicts: true, staged: true, changes: true, branches: true, commits: true })
   const [busy, setBusy] = useState('')
+  const [staging, exclusive] = useExclusive()
   const [msg, setMsg] = useState('')
   const [amend, setAmend] = useState(false)
   const [branchFilter, setBranchFilter] = useState('')
@@ -160,7 +161,7 @@ export function RepoView() {
     setBusy(label)
     const r = await attempt(fn, ok)
     setBusy('')
-    void load()
+    await load()
     return r
   }
   const diff = (src: DiffRequest): void => set({ repoDiff: { ...src, cwd: root! } as RepoDiffSource })
@@ -322,14 +323,17 @@ export function RepoView() {
     await run('stash', () => api.repo.stashAction(root, s.index, action), action === 'drop' ? 'Stash dropped' : 'Stash applied')
   }
 
-  const fileAct = async (f: DiffFile, action: 'stage' | 'unstage' | 'revert'): Promise<void> => {
-    if (action === 'revert' && !(await confirm(`Discard changes to ${filePath(f)}?`, f.status === 'untracked' ? 'The file is deleted.' : 'This cannot be undone.', 'Discard'))) return
-    await run('file', () => api.git.applyFile(root, f, action))
-  }
-  const allAct = async (action: 'stage' | 'unstage' | 'revert'): Promise<void> => {
-    if (action === 'revert' && !(await confirm('Discard ALL changes?', 'Tracked changes are reverted and untracked files deleted. This cannot be undone.', 'Discard all'))) return
-    await run('all', () => api.git.applyAll(root, action))
-  }
+  // One stage/unstage/discard at a time, held until the refresh shows the result.
+  const fileAct = (f: DiffFile, action: 'stage' | 'unstage' | 'revert'): Promise<void> =>
+    exclusive(async () => {
+      if (action === 'revert' && !(await confirm(`Discard changes to ${filePath(f)}?`, f.status === 'untracked' ? 'The file is deleted.' : 'This cannot be undone.', 'Discard'))) return
+      await run('file', () => api.git.applyFile(root, f, action))
+    })
+  const allAct = (action: 'stage' | 'unstage' | 'revert'): Promise<void> =>
+    exclusive(async () => {
+      if (action === 'revert' && !(await confirm('Discard ALL changes?', 'Tracked changes are reverted and untracked files deleted. This cannot be undone.', 'Discard all'))) return
+      await run('all', () => api.git.applyAll(root, action))
+    })
 
   const fileRow = (f: DiffFile, view: 'staged' | 'unstaged') => {
     const p = filePath(f)
@@ -360,11 +364,11 @@ export function RepoView() {
             <Icon name="code" size={12} />
           </button>
           {view === 'unstaged' && (
-            <button className="icon-btn sm" title="Discard changes" onClick={(e) => (e.stopPropagation(), void fileAct(f, 'revert'))}>
+            <button className="icon-btn sm" title="Discard changes" disabled={staging} onClick={(e) => (e.stopPropagation(), void fileAct(f, 'revert'))}>
               <Icon name="undo" size={12} />
             </button>
           )}
-          <button className="icon-btn sm" title={view === 'unstaged' ? 'Stage' : 'Unstage'} onClick={(e) => (e.stopPropagation(), void fileAct(f, view === 'unstaged' ? 'stage' : 'unstage'))}>
+          <button className="icon-btn sm" title={view === 'unstaged' ? 'Stage' : 'Unstage'} disabled={staging} onClick={(e) => (e.stopPropagation(), void fileAct(f, view === 'unstaged' ? 'stage' : 'unstage'))}>
             <Icon name={view === 'unstaged' ? 'plus' : 'minus'} size={12} />
           </button>
         </span>
@@ -623,7 +627,7 @@ export function RepoView() {
                     <button className="icon-btn sm" title="View all staged changes" onClick={() => diff({ kind: 'working', view: 'staged', title: 'Staged changes' })}>
                       <Icon name="eye" size={12} />
                     </button>
-                    <button className="icon-btn sm" title="Unstage all" onClick={() => void allAct('unstage')}>
+                    <button className="icon-btn sm" title="Unstage all" disabled={staging} onClick={() => void allAct('unstage')}>
                       <Icon name="minus" size={12} />
                     </button>
                   </>
@@ -648,10 +652,10 @@ export function RepoView() {
                     <button className="icon-btn sm" title="Stash changes" onClick={() => void stash()}>
                       <Icon name="archive" size={12} />
                     </button>
-                    <button className="icon-btn sm" title="Discard all" onClick={() => void allAct('revert')}>
+                    <button className="icon-btn sm" title="Discard all" disabled={staging} onClick={() => void allAct('revert')}>
                       <Icon name="undo" size={12} />
                     </button>
-                    <button className="icon-btn sm" title="Stage all" onClick={() => void allAct('stage')}>
+                    <button className="icon-btn sm" title="Stage all" disabled={staging} onClick={() => void allAct('stage')}>
                       <Icon name="plus" size={12} />
                     </button>
                   </>
@@ -808,6 +812,7 @@ export function RepoDiffDialog() {
   const [files, setFiles] = useState<DiffFile[] | null>(null)
   const [error, setError] = useState('')
   const [onlyPath, setOnlyPath] = useState<string | undefined>()
+  const [acting, exclusive] = useExclusive()
 
   const load = useCallback(async () => {
     if (!src) return
@@ -839,16 +844,22 @@ export function RepoDiffDialog() {
   const shown = files?.filter((f) => !onlyPath || filePath(f) === onlyPath) ?? null
   const working = src.kind === 'working'
 
-  const act = async (f: DiffFile, hunk: number | null, a: 'stage' | 'unstage' | 'revert'): Promise<void> => {
-    if (a === 'revert' && !(await confirm(`Discard ${hunk === null ? 'all changes in' : 'this hunk of'} ${filePath(f)}?`, 'This cannot be undone.', 'Discard'))) return
-    try {
-      if (hunk === null) await api.git.applyFile(src.cwd, f, a)
-      else await api.git.applyHunk(src.cwd, f, hunk, a)
-    } catch (e) {
-      toast(errMsg(e), 'error')
-    }
-    void load()
-  }
+  const act = (f: DiffFile, hunk: number | null, a: 'stage' | 'unstage' | 'revert'): Promise<void> =>
+    exclusive(async () => {
+      if (a === 'revert' && !(await confirm(`Discard ${hunk === null ? 'all changes in' : 'this hunk of'} ${filePath(f)}?`, 'This cannot be undone.', 'Discard'))) return
+      try {
+        if (hunk === null) await api.git.applyFile(src.cwd, f, a)
+        else await api.git.applyHunk(src.cwd, f, hunk, a)
+      } catch (e) {
+        toast(errMsg(e), 'error')
+      }
+      await load()
+    })
+  const applyShown = (a: 'stage' | 'unstage'): Promise<void> =>
+    exclusive(async () => {
+      await Promise.all(shown!.map((f) => api.git.applyFile(src.cwd, f, a))).catch((e) => toast(errMsg(e), 'error'))
+      await load()
+    })
   const add = shown?.reduce((n, f) => n + f.additions, 0) ?? 0
   const del = shown?.reduce((n, f) => n + f.deletions, 0) ?? 0
 
@@ -876,12 +887,12 @@ export function RepoDiffDialog() {
             </button>
           )}
           {working && src.view === 'unstaged' && shown && shown.length > 0 && (
-            <button className="btn" onClick={() => Promise.all(shown.map((f) => api.git.applyFile(src.cwd, f, 'stage'))).then(load, (e) => toast(errMsg(e), 'error'))}>
+            <button className="btn" disabled={acting} onClick={() => void applyShown('stage')}>
               <Icon name="plus" size={13} /> Stage {onlyPath ? 'file' : 'all'}
             </button>
           )}
           {working && src.view === 'staged' && shown && shown.length > 0 && (
-            <button className="btn" onClick={() => Promise.all(shown.map((f) => api.git.applyFile(src.cwd, f, 'unstage'))).then(load, (e) => toast(errMsg(e), 'error'))}>
+            <button className="btn" disabled={acting} onClick={() => void applyShown('unstage')}>
               <Icon name="minus" size={13} /> Unstage {onlyPath ? 'file' : 'all'}
             </button>
           )}
@@ -896,7 +907,7 @@ export function RepoDiffDialog() {
         {shown === null ? (
           <div className="empty-note">Loading diff…</div>
         ) : (
-          <DiffList files={shown} view={working ? src.view : undefined} readOnly={!working} onAction={working ? act : undefined} root={src.cwd} />
+          <DiffList files={shown} view={working ? src.view : undefined} readOnly={!working} onAction={working ? act : undefined} busy={acting} root={src.cwd} />
         )}
       </div>
     </Modal>

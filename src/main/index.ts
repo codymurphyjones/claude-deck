@@ -13,6 +13,7 @@ import { WindowManager } from './windows'
 import { initUpdater, stopUpdater } from './updater'
 import { JobService } from './jobs/jobService'
 import { ProcessService } from './processes/processService'
+import { MergedWorktreeCleanup } from './worktrees/mergedCleanup'
 
 // If Claude Deck was launched from inside a Claude Code session, don't let that
 // session's identity leak into the sessions we start (it disables transcripts etc.).
@@ -100,11 +101,14 @@ if (!app.requestSingleInstanceLock()) {
 
     void auth.refresh()
     scheduler.start()
+    const mergedCleanup = new MergedWorktreeCleanup((w) => sessions.isWorktreeProtected(w.id))
+    mergedCleanup.start()
     initUpdater()
 
     app.on('before-quit', () => {
       if (windows) windows.quitting = true
       scheduler.stop()
+      mergedCleanup.stop()
       jobs.stop()
       processes.stopAll()
       stopUpdater()

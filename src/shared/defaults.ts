@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultPermissionMode: '',
   claudePath: '',
   shell: '',
-  worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/' },
+  worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true },
   mesh: {
     enabled: true,
     claimMode: 'ask',

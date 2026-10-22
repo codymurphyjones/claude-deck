@@ -513,6 +513,12 @@ function Worktrees({ s, update }: P) {
       <Row label="Keep the most recent">
         <input className="input" type="number" min={1} max={200} style={{ width: 80 }} value={w.keep} onChange={(e) => update({ worktrees: { ...w, keep: Math.max(1, +e.target.value) } })} />
       </Row>
+      <Row label="Clean up merged worktrees" desc="Every 10 minutes, ask GitHub (gh) for merged pull requests. A worktree whose branch was merged is deleted along with its local branch, if it has no uncommitted or unmerged work. Pinned chats, running sessions and permanent worktrees are skipped.">
+        <Switch on={w.cleanupMerged} onChange={(cleanupMerged) => update({ worktrees: { ...w, cleanupMerged } })} />
+      </Row>
+      <Row label="Also delete the remote branch" desc="Only when nobody has pushed to it since the merge.">
+        <Switch on={w.deleteRemoteMerged} onChange={(deleteRemoteMerged) => update({ worktrees: { ...w, deleteRemoteMerged } })} />
+      </Row>
       <Row label="Branch prefix" desc="Used by “Create branch here” and handoffs.">
         <input className="input mono" style={{ width: 160 }} value={w.branchPrefix} onChange={(e) => update({ worktrees: { ...w, branchPrefix: e.target.value } })} />
       </Row>
