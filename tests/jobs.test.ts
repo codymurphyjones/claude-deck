@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildRetryPrompt,
+  buildRoutineChatPrompt,
   buildStepPrompt,
   extractJson,
+  jobAssistPrompt,
   jobRunBranchName,
   manifestOf,
   newStep,
   normalizeJob,
   parseStepReport,
   resolveRunOptions,
+  routineDesignBrief,
   slugify,
   stepsToRun,
   uniqueId
@@ -100,5 +103,49 @@ describe('repo jobs', () => {
     expect(uniqueId('Step', ['step', 'step-2'])).toBe('step-3')
     expect(newStep('Verify', ['verify']).id).toBe('verify-2')
     expect(jobRunBranchName('upgrade-deps', 'jab12cd34')).toBe('jobs/upgrade-deps-12cd34')
+  })
+})
+
+describe('routines', () => {
+  const j = normalizeJob(raw, 'upgrade-deps')
+
+  it('frames step prompts as a routine with scoped run context', () => {
+    const p = buildStepPrompt(j, 0, { withContext: true, extra: 'Only the settings screen.', source: 'routine' })
+    expect(p).toContain('You are running the routine "Upgrade deps"')
+    expect(p).not.toContain('repo_jobs/')
+    expect(p).toContain('## Run context')
+    expect(p).toContain('stay strictly within it')
+    expect(p).toContain('Only the settings screen.')
+    expect(p).not.toContain('## Trigger details')
+    expect(buildStepPrompt(j, 0, { withContext: true, source: 'routine' })).not.toContain('## Run context')
+  })
+
+  it('keeps repo job wording unchanged', () => {
+    const p = buildStepPrompt(j, 0, { withContext: true, extra: 'x' })
+    expect(p).toContain('repo_jobs/upgrade-deps')
+    expect(p).toContain('## Trigger details\nx')
+    expect(p).not.toContain('## Run context')
+  })
+
+  it('composes a whole routine into one chat message', () => {
+    const p = buildRoutineChatPrompt(j, 'Focus on src/ui.')
+    expect(p).toContain('Run the routine "Upgrade deps"')
+    expect(p).toContain('## Context\nUse npm.')
+    expect(p).toContain('## Run context')
+    expect(p).toContain('Focus on src/ui.')
+    expect(p.indexOf('Step 1 of 3: Audit')).toBeGreaterThan(-1)
+    expect(p.indexOf('Step 2 of 3: Upgrade')).toBeGreaterThan(p.indexOf('Step 1 of 3'))
+    expect(p).toContain('- [ ] A list exists')
+    expect(p).toContain('- [ ] `npm test` exits with code 0')
+    expect(p).toContain('- If tests flake → rerun once')
+    expect(p).toContain('## Pivots (any step)')
+    expect(p).not.toContain('STEP_STATUS')
+    expect(buildRoutineChatPrompt(j)).not.toContain('## Run context')
+  })
+
+  it('asks for repo-agnostic definitions when drafting a routine', () => {
+    expect(jobAssistPrompt('refactor UI', undefined, { routine: true })).toContain('repo-agnostic')
+    expect(jobAssistPrompt('refactor UI')).not.toContain('repo-agnostic')
+    expect(routineDesignBrief()).not.toContain('repo_jobs/')
   })
 })

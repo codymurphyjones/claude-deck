@@ -1,5 +1,6 @@
 import { exec } from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import {
   buildRetryPrompt,
@@ -18,7 +19,8 @@ import {
   type JobCheckResult,
   type JobDef,
   type JobRun,
-  type JobRunOptions
+  type JobRunOptions,
+  type JobSource
 } from '@shared/jobs'
 import { broadcast, settings } from '../context'
 import { currentBranch, mustGit, rawGit as git, toplevel } from '../git/gitService'
@@ -44,6 +46,22 @@ Steps run in order in one continuing Claude conversation. After each step, every
 \`command\` expectation is run (it must exit 0); failures are fed back for another
 attempt, up to \`maxAttempts\`. Pivots tell Claude what to do instead when a known
 obstacle comes up.
+`
+
+/** App-level routines library: reusable jobs that run against any repo. */
+export const ROUTINES_DIR = path.join(os.homedir(), '.claude-deck', 'routines')
+
+const ROUTINES_README = `# Claude Deck routines
+
+Reusable, repo-agnostic jobs managed by Claude Deck (Routines view). A routine
+runs against whichever repository you pick, with optional run-specific context
+(e.g. "only the settings screen") added at launch.
+
+Each folder is one routine, in the same layout as a repo's \`repo_jobs\` folder:
+
+- \`job.json\`: name, description, defaults, pivots, and the ordered steps with their expectations
+- \`context.md\`: shared brief given to Claude at the start of a run
+- \`steps/<id>.md\`: the prompt for each step
 `
 
 /** Run a shell command; never rejects. */
@@ -89,28 +107,39 @@ export class JobService {
   }
 
   // ------------------------------------------------------------------ definitions
+  // Repo jobs live in <root>/repo_jobs; routines (app-level jobs) in ~/.claude-deck/routines.
+  // Both use the same folder layout, so the I/O below works on a base directory.
   private dir(root: string): string {
     return path.join(root, JOBS_DIR)
   }
 
   async list(root: string): Promise<JobDef[]> {
-    this.watch(root)
+    this.watch(this.dir(root), () => this.changed(root))
+    return this.listIn(this.dir(root))
+  }
+
+  async listRoutines(): Promise<JobDef[]> {
+    this.watch(ROUTINES_DIR, () => this.routinesChanged())
+    return this.listIn(ROUTINES_DIR)
+  }
+
+  private async listIn(base: string): Promise<JobDef[]> {
     let names: string[] = []
     try {
-      names = (await fs.promises.readdir(this.dir(root), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name)
+      names = (await fs.promises.readdir(base, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name)
     } catch {
       return []
     }
     const jobs: JobDef[] = []
     for (const n of names.sort()) {
-      const j = await this.read(root, n)
+      const j = await this.read(base, n)
       if (j) jobs.push(j)
     }
     return jobs
   }
 
-  private async read(root: string, slug: string): Promise<JobDef | undefined> {
-    const dir = path.join(this.dir(root), slug)
+  private async read(base: string, slug: string): Promise<JobDef | undefined> {
+    const dir = path.join(base, slug)
     let raw: Record<string, unknown>
     try {
       raw = JSON.parse(await fs.promises.readFile(path.join(dir, 'job.json'), 'utf8'))
@@ -125,20 +154,39 @@ export class JobService {
   }
 
   async get(root: string, slug: string): Promise<JobDef> {
-    const j = await this.read(root, slug)
+    const j = await this.read(this.dir(root), slug)
     if (!j) throw new Error(`Job "${slug}" not found in ${JOBS_DIR}`)
     return j
   }
 
+  async getRoutine(slug: string): Promise<JobDef> {
+    const j = await this.read(ROUTINES_DIR, slug)
+    if (!j) throw new Error(`Routine "${slug}" not found in ${ROUTINES_DIR}`)
+    return j
+  }
+
   async save(root: string, input: JobDef, prevSlug?: string): Promise<JobDef> {
+    const job = await this.saveIn(this.dir(root), README, input, prevSlug)
+    this.watch(this.dir(root), () => this.changed(root))
+    this.changed(root)
+    return job
+  }
+
+  async saveRoutine(input: JobDef, prevSlug?: string): Promise<JobDef> {
+    const job = await this.saveIn(ROUTINES_DIR, ROUTINES_README, input, prevSlug)
+    this.watch(ROUTINES_DIR, () => this.routinesChanged())
+    this.routinesChanged()
+    return job
+  }
+
+  private async saveIn(base: string, readmeText: string, input: JobDef, prevSlug?: string): Promise<JobDef> {
     const job = normalizeJob(input, slugify(input.slug || input.name))
-    const base = this.dir(root)
     await fs.promises.mkdir(base, { recursive: true })
     const readme = path.join(base, 'README.md')
-    if (!fs.existsSync(readme)) await fs.promises.writeFile(readme, README, 'utf8')
+    if (!fs.existsSync(readme)) await fs.promises.writeFile(readme, readmeText, 'utf8')
     const dir = path.join(base, job.slug)
     if (prevSlug && prevSlug !== job.slug) {
-      if (fs.existsSync(dir)) throw new Error(`A job named "${job.slug}" already exists`)
+      if (fs.existsSync(dir)) throw new Error(`"${job.slug}" already exists`)
       const prev = path.join(base, prevSlug)
       if (fs.existsSync(prev)) await fs.promises.rename(prev, dir)
     }
@@ -151,8 +199,6 @@ export class JobService {
     const keep = new Set(job.steps.map((s) => `${s.id}.md`))
     for (const s of job.steps) await fs.promises.writeFile(path.join(stepsDir, `${s.id}.md`), s.prompt.trimEnd() + '\n', 'utf8')
     for (const f of await fs.promises.readdir(stepsDir)) if (f.endsWith('.md') && !keep.has(f)) await fs.promises.rm(path.join(stepsDir, f), { force: true })
-    this.watch(root)
-    this.changed(root)
     return job
   }
 
@@ -161,30 +207,38 @@ export class JobService {
     this.changed(root)
   }
 
+  async removeRoutine(slug: string): Promise<void> {
+    await fs.promises.rm(path.join(ROUTINES_DIR, slugify(slug)), { recursive: true, force: true })
+    this.routinesChanged()
+  }
+
   private changed(root: string): void {
     broadcast('jobs:changed', root)
   }
 
+  private routinesChanged(): void {
+    broadcast('routines:changed')
+  }
+
   /** Pick up edits made outside the designer (e.g. by Claude in a chat). */
-  private watch(root: string): void {
-    const dir = this.dir(root)
-    if (this.watchers.has(root) || !fs.existsSync(dir)) return
+  private watch(dir: string, onChange: () => void): void {
+    if (this.watchers.has(dir) || !fs.existsSync(dir)) return
     try {
-      const fire = debounce(() => this.changed(root), 400)
+      const fire = debounce(onChange, 400)
       const w = fs.watch(dir, { recursive: true }, fire)
       w.on('error', () => {
         w.close()
-        this.watchers.delete(root)
+        this.watchers.delete(dir)
       })
-      this.watchers.set(root, w)
+      this.watchers.set(dir, w)
     } catch {
       /* watching is best-effort */
     }
   }
 
-  /** Draft or revise a job with Claude (read-only exploration of the repo). */
-  async assist(root: string, instruction: string, current?: JobDef): Promise<JobDef> {
-    const r = await runHeadless({ prompt: jobAssistPrompt(instruction, current), cwd: root, permissionMode: 'plan', model: settings().defaultModel }).done
+  /** Draft or revise a job (or a routine) with Claude (read-only exploration of `cwd`). */
+  async assist(root: string, instruction: string, current?: JobDef, opts: { routine?: boolean } = {}): Promise<JobDef> {
+    const r = await runHeadless({ prompt: jobAssistPrompt(instruction, current, opts), cwd: root, permissionMode: 'plan', model: settings().defaultModel }).done
     if (r.isError || !r.text) throw new Error(truncate(r.text || `Claude exited with code ${r.code}`, 400))
     let raw: unknown
     try {
@@ -237,9 +291,10 @@ export class JobService {
     slug: string,
     override: Partial<JobRunOptions> = {},
     trigger: JobRun['trigger'] = 'manual',
-    extra?: string
+    extra?: string,
+    source: JobSource = 'repo'
   ): Promise<{ run: JobRun; done: Promise<JobRun> }> {
-    const job = await this.get(root, slug)
+    const job = source === 'routine' ? await this.getRoutine(slug) : await this.get(root, slug)
     const options = resolveRunOptions(job, override)
     const order = stepsToRun(job, options)
     if (!order.length) throw new Error('No steps to run')
@@ -248,6 +303,7 @@ export class JobService {
       root,
       slug: job.slug,
       jobName: job.name,
+      ...(source === 'routine' ? { source } : {}),
       trigger,
       options,
       status: 'running',
@@ -270,7 +326,7 @@ export class JobService {
     const repo = await toplevel(run.root)
     if (o.workspace === 'worktree') {
       if (!repo) throw new Error('Worktree runs need a Git repository. Choose "Working copy" instead.')
-      const wt = await createWorktree({ repoCwd: repo, baseRef: o.branch || undefined, name: `job-${run.slug}` })
+      const wt = await createWorktree({ repoCwd: repo, baseRef: o.branch || undefined, name: `${run.source === 'routine' ? 'routine' : 'job'}-${run.slug}` })
       touchWorktree(wt.id)
       run.cwd = run.worktreePath = wt.path
       if (o.branchMode === 'direct') {
@@ -329,7 +385,7 @@ export class JobService {
         const sr = run.steps[i]
         Object.assign(sr, { status: 'running', startedAt: Date.now(), costUsd: 0 })
         if (step.freshSession) sessionId = undefined
-        let prompt = buildStepPrompt(job, i, { withContext: !sessionId, extra: first ? extra : undefined })
+        let prompt = buildStepPrompt(job, i, { withContext: !sessionId, extra: first ? extra : undefined, source: run.source })
         first = false
         let passed = false
         for (let attempt = 1; attempt <= step.maxAttempts && !ctl.stopped; attempt++) {
@@ -377,7 +433,7 @@ export class JobService {
             passed = true
             break
           }
-          prompt = sessionId ? buildRetryPrompt(job, i, attempt + 1, failures) : buildStepPrompt(job, i, { withContext: true, extra })
+          prompt = sessionId ? buildRetryPrompt(job, i, attempt + 1, failures) : buildStepPrompt(job, i, { withContext: true, extra, source: run.source })
         }
         sr.finishedAt = Date.now()
         if (ctl.stopped) {
@@ -402,7 +458,7 @@ export class JobService {
     this.emit()
     const passed = run.steps.filter((s) => s.status === 'passed').length
     const ran = run.steps.filter((s) => s.status !== 'skipped').length
-    notify('job', undefined, `Job ${run.status} · ${run.jobName}`, run.error ?? `${passed}/${ran} step(s) passed${run.branch ? ` on ${run.branch}` : ''}`)
+    notify('job', undefined, `${run.source === 'routine' ? 'Routine' : 'Job'} ${run.status} · ${run.jobName}`, run.error ?? `${passed}/${ran} step(s) passed${run.branch ? ` on ${run.branch}` : ''}`)
   }
 }
 

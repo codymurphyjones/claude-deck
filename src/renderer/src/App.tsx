@@ -10,6 +10,7 @@ import { SettingsModal } from './components/SettingsModal'
 import { GoalDialog, FleetDialog, BroadcastDialog } from './components/Dialogs'
 import { AutomationDialog } from './components/Automations'
 import { JobDesigner, JobRunDialog } from './components/Jobs'
+import { RoutineRunDialog } from './components/Routines'
 import { ProcessAlerts, ProcessLogDialog } from './components/Actions'
 import { MenuHost, PromptDialog, Toasts } from './components/ui'
 
@@ -35,6 +36,8 @@ export function App() {
       <AutomationDialog />
       <JobDesigner />
       <JobRunDialog />
+      <JobDesigner scope="routine" />
+      <RoutineRunDialog />
       <ProcessLogDialog />
       <PromptDialog />
       <MenuHost />

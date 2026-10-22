@@ -461,8 +461,8 @@ export interface Automation {
   kind: 'standalone' | 'inchat' | 'job'
   schedule: AutomationSchedule
   cwd: string
-  /** kind 'job': which repo job (under cwd/repo_jobs) and how to run it. */
-  job?: { slug: string; options?: Partial<JobRunOptions> }
+  /** kind 'job': which repo job (under cwd/repo_jobs) or, with `routine`, which app-level routine to run on cwd, and how. */
+  job?: { slug: string; options?: Partial<JobRunOptions>; routine?: boolean }
   projectId?: string
   useWorktree: boolean
   model?: string

@@ -191,11 +191,19 @@ export const api = {
     save: c<JobDef, [string, JobDef, string?]>('jobs.save'),
     remove: c<void, [string, string]>('jobs.remove'),
     assist: c<JobDef, [string, string, JobDef?]>('jobs.assist'),
-    run: c<JobRun, [string, string, Partial<JobRunOptions>]>('jobs.run'),
+    run: c<JobRun, [string, string, Partial<JobRunOptions>, string?]>('jobs.run'),
     stop: c<void, [string]>('jobs.stop'),
     updateRun: c<void, [string, Partial<JobRun>]>('jobs.updateRun'),
     removeRun: c<void, [string]>('jobs.removeRun'),
     markAllRead: c<void>('jobs.markAllRead')
+  },
+  routines: {
+    dir: c<string>('routines.dir'),
+    list: c<JobDef[]>('routines.list'),
+    save: c<JobDef, [JobDef, string?]>('routines.save'),
+    remove: c<void, [string]>('routines.remove'),
+    assist: c<JobDef, [string, JobDef?, string?]>('routines.assist'),
+    run: c<JobRun, [string, string, Partial<JobRunOptions>, string?]>('routines.run')
   },
   processes: {
     scan: c<ScriptPackage[], [string, boolean?]>('processes.scan'),

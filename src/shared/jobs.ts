@@ -6,6 +6,9 @@
 
 export const JOBS_DIR = 'repo_jobs'
 
+/** Where a job definition lives: a repo's repo_jobs folder, or the app-level routines library (~/.claude-deck/routines). */
+export type JobSource = 'repo' | 'routine'
+
 /** Something a step must achieve. `text` is judged by Claude; `command` is run by Claude Deck and must exit 0. */
 export interface JobCheck {
   kind: 'text' | 'command'
@@ -88,6 +91,8 @@ export interface JobRun {
   root: string
   slug: string
   jobName: string
+  /** Set for runs of an app-level routine; `root` is then the target repo. */
+  source?: 'routine'
   trigger: 'manual' | 'schedule'
   options: JobRunOptions
   status: 'running' | 'success' | 'failed' | 'stopped' | 'error'
@@ -213,15 +218,30 @@ export function stepPivots(job: JobDef, step: JobStep): JobPivot[] {
   return [...step.pivots, ...job.pivots]
 }
 
+const RUN_CONTEXT =
+  'Specific to this run. It refines the routine; where it limits scope (particular files, components, areas), stay strictly within it and leave everything else untouched.'
+
+function runContext(extra?: string): string | undefined {
+  return extra?.trim() ? `## Run context\n${RUN_CONTEXT}\n\n${extra.trim()}` : undefined
+}
+
 /** The prompt sent to Claude for one step. `withContext` on the first step of a conversation. */
-export function buildStepPrompt(job: JobDef, index: number, opts: { withContext: boolean; extra?: string }): string {
+export function buildStepPrompt(job: JobDef, index: number, opts: { withContext: boolean; extra?: string; source?: JobSource }): string {
   const step = job.steps[index]
   const parts: string[] = []
   if (opts.withContext) {
-    parts.push(`You are running the repo job "${job.name}" (repo_jobs/${job.slug}). It has ${job.steps.length} step(s); they are given to you one at a time.`)
+    const routine = opts.source === 'routine'
+    parts.push(
+      routine
+        ? `You are running the routine "${job.name}", a reusable app-level routine applied to this repository. It has ${job.steps.length} step(s); they are given to you one at a time.`
+        : `You are running the repo job "${job.name}" (repo_jobs/${job.slug}). It has ${job.steps.length} step(s); they are given to you one at a time.`
+    )
     if (job.description.trim()) parts.push(`Job goal: ${job.description.trim()}`)
     if (job.context.trim()) parts.push(`## Job context\n${job.context.trim()}`)
-    if (opts.extra?.trim()) parts.push(`## Trigger details\n${opts.extra.trim()}`)
+    if (routine) {
+      const rc = runContext(opts.extra)
+      if (rc) parts.push(rc)
+    } else if (opts.extra?.trim()) parts.push(`## Trigger details\n${opts.extra.trim()}`)
   }
   parts.push(`## Step ${index + 1} of ${job.steps.length}: ${step.title}\n${step.prompt.trim() || '(No further instructions.)'}`)
   if (step.expectations.length)
@@ -234,6 +254,29 @@ export function buildStepPrompt(job: JobDef, index: number, opts: { withContext:
   if (pivots.length)
     parts.push(`## Pivots\nIf one of these situations comes up, follow its instruction instead of pushing through:\n${numbered(pivots, (p) => `If ${p.when.trim()} → ${p.then.trim()}`)}`)
   parts.push(`## Reporting\n${REPORT}`)
+  return parts.join('\n\n')
+}
+
+/** A routine composed into one message, for running it interactively in a chat. */
+export function buildRoutineChatPrompt(job: JobDef, extra?: string): string {
+  const parts: string[] = [`Run the routine "${job.name}" on this repository.`]
+  if (job.description.trim()) parts.push(`Goal: ${job.description.trim()}`)
+  if (job.context.trim()) parts.push(`## Context\n${job.context.trim()}`)
+  const rc = runContext(extra)
+  if (rc) parts.push(rc)
+  job.steps.forEach((s, i) => {
+    const sec = [`## Step ${i + 1} of ${job.steps.length}: ${s.title}\n${s.prompt.trim() || '(No further instructions.)'}`]
+    if (s.expectations.length)
+      sec.push(`Done when:\n${s.expectations.map((c) => `- [ ] ${c.kind === 'command' ? `\`${c.text}\` exits with code 0` : c.text}`).join('\n')}`)
+    if (s.pivots.length) sec.push(`Pivots:\n${s.pivots.map((p) => `- If ${p.when.trim()} → ${p.then.trim()}`).join('\n')}`)
+    parts.push(sec.join('\n\n'))
+  })
+  if (job.pivots.length) parts.push(`## Pivots (any step)\n${numbered(job.pivots, (p) => `If ${p.when.trim()} → ${p.then.trim()}`)}`)
+  parts.push(
+    job.steps.length > 1
+      ? 'Work through the steps in order. When you finish, summarise what you did and how each step measures up against its "done when" list.'
+      : 'When you finish, summarise what you did and how it measures up against the "done when" list.'
+  )
   return parts.join('\n\n')
 }
 
@@ -312,10 +355,20 @@ Steps run in order, normally in one continuing conversation, so later steps can 
 Ask clarifying questions when the goal is ambiguous, then write or update the files directly.`
 }
 
-/** Prompt for one-shot drafting/revising a job as JSON. */
-export function jobAssistPrompt(instruction: string, current?: JobDef): string {
-  return `${jobDesignBrief()}
+const ROUTINE_NOTE = `This is a ROUTINE: an app-level job reused across many different repositories, with run-specific context added each time (e.g. which area to focus on). Keep it repo-agnostic: don't hard-code paths, names or commands from one codebase; describe what to look for instead (e.g. "find the project's test command and run it"). Prefer "text" expectations unless a command is universal.`
 
+/** Brief for a chat that designs routines by editing files in the routines library (the chat's working folder). */
+export function routineDesignBrief(): string {
+  return `${jobDesignBrief().replace(/"repo jobs"/g, '"routines"').split(`${JOBS_DIR}/`).join('')}
+
+${ROUTINE_NOTE}
+The current folder is the routines library: each routine is a folder <slug>/ holding job.json, context.md and steps/<id>.md.`
+}
+
+/** Prompt for one-shot drafting/revising a job as JSON. */
+export function jobAssistPrompt(instruction: string, current?: JobDef, opts: { routine?: boolean } = {}): string {
+  return `${jobDesignBrief()}
+${opts.routine ? `\n${ROUTINE_NOTE}\n` : ''}
 Instead of writing files, reply with ONLY a single JSON object (no code fence, no commentary) describing the whole job. It uses the job.json shape above, except each step also has a "prompt" field with its full markdown prompt, and the top level also has a "context" field with the shared brief.
 Explore the repository as needed so the steps, expectations (including real test/build commands for this repo) and pivots are concrete.
 

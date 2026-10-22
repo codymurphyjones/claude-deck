@@ -3,7 +3,7 @@ import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
 import { comboIndex, eventCombo } from './shortcuts'
-import { addSessionToTabs, focusSessionTab, get, loadJobs, openFolders, openSession, removeSessionFromTabs, set, toast, type Tab } from './store'
+import { addSessionToTabs, focusSessionTab, get, loadJobs, loadRoutines, openFolders, openSession, removeSessionFromTabs, set, toast, type Tab } from './store'
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
@@ -140,6 +140,9 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   })
   bridge.on('jobs:changed', (root: string) => {
     if (get().jobDefs[root]) void loadJobs(root)
+  })
+  bridge.on('routines:changed', () => {
+    if (get().routineDefs) void loadRoutines()
   })
   bridge.on('mesh:changed', (g: MeshGroupState) => set((st) => ({ mesh: { ...st.mesh, [g.key]: g } })))
   bridge.on('timeline:event', (ev: TimelineEvent) => set((st) => ({ timeline: [...st.timeline.slice(-999), ev] })))

@@ -23,7 +23,7 @@ export interface Tab {
   activePane: string
 }
 
-export type SidebarView = 'projects' | 'activity' | 'jobs' | 'scheduled' | 'team' | 'reviews'
+export type SidebarView = 'projects' | 'activity' | 'jobs' | 'routines' | 'scheduled' | 'team' | 'reviews'
 export type RightPanel = 'review' | 'files' | 'team' | 'browser' | 'timeline' | null
 
 export interface NewSessionPrefill {
@@ -53,6 +53,8 @@ export interface UiState {
   /** Job definitions per repo root (loaded on demand from <root>/repo_jobs). */
   jobDefs: Record<string, JobDef[]>
   jobsRoot?: string
+  /** App-level routines (loaded on demand from ~/.claude-deck/routines). */
+  routineDefs?: JobDef[]
   /** Background processes owned by projects. */
   processes: ProcessInfo[]
   /** package.json scripts per project id (scanned on demand). */
@@ -87,6 +89,10 @@ export interface UiState {
   /** Job designer: `slug` edits an existing job, `draft` opens an unsaved one. */
   jobEdit: false | { root: string; slug?: string; draft?: JobDef }
   jobRunFor: false | { root: string; slug: string; step?: number }
+  /** Routine designer: same as jobEdit, without a repo. */
+  routineEdit: false | { slug?: string; draft?: JobDef }
+  /** Run dialog for a routine; `cwd` pre-selects the target repo. */
+  routineRunFor: false | { slug?: string; cwd?: string; step?: number }
   prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }
   fileToOpen?: { path: string; sessionId?: string }
   updateState?: UpdateState
@@ -131,7 +137,9 @@ export const useStore = create<UiState>(() => ({
   broadcastOpen: false,
   automationEdit: false,
   jobEdit: false,
-  jobRunFor: false
+  jobRunFor: false,
+  routineEdit: false,
+  routineRunFor: false
 }))
 
 export const get = useStore.getState
@@ -373,6 +381,12 @@ export async function loadJobs(root: string): Promise<JobDef[]> {
   const defs = (await attempt(() => api.jobs.list(root))) ?? []
   set((s) => ({ jobDefs: { ...s.jobDefs, [root]: defs } }))
   return defs
+}
+
+export async function loadRoutines(): Promise<JobDef[]> {
+  const routineDefs = (await attempt(() => api.routines.list())) ?? []
+  set({ routineDefs })
+  return routineDefs
 }
 
 // ------------------------------------------------------------------ project actions

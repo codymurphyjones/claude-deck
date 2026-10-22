@@ -58,7 +58,7 @@ export function ScheduledView() {
               ])
             }
           >
-            <Icon name={a.kind === 'inchat' ? 'message' : a.kind === 'job' ? 'layers' : a.schedule.type === 'github' ? 'pr' : 'clock'} size={14} style={{ marginTop: 2, color: a.status === 'active' ? 'var(--accent)' : 'var(--muted)' }} />
+            <Icon name={a.kind === 'inchat' ? 'message' : a.kind === 'job' ? (a.job?.routine ? 'wand' : 'layers') : a.schedule.type === 'github' ? 'pr' : 'clock'} size={14} style={{ marginTop: 2, color: a.status === 'active' ? 'var(--accent)' : 'var(--muted)' }} />
             <div className="grow">
               <div className="ellipsis" style={{ fontWeight: 600 }}>
                 {a.name}
@@ -206,7 +206,7 @@ export function AutomationDialog() {
           options={[
             ['standalone', 'Standalone (new chat per run)'],
             ['inchat', 'Inside an existing chat'],
-            ['job', 'Repo job']
+            ['job', 'Job / routine']
           ]}
         />
         <label className="field">
@@ -250,7 +250,15 @@ export function AutomationDialog() {
             </button>
           </div>
         )}
-        {a.kind === 'job' && <ScheduledJobFields root={a.cwd ?? ''} value={a.job} onChange={(job) => setA({ ...a, job, name: a.name || job.slug })} />}
+        {a.kind === 'job' && (
+          <>
+            <ScheduledJobFields root={a.cwd ?? ''} value={a.job} onChange={(job) => setA({ ...a, job, name: a.name || job.slug })} />
+            <label className="field">
+              Additional context <span className="muted">(optional — given to Claude on every run)</span>
+              <textarea className="textarea" rows={3} value={a.prompt ?? ''} placeholder="Only touch the settings screen; leave everything else alone." onChange={(e) => setA({ ...a, prompt: e.target.value })} />
+            </label>
+          </>
+        )}
         <label className="field">
           When
           <Seg

@@ -23,7 +23,8 @@ import {
 } from './store'
 import { clearTerminal } from './terminal/registry'
 import { newJob } from '@shared/jobs'
-import { designInChat, openJobsFor } from './components/Jobs'
+import { designInChat, designRoutineInChat, openJobsFor } from './components/Jobs'
+import { openRoutines, runRoutine } from './components/Routines'
 
 export interface Command {
   id: string
@@ -134,6 +135,10 @@ export function buildCommands(): Command[] {
       }
     },
     { id: 'designJob', title: 'Design a repo job with Claude…', group: 'Automation', icon: 'sparkles', when: hasClaude, run: () => void designInChat(activeSession()!.root) },
+    { id: 'routines', title: 'Routines', group: 'Automation', icon: 'wand', run: openRoutines },
+    { id: 'runRoutine', title: 'Run a routine…', group: 'Automation', icon: 'wand', run: () => runRoutine() },
+    { id: 'newRoutine', title: 'New routine…', group: 'Automation', icon: 'wand', run: () => set({ routineEdit: { draft: newJob('New routine') } }) },
+    { id: 'designRoutine', title: 'Design a routine with Claude…', group: 'Automation', icon: 'sparkles', run: () => void designRoutineInChat() },
     {
       id: 'projectActions',
       title: 'Project actions (package.json scripts)',

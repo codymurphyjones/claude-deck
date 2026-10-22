@@ -6,7 +6,7 @@ import { uniqueFolders } from '@shared/paths'
 import type { Automation, AutomationRun, BoardItem, DiffFile, DiffView, EnvironmentConfig, LaunchOptions, MeshMessageKind, MeshRole, Project, ChatRecord, Settings, SessionKind } from '@shared/types'
 import type { AuthService } from './auth/authService'
 import type { Scheduler } from './automations/scheduler'
-import type { JobService } from './jobs/jobService'
+import { ROUTINES_DIR, type JobService } from './jobs/jobService'
 import type { ProcessService } from './processes/processService'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import { getTimeline, settings, state, updateSettings, updateState } from './context'
@@ -313,12 +313,20 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'jobs.save': (_e, root: string, job: JobDef, prevSlug?: string) => jobs.save(root, job, prevSlug),
     'jobs.remove': (_e, root: string, slug: string) => jobs.remove(root, slug),
     'jobs.assist': (_e, root: string, instruction: string, current?: JobDef) => jobs.assist(root, instruction, current),
-    'jobs.run': async (_e, root: string, slug: string, opts: Partial<JobRunOptions>) => (await jobs.start(root, slug, opts)).run,
+    'jobs.run': async (_e, root: string, slug: string, opts: Partial<JobRunOptions>, extra?: string) => (await jobs.start(root, slug, opts, 'manual', extra)).run,
     'jobs.stop': (_e, id: string) => jobs.stopRun(id),
     'jobs.runs': () => jobs.runs(),
     'jobs.updateRun': (_e, id: string, patch: Partial<JobRun>) => jobs.updateRun(id, patch),
     'jobs.removeRun': (_e, id: string) => jobs.removeRun(id),
     'jobs.markAllRead': () => jobs.markAllRead(),
+
+    // ---- routines (app-level jobs, run against any repo) ----
+    'routines.dir': () => ROUTINES_DIR,
+    'routines.list': () => jobs.listRoutines(),
+    'routines.save': (_e, job: JobDef, prevSlug?: string) => jobs.saveRoutine(job, prevSlug),
+    'routines.remove': (_e, slug: string) => jobs.removeRoutine(slug),
+    'routines.assist': (_e, instruction: string, current?: JobDef, cwd?: string) => jobs.assist(cwd || os.homedir(), instruction, current, { routine: true }),
+    'routines.run': async (_e, root: string, slug: string, opts: Partial<JobRunOptions>, extra?: string) => (await jobs.start(root, slug, opts, 'manual', extra, 'routine')).run,
 
     // ---- project actions (background processes) ----
     'processes.scan': (_e, projectId: string, refresh?: boolean) => processes.scan(projectId, refresh),

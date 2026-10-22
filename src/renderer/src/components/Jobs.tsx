@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   jobDesignBrief,
   newJob,
+  routineDesignBrief,
   newStep,
   slugify,
   type JobCheck,
@@ -9,16 +10,18 @@ import {
   type JobPivot,
   type JobRun,
   type JobRunOptions,
+  type JobSource,
   type JobStep,
   type JobStepStatus
 } from '@shared/jobs'
+import type { Automation } from '@shared/types'
 import { api } from '../api'
-import { askText, attempt, get, loadJobs, openSession, set, showSidebar, toast, useStore } from '../store'
+import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
 /** Repo folders that can hold jobs: project folders, plus whatever the active chat is in. */
-function useRoots(): string[] {
+export function useRoots(): string[] {
   const projects = useStore((s) => s.library.projects)
   const sessions = useStore((s) => s.sessions)
   return useMemo(() => {
@@ -37,6 +40,14 @@ function useJobs(root?: string): JobDef[] | undefined {
   useEffect(() => {
     if (root && !get().jobDefs[root]) void loadJobs(root)
   }, [root])
+  return defs
+}
+
+export function useRoutines(enabled = true): JobDef[] | undefined {
+  const defs = useStore((s) => s.routineDefs)
+  useEffect(() => {
+    if (enabled && !get().routineDefs) void loadRoutines()
+  }, [enabled])
   return defs
 }
 
@@ -61,6 +72,22 @@ export async function designInChat(root: string): Promise<void> {
   })
 }
 
+export async function designRoutineInChat(): Promise<void> {
+  const goal = await askText('What should the routine do? (optional — you can also describe it in the chat)', '', {
+    multiline: true,
+    placeholder: 'A significant UI refactor: audit components, unify styling, extract shared pieces, verify nothing regressed'
+  })
+  if (goal === null) return
+  const dir = await attempt(() => api.routines.dir())
+  if (!dir) return
+  await openSession('claude', {
+    cwd: dir,
+    name: 'Routine design',
+    appendSystemPrompt: routineDesignBrief(),
+    initialPrompt: goal.trim() ? `Help me design a routine for this goal:\n${goal.trim()}` : undefined
+  })
+}
+
 // ------------------------------------------------------------------ sidebar
 export function JobsView() {
   const roots = useRoots()
@@ -71,7 +98,7 @@ export function JobsView() {
   const runs = useStore((s) => s.jobRuns)
   const [openRun, setOpenRun] = useState<string | null>(null)
   useNow(20_000)
-  const rootRuns = runs.filter((r) => r.root === root)
+  const rootRuns = runs.filter((r) => r.root === root && !r.source)
   const lastRun = (slug: string): JobRun | undefined => rootRuns.find((r) => r.slug === slug)
 
   return (
@@ -136,6 +163,7 @@ export function JobsView() {
                     { label: 'Run with defaults', icon: 'zap', onClick: () => void startRun(root, j.slug, {}) },
                     { label: 'Edit…', icon: 'edit', onClick: () => set({ jobEdit: { root, slug: j.slug } }) },
                     { label: 'Schedule…', icon: 'clock', onClick: () => scheduleJob(root, j) },
+                    { label: 'Save as routine…', icon: 'wand', onClick: () => void saveAsRoutine(j) },
                     { separator: true },
                     { label: 'Delete', icon: 'trash', danger: true, onClick: () => void deleteJob(root, j) }
                   ])
@@ -183,7 +211,7 @@ export function JobsView() {
   )
 }
 
-function RunItem({ r, open, onToggle }: { r: JobRun; open: boolean; onToggle: () => void }) {
+export function RunItem({ r, open, onToggle }: { r: JobRun; open: boolean; onToggle: () => void }) {
   const done = r.steps.filter((s) => s.status === 'passed').length
   const total = r.steps.filter((s) => s.status !== 'skipped' || r.status === 'running').length
   return (
@@ -205,6 +233,7 @@ function RunItem({ r, open, onToggle }: { r: JobRun; open: boolean; onToggle: ()
             <span className={`badge ${runBadge(r)}`}>{r.status}</span>
           </div>
           <div className="sub ellipsis">
+            {r.source === 'routine' && `${r.root.split(/[\\/]/).pop()} · `}
             {done}/{total} steps{r.branch && ` · ${r.branch}`}
             {r.trigger === 'schedule' && ' · scheduled'}
           </div>
@@ -291,7 +320,7 @@ function RunDetail({ r }: { r: JobRun }) {
             <button
               className="btn sm"
               onClick={async () => {
-                const url = await attempt(() => api.git.createPr(r.worktreePath!, { title: `Job: ${r.jobName}`, body: prBody(r), draft: true }))
+                const url = await attempt(() => api.git.createPr(r.worktreePath!, { title: `${r.source === 'routine' ? 'Routine' : 'Job'}: ${r.jobName}`, body: prBody(r), draft: true }))
                 if (url) void api.shell.openExternal(url)
               }}
             >
@@ -313,19 +342,39 @@ function RunDetail({ r }: { r: JobRun }) {
 
 function prBody(r: JobRun): string {
   const lines = r.steps.filter((s) => s.status !== 'skipped').map((s) => `- [${s.status === 'passed' ? 'x' : ' '}] **${s.title}**${s.summary ? ` — ${s.summary}` : ''}`)
-  return `Automated run of repo job \`${r.slug}\`.\n\n${lines.join('\n')}`
+  return `Automated run of ${r.source === 'routine' ? 'routine' : 'repo job'} \`${r.slug}\`.\n\n${lines.join('\n')}`
 }
 
-async function startRun(root: string, slug: string, opts: Partial<JobRunOptions>): Promise<boolean> {
-  const run = await attempt(() => api.jobs.run(root, slug, opts))
+export async function startRun(root: string, slug: string, opts: Partial<JobRunOptions>, extra?: string, source: JobSource = 'repo'): Promise<boolean> {
+  const run = await attempt(() => (source === 'routine' ? api.routines.run(root, slug, opts, extra) : api.jobs.run(root, slug, opts, extra)))
   if (!run) return false
   toast(`Started “${run.jobName}”`, 'success')
-  set({ sidebarOpen: true, sidebarView: 'jobs', jobsRoot: root })
+  if (source === 'routine') set({ sidebarOpen: true, sidebarView: 'routines' })
+  else set({ sidebarOpen: true, sidebarView: 'jobs', jobsRoot: root })
   return true
 }
 
 function scheduleJob(root: string, j: JobDef): void {
   set({ jobEdit: false, automationEdit: { kind: 'job', name: j.name, prompt: '', cwd: root, job: { slug: j.slug, options: {} } } })
+}
+
+export function scheduleRoutine(j: JobDef, cwd = ''): void {
+  set({ routineEdit: false, automationEdit: { kind: 'job', name: j.name, prompt: '', cwd, job: { slug: j.slug, options: {}, routine: true } } })
+}
+
+async function saveAsRoutine(j: JobDef): Promise<void> {
+  const existing = get().routineDefs ?? (await loadRoutines())
+  if (existing.some((r) => r.slug === j.slug)) {
+    const c = await api.dialog.confirm(`A routine named "${j.slug}" already exists. Replace it?`, undefined, ['Replace', 'Cancel'])
+    if (c !== 0) return
+  }
+  await attempt(() => api.routines.save(j), 'Saved as routine')
+}
+
+export async function deleteRoutine(j: JobDef): Promise<boolean> {
+  const r = await api.dialog.confirm(`Delete routine "${j.name}"?`, `This removes ~/.claude-deck/routines/${j.slug}.`, ['Delete', 'Cancel'])
+  if (r !== 0) return false
+  return (await attempt(() => api.routines.remove(j.slug), 'Routine deleted')) !== undefined
 }
 
 async function deleteJob(root: string, j: JobDef): Promise<boolean> {
@@ -335,10 +384,14 @@ async function deleteJob(root: string, j: JobDef): Promise<boolean> {
 }
 
 // ------------------------------------------------------------------ run options
-export function RunOptionsFields({ root, job, value, onChange }: { root: string; job?: JobDef; value: Partial<JobRunOptions>; onChange: (v: Partial<JobRunOptions>) => void }) {
+/** `root` is the repo the run targets; without one (routine defaults) the branch picker is hidden. */
+export function RunOptionsFields({ root, job, value, onChange }: { root?: string; job?: JobDef; value: Partial<JobRunOptions>; onChange: (v: Partial<JobRunOptions>) => void }) {
   const [branches, setBranches] = useState<string[]>([])
   const [current, setCurrent] = useState<string>()
   useEffect(() => {
+    setBranches([])
+    setCurrent(undefined)
+    if (!root) return
     void api.git.branches(root).then(setBranches, () => setBranches([]))
     void api.git.info(root).then((g) => setCurrent(g.branch), () => undefined)
   }, [root])
@@ -350,17 +403,19 @@ export function RunOptionsFields({ root, job, value, onChange }: { root: string;
   const target = branch || current || 'the current branch'
   return (
     <>
-      <label className="field">
-        Branch
-        <select className="select" value={branch} onChange={(e) => onChange({ ...value, branch: e.target.value || undefined })}>
-          <option value="">Current branch{current ? ` (${current})` : ''}</option>
-          {branches.map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </select>
-      </label>
+      {root && (
+        <label className="field">
+          Branch
+          <select className="select" value={branch} onChange={(e) => onChange({ ...value, branch: e.target.value || undefined })}>
+            <option value="">Current branch{current ? ` (${current})` : ''}</option>
+            {branches.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="field">
         Workspace
         <Seg
@@ -444,7 +499,7 @@ export function RunOptionsFields({ root, job, value, onChange }: { root: string;
   )
 }
 
-function PermissionSelect({ value, fallback, onChange }: { value?: string; fallback?: string; onChange: (v?: string) => void }) {
+export function PermissionSelect({ value, fallback, onChange }: { value?: string; fallback?: string; onChange: (v?: string) => void }) {
   return (
     <select className="select" value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)}>
       <option value="">{fallback ? `job default (${fallback})` : 'default (workspace edits)'}</option>
@@ -460,8 +515,12 @@ export function JobRunDialog() {
   const req = useStore((s) => s.jobRunFor)
   const jobs = useJobs(req ? req.root : undefined)
   const [opts, setOpts] = useState<Partial<JobRunOptions>>({})
+  const [extra, setExtra] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => setOpts(req && req.step !== undefined ? { onlyStep: req.step } : {}), [req])
+  useEffect(() => {
+    setOpts(req && req.step !== undefined ? { onlyStep: req.step } : {})
+    setExtra('')
+  }, [req])
   if (!req) return null
   const job = jobs?.find((j) => j.slug === req.slug)
   const close = (): void => set({ jobRunFor: false })
@@ -480,7 +539,7 @@ export function JobRunDialog() {
             disabled={busy || !job}
             onClick={async () => {
               setBusy(true)
-              const ok = await startRun(req.root, req.slug, opts)
+              const ok = await startRun(req.root, req.slug, opts, extra)
               setBusy(false)
               if (ok) close()
             }}
@@ -492,6 +551,10 @@ export function JobRunDialog() {
     >
       <div className="modal-body">
         {job ? <RunOptionsFields root={req.root} job={job} value={opts} onChange={setOpts} /> : <div className="muted">Loading job…</div>}
+        <label className="field">
+          Additional context <span className="muted">(optional)</span>
+          <textarea className="textarea" rows={3} value={extra} placeholder="Anything specific to this run: an area to focus on, an issue link, constraints…" onChange={(e) => setExtra(e.target.value)} />
+        </label>
         <div className="muted" style={{ fontSize: 12 }}>
           Runs are unattended: anything that would need an approval prompt is denied automatically.
         </div>
@@ -503,9 +566,17 @@ export function JobRunDialog() {
 // ------------------------------------------------------------------ designer
 type Sel = 'overview' | number
 
-export function JobDesigner() {
-  const edit = useStore((s) => s.jobEdit)
-  const jobs = useJobs(edit ? edit.root : undefined)
+/** Designer for repo jobs, or (scope "routine") for app-level routines, which share the same shape. */
+export function JobDesigner({ scope = 'repo' }: { scope?: JobSource }) {
+  const isRoutine = scope === 'routine'
+  const jobEdit = useStore((s) => s.jobEdit)
+  const routineEdit = useStore((s) => s.routineEdit)
+  const edit = isRoutine ? routineEdit : jobEdit
+  const root = !isRoutine && jobEdit ? jobEdit.root : undefined
+  const repoJobs = useJobs(root)
+  const routines = useRoutines(isRoutine && !!edit)
+  const jobs = isRoutine ? routines : repoJobs
+  const noun = isRoutine ? 'routine' : 'job'
   const [job, setJob] = useState<JobDef | null>(null)
   const [origSlug, setOrigSlug] = useState<string>()
   const [sel, setSel] = useState<Sel>('overview')
@@ -533,7 +604,7 @@ export function JobDesigner() {
   }, [edit, !!jobs])
 
   if (!edit || !job) return null
-  const root = edit.root
+  const dismiss = (): void => set(isRoutine ? { routineEdit: false } : { jobEdit: false })
   const update = (patch: Partial<JobDef>): void => {
     setJob({ ...job, ...patch })
     setDirty(true)
@@ -541,26 +612,28 @@ export function JobDesigner() {
   const updateStep = (i: number, patch: Partial<JobStep>): void => update({ steps: job.steps.map((s, k) => (k === i ? { ...s, ...patch } : s)) })
   const close = async (): Promise<void> => {
     if (dirty && job.steps.some((s) => s.prompt.trim())) {
-      const r = await api.dialog.confirm('Discard unsaved changes to this job?', undefined, ['Discard', 'Keep editing'])
+      const r = await api.dialog.confirm(`Discard unsaved changes to this ${noun}?`, undefined, ['Discard', 'Keep editing'])
       if (r !== 0) return
     }
-    set({ jobEdit: false })
+    dismiss()
   }
   const save = async (): Promise<JobDef | undefined> => {
-    if (!job.name.trim()) return void toast('Give the job a name', 'error')
-    const saved = await attempt(() => api.jobs.save(root, { ...job, slug: origSlug ?? slugify(job.name) }, origSlug), 'Job saved')
+    if (!job.name.trim()) return void toast(`Give the ${noun} a name`, 'error')
+    const input = { ...job, slug: origSlug ?? slugify(job.name) }
+    const saved = await attempt(() => (isRoutine ? api.routines.save(input, origSlug) : api.jobs.save(root!, input, origSlug)), isRoutine ? 'Routine saved' : 'Job saved')
     if (!saved) return undefined
     setJob(saved)
     setOrigSlug(saved.slug)
     setDirty(false)
-    void loadJobs(root)
+    void (isRoutine ? loadRoutines() : loadJobs(root!))
     return saved
   }
   const runAssist = async (): Promise<void> => {
     if (!assist.trim()) return
     setAssisting(true)
     const hasContent = job.steps.some((s) => s.prompt.trim()) || job.description.trim()
-    const r = await attempt(() => api.jobs.assist(root, assist.trim(), hasContent ? job : undefined))
+    const current = hasContent ? job : undefined
+    const r = await attempt(() => (isRoutine ? api.routines.assist(assist.trim(), current) : api.jobs.assist(root!, assist.trim(), current)))
     setAssisting(false)
     if (!r) return
     undo.current = job
@@ -568,7 +641,7 @@ export function JobDesigner() {
     setDirty(true)
     setSel('overview')
     setAssist('')
-    toast(hasContent ? 'Job revised — review and save' : 'Job drafted — review and save', 'success')
+    toast(`${isRoutine ? 'Routine' : 'Job'} ${hasContent ? 'revised' : 'drafted'} — review and save`, 'success')
   }
   const moveStep = (i: number, d: -1 | 1): void => {
     const j = i + d
@@ -594,12 +667,14 @@ export function JobDesigner() {
       wide
       title={
         <span className="row" style={{ gap: 8 }}>
-          {origSlug ? 'Edit job' : 'New job'}
-          <span className="badge mono">repo_jobs/{origSlug ?? slugify(job.name)}</span>
+          {origSlug ? `Edit ${noun}` : `New ${noun}`}
+          <span className="badge mono">
+            {isRoutine ? 'routines' : 'repo_jobs'}/{origSlug ?? slugify(job.name)}
+          </span>
           {dirty && <span className="badge warn">unsaved</span>}
         </span>
       }
-      icon="layers"
+      icon={isRoutine ? 'wand' : 'layers'}
       onClose={() => void close()}
       footer={
         <>
@@ -608,7 +683,8 @@ export function JobDesigner() {
               className="btn danger"
               style={{ marginRight: 'auto' }}
               onClick={async () => {
-                if (await deleteJob(root, { ...job, slug: origSlug })) set({ jobEdit: false })
+                const target = { ...job, slug: origSlug }
+                if (await (isRoutine ? deleteRoutine(target) : deleteJob(root!, target))) dismiss()
               }}
             >
               Delete
@@ -618,7 +694,7 @@ export function JobDesigner() {
             className="btn"
             onClick={async () => {
               const s = dirty ? await save() : job
-              if (s) scheduleJob(root, s)
+              if (s) isRoutine ? scheduleRoutine(s) : scheduleJob(root!, s)
             }}
           >
             <Icon name="clock" size={13} /> Schedule…
@@ -627,7 +703,10 @@ export function JobDesigner() {
             className="btn"
             onClick={async () => {
               const s = dirty ? await save() : job
-              if (s) set({ jobEdit: false, jobRunFor: { root, slug: s.slug, step: typeof sel === 'number' ? sel : undefined } })
+              const step = typeof sel === 'number' ? sel : undefined
+              if (!s) return
+              if (isRoutine) set({ routineEdit: false, routineRunFor: { slug: s.slug, step } })
+              else set({ jobEdit: false, jobRunFor: { root: root!, slug: s.slug, step } })
             }}
           >
             <Icon name="play" size={13} /> {typeof sel === 'number' ? 'Run step…' : 'Run…'}
@@ -650,8 +729,10 @@ export function JobDesigner() {
           disabled={assisting}
           placeholder={
             job.steps.some((s) => s.prompt.trim())
-              ? 'Ask Claude to revise this job: “add a verification step that runs the e2e suite”, “split step 2 into smaller steps”…'
-              : 'Describe the job and Claude drafts it from your repo: “migrate the settings store to zod with tests and docs”…'
+              ? `Ask Claude to revise this ${noun}: “add a verification step that runs the e2e suite”, “split step 2 into smaller steps”…`
+              : isRoutine
+                ? 'Describe the routine and Claude drafts it: “a significant UI refactor: audit, unify styling, extract shared components, verify”…'
+                : 'Describe the job and Claude drafts it from your repo: “migrate the settings store to zod with tests and docs”…'
           }
           onChange={(e) => setAssist(e.target.value)}
           onKeyDown={(e) => {
@@ -662,7 +743,7 @@ export function JobDesigner() {
           }}
         />
         <button className="btn primary" disabled={assisting || !assist.trim()} onClick={() => void runAssist()}>
-          {assisting ? 'Claude is exploring the repo…' : job.steps.some((s) => s.prompt.trim()) ? 'Revise' : 'Draft'}
+          {assisting ? (isRoutine ? 'Claude is drafting…' : 'Claude is exploring the repo…') : job.steps.some((s) => s.prompt.trim()) ? 'Revise' : 'Draft'}
         </button>
         {undo.current && !assisting && (
           <button
@@ -676,7 +757,7 @@ export function JobDesigner() {
             <Icon name="undo" size={13} />
           </button>
         )}
-        <button className="btn ghost" title="Design interactively in a chat (Claude edits the files)" onClick={() => void designInChat(root)}>
+        <button className="btn ghost" title="Design interactively in a chat (Claude edits the files)" onClick={() => void (isRoutine ? designRoutineInChat() : designInChat(root!))}>
           <Icon name="message" size={13} />
         </button>
       </div>
@@ -743,7 +824,7 @@ export function JobDesigner() {
   )
 }
 
-function OverviewEditor({ job, update, root }: { job: JobDef; update: (p: Partial<JobDef>) => void; root: string }) {
+function OverviewEditor({ job, update, root }: { job: JobDef; update: (p: Partial<JobDef>) => void; root?: string }) {
   const [showDefaults, setShowDefaults] = useState(Object.keys(job.defaults).length > 0)
   return (
     <>
@@ -907,16 +988,32 @@ function PivotList({ label, hint, pivots, onChange }: { label: string; hint: str
   )
 }
 
-/** Job picker + options for scheduled tasks of kind "job". */
-export function ScheduledJobFields({ root, value, onChange }: { root: string; value?: { slug: string; options?: Partial<JobRunOptions> }; onChange: (v: { slug: string; options?: Partial<JobRunOptions> }) => void }) {
-  const jobs = useJobs(root || undefined)
+type ScheduledJob = NonNullable<Automation['job']>
+
+/** Job/routine picker + options for scheduled tasks of kind "job". A routine runs on the task's folder. */
+export function ScheduledJobFields({ root, value, onChange }: { root: string; value?: ScheduledJob; onChange: (v: ScheduledJob) => void }) {
+  const isRoutine = !!value?.routine
+  const repoJobs = useJobs(!isRoutine && root ? root : undefined)
+  const routines = useRoutines(isRoutine)
+  const jobs = isRoutine ? routines : repoJobs
   const job = jobs?.find((j) => j.slug === value?.slug)
+  const routine = isRoutine ? { routine: true } : {}
   return (
     <>
+      <Seg
+        value={isRoutine ? 'routine' : 'repo'}
+        onChange={(s) => onChange({ slug: '', options: {}, ...(s === 'routine' ? { routine: true } : {}) })}
+        options={[
+          ['repo', "Repo job (this folder's repo_jobs)"],
+          ['routine', 'Routine (app-level)']
+        ]}
+      />
       <label className="field">
-        Job
-        <select className="select" value={value?.slug ?? ''} onChange={(e) => onChange({ slug: e.target.value, options: {} })}>
-          <option value="">{jobs?.length ? 'Choose a job…' : root ? 'No jobs in this folder yet' : 'Choose a folder first'}</option>
+        {isRoutine ? 'Routine' : 'Job'}
+        <select className="select" value={value?.slug ?? ''} onChange={(e) => onChange({ slug: e.target.value, options: {}, ...routine })}>
+          <option value="">
+            {jobs?.length ? `Choose a ${isRoutine ? 'routine' : 'job'}…` : isRoutine ? 'No routines yet' : root ? 'No jobs in this folder yet' : 'Choose a folder first'}
+          </option>
           {jobs?.map((j) => (
             <option key={j.slug} value={j.slug}>
               {j.name} ({j.steps.length} steps)
@@ -924,12 +1021,13 @@ export function ScheduledJobFields({ root, value, onChange }: { root: string; va
           ))}
         </select>
       </label>
-      {job && <RunOptionsFields root={root} job={job} value={value?.options ?? {}} onChange={(options) => onChange({ slug: job.slug, options })} />}
+      {job && <RunOptionsFields root={root || undefined} job={job} value={value?.options ?? {}} onChange={(options) => onChange({ slug: job.slug, options, ...routine })} />}
     </>
   )
 }
 
-export const jobsRailPip = (runs: JobRun[]): number => runs.filter((r) => r.unread && r.status !== 'running').length
+export const jobsRailPip = (runs: JobRun[], source: JobSource = 'repo'): number =>
+  runs.filter((r) => r.unread && r.status !== 'running' && (source === 'routine') === (r.source === 'routine')).length
 
 export function openJobsFor(root?: string): void {
   if (root) set({ jobsRoot: root })

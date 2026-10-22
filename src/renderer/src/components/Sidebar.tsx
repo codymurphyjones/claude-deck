@@ -5,6 +5,7 @@ import { askText, attempt, focusSessionTab, get, openSession, resumeChat, set, s
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
+import { RoutinesView, runRoutine } from './Routines'
 import { ProjectActions } from './Actions'
 import { ReviewsView } from './Reviews'
 import { openMenu, Seg, shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
@@ -14,6 +15,7 @@ const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
   { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)' },
   { id: 'team', icon: 'users', title: 'Teams — sessions sharing a folder' },
   { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
+  { id: 'routines', icon: 'wand', title: 'Routines — reusable jobs for any repo' },
   { id: 'scheduled', icon: 'clock', title: 'Scheduled tasks' },
   { id: 'reviews', icon: 'pr', title: 'Pull request reviews' }
 ]
@@ -49,7 +51,7 @@ export function Sidebar({ open }: { open: boolean }) {
     <>
       <div className="rail">
         {VIEWS.map((v) => {
-          const pip = v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'team' ? teams : 0
+          const pip = v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'routines' ? jobsRailPip(jobRuns, 'routine') : v.id === 'team' ? teams : 0
           return (
             <button key={v.id} className={`icon-btn ${open && view === v.id ? 'on' : ''}`} title={v.title} onClick={() => showSidebar(v.id)}>
               <Icon name={v.icon} size={18} />
@@ -71,6 +73,7 @@ export function Sidebar({ open }: { open: boolean }) {
           {view === 'activity' && <ActivityView />}
           {view === 'team' && <TeamsView />}
           {view === 'jobs' && <JobsView />}
+          {view === 'routines' && <RoutinesView />}
           {view === 'scheduled' && <ScheduledView />}
           {view === 'reviews' && <ReviewsView />}
           <div className="resizer right" onMouseDown={startDrag} />
@@ -123,6 +126,7 @@ function ProjectsView() {
       { label: 'New chat in worktree', icon: 'branch', onClick: () => openSession('claude', { cwd: p.folders[0], worktree: {} }) },
       { label: 'New permanent worktree…', icon: 'layers', onClick: () => askText('Worktree name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createPermanent(p.folders[0], n), 'Permanent worktree created')) },
       { label: 'Launch a team here…', icon: 'users', onClick: () => set({ fleetOpen: { cwd: p.folders[0] } }) },
+      { label: 'Run a routine…', icon: 'wand', onClick: () => runRoutine(undefined, p.folders[0]) },
       { separator: true },
       { label: p.pinned ? 'Unpin project' : 'Pin project', icon: 'pin', onClick: () => api.library.updateProject(p.id, { pinned: !p.pinned }) },
       { label: 'Rename…', icon: 'edit', onClick: () => askText('Project name', p.name).then<unknown>((n) => n && api.library.updateProject(p.id, { name: n })) },
@@ -459,7 +463,8 @@ function ActivityView() {
               className="list-item"
               style={{ alignItems: 'flex-start' }}
               onClick={() => {
-                openJobsFor(r.root)
+                if (r.source === 'routine') showSidebar('routines')
+                else openJobsFor(r.root)
                 if (unread) void api.jobs.updateRun(r.id, { unread: false })
               }}
             >

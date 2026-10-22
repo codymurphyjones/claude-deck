@@ -4,6 +4,8 @@ import { commands, SLASH_COMMANDS } from '../commands'
 import { prettyCombo, shortcutMap } from '../shortcuts'
 import { activeSession, focusSessionTab, openSession, resumeChat, set, useStore } from '../store'
 import { Icon } from './Icon'
+import { useRoutines } from './Jobs'
+import { runRoutine } from './Routines'
 import { fuzzyScore, Modal, timeAgo } from './ui'
 
 interface Item {
@@ -22,6 +24,7 @@ export function CommandPalette() {
   const sessions = useStore((s) => s.sessions)
   const lib = useStore((s) => s.library)
   const settings = useStore((s) => s.settings)
+  const routines = useRoutines(!!mode)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
@@ -59,6 +62,8 @@ export function CommandPalette() {
       if (active?.kind === 'claude')
         for (const t of settings.promptTemplates)
           add({ key: 'pt' + t.id, group: 'Prompt templates', title: t.name, sub: t.text, icon: 'note', run: () => set({ composerFor: active.id, composerPrefill: t.text }) }, `${t.name} ${t.text}`)
+      for (const r of routines ?? [])
+        add({ key: 'rt' + r.slug, group: 'Routines', title: `Run routine: ${r.name}`, sub: r.description, icon: 'wand', run: () => runRoutine(r.slug) }, `routine ${r.name} ${r.description}`)
       for (const c of lib.chats.filter((x) => !x.archived && !x.hidden).slice(0, 300))
         add(
           { key: 'ch' + c.claudeSessionId, group: 'Chats', title: c.name, sub: `${c.cwd.split(/[\\/]/).pop()} · ${timeAgo(c.updatedAt)}${c.branch ? ` · ${c.branch}` : ''}`, icon: 'message', run: () => resumeChat(c.claudeSessionId) },
@@ -67,11 +72,11 @@ export function CommandPalette() {
       for (const p of lib.projects)
         add({ key: 'p' + p.id, group: 'Projects', title: `New chat in ${p.name}`, sub: p.folders[0], icon: 'folder', run: () => openSession('claude', { cwd: p.folders[0] }) }, `${p.name} ${p.folders.join(' ')}`)
     }
-    const groupOrder = ['Open sessions', 'Commands', 'Claude slash commands', 'Prompt templates', 'Chats', 'Projects']
+    const groupOrder = ['Open sessions', 'Commands', 'Claude slash commands', 'Prompt templates', 'Routines', 'Chats', 'Projects']
     if (query) out.sort((a, b) => b.score - a.score)
     else out.sort((a, b) => groupOrder.indexOf(a.group) - groupOrder.indexOf(b.group))
     return out.slice(0, 120)
-  }, [mode, q, sessions, lib, settings])
+  }, [mode, q, sessions, lib, settings, routines])
 
   useEffect(() => {
     listRef.current?.querySelector('.palette-item.sel')?.scrollIntoView({ block: 'nearest' })

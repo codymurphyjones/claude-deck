@@ -184,7 +184,8 @@ export class Scheduler {
     const runRec = this.newRun(a)
     try {
       if (!a.job?.slug) throw new Error('No job selected')
-      const { run: jr, done } = await this.jobs.start(a.cwd, a.job.slug, a.job.options, 'schedule', extra)
+      const context = [a.prompt, extra].filter((x) => x?.trim()).join('\n\n') || undefined
+      const { run: jr, done } = await this.jobs.start(a.cwd, a.job.slug, a.job.options, 'schedule', context, a.job.routine ? 'routine' : 'repo')
       runRec.cwd = jr.cwd
       this.running.set(a.id, () => this.jobs.stopRun(jr.id))
       const r = await done
