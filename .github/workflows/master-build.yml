@@ -1,0 +1,69 @@
+# Every push/merge to master: test, build the Windows installer, and publish it as a
+# GitHub pre-release. Installed apps on the "Latest (master)" channel auto-update to it,
+# and older master builds stay available in the in-app version manager (last 15 kept).
+name: Master build
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: master-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - name: Stamp version
+        id: version
+        run: echo "version=$(node scripts/ci-version.mjs dev ${{ github.run_number }})" >> "$GITHUB_OUTPUT"
+
+      - name: Build installer
+        run: npx electron-vite build && npx electron-builder --win --publish never
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          shopt -s nullglob
+          gh release create "v$VERSION" dist/*.exe dist/*.exe.blockmap dist/latest.yml \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Master build $VERSION" \
+            --notes "Automatic build of \`${GITHUB_SHA::7}\` from master.
+
+          $(git log -1 --pretty=format:'**%s** — %an')
+
+          Installed copies on the **Latest (master)** update channel update to this automatically."
+
+      - name: Prune old master builds (keep 15)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 200 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("-dev\\.")))] | sort_by(.createdAt) | reverse | .[15:] | .[].tagName' \
+          | while read -r tag; do
+              [ -n "$tag" ] && gh release delete "$tag" --yes --cleanup-tag
+            done

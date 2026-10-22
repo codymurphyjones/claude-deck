@@ -1,0 +1,363 @@
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from 'electron'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { uniqueFolders } from '@shared/paths'
+import type { Automation, AutomationRun, BoardItem, DiffFile, DiffView, EnvironmentConfig, LaunchOptions, MeshMessageKind, MeshRole, Project, ChatRecord, Settings, SessionKind } from '@shared/types'
+import type { AuthService } from './auth/authService'
+import type { Scheduler } from './automations/scheduler'
+import { getTimeline, settings, state, updateSettings, updateState } from './context'
+import { loadEnvironment, saveEnvironment } from './env/environmentService'
+import * as git from './git/gitService'
+import * as gh from './github/ghService'
+import { archiveProjectChats, emitLibrary, removeProject, updateChat, updateProject } from './library'
+import { claudeHome, locateClaude, runtime } from './runtime'
+import type { SessionService } from './sessions/sessionService'
+import { insights, listTranscripts, searchTranscripts } from './transcripts/transcriptService'
+import { run, shortId, which } from './util'
+import * as wt from './worktrees/worktreeService'
+import type { WindowManager } from './windows'
+import * as updater from './updater'
+import type { ReleaseInfo } from '@shared/types'
+
+type Handler = (e: IpcMainInvokeEvent, ...args: never[]) => unknown
+
+const fileListCache = new Map<string, { at: number; files: string[] }>()
+
+async function listProjectFiles(root: string): Promise<string[]> {
+  const c = fileListCache.get(root)
+  if (c && Date.now() - c.at < 30_000) return c.files
+  let files: string[] = []
+  const r = await run('git', ['ls-files', '-co', '--exclude-standard'], { cwd: root, timeout: 20_000 })
+  if (r.code === 0) files = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean)
+  else {
+    const walk = (dir: string, rel: string, depth: number): void => {
+      if (depth > 6 || files.length > 20_000) return
+      let ents: fs.Dirent[] = []
+      try {
+        ents = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of ents) {
+        if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === 'dist' || e.name === 'out') continue
+        const r2 = rel ? `${rel}/${e.name}` : e.name
+        if (e.isDirectory()) walk(path.join(dir, e.name), r2, depth + 1)
+        else files.push(r2)
+      }
+    }
+    walk(root, '', 0)
+  }
+  fileListCache.set(root, { at: Date.now(), files })
+  return files
+}
+
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|woff2?|ttf|otf|mp[34]|mov|avi|wasm|bin)$/i
+
+export function registerIpc(deps: { sessions: SessionService; auth: AuthService; scheduler: Scheduler; windows: WindowManager }): void {
+  const { sessions, auth, scheduler, windows } = deps
+  const pendingReads = new Map<string, (text: string) => void>()
+
+  sessions.terminalReader = (s, lines) =>
+    new Promise((resolve) => {
+      const win = BrowserWindow.getAllWindows().find((w) => w.webContents.id === s.hostWindow)
+      if (!win) return resolve(undefined)
+      const reqId = shortId()
+      const t = setTimeout(() => {
+        pendingReads.delete(reqId)
+        resolve(undefined)
+      }, 1500)
+      pendingReads.set(reqId, (text) => {
+        clearTimeout(t)
+        resolve(text)
+      })
+      win.webContents.send('term:read', reqId, s.id, lines)
+    })
+
+  const h: Record<string, Handler> = {
+    // ---- app ----
+    'app.init': (e) => ({
+      settings: settings(),
+      sessions: sessions.list(),
+      auth: auth.status,
+      library: { projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders },
+      automations: scheduler.data(),
+      mesh: sessions.mesh.allGroups(),
+      timeline: getTimeline().slice(-500),
+      savedTabs: state().openTabs,
+      windowId: e.sender.id,
+      homedir: os.homedir(),
+      platform: process.platform,
+      version: app.getVersion(),
+      claudePath: locateClaude(settings().claudePath),
+      pinnedReviews: state().pinnedReviews
+    }),
+    'settings.update': (_e, patch: Partial<Settings>) => {
+      const s = updateSettings(patch)
+      windows.applySettings()
+      if (patch.updates) updater.settingsChanged()
+      return s
+    },
+    'app.quit': () => app.quit(),
+
+    // ---- updates & version manager ----
+    'update.state': () => updater.updateState(),
+    'update.check': () => updater.checkForUpdates(),
+    'update.download': () => updater.downloadUpdate(),
+    'update.install': () => updater.installUpdate(),
+    'update.releases': () => updater.listReleases(),
+    'update.installVersion': (_e, rel: ReleaseInfo) => updater.installVersion(rel),
+    'update.releaseHold': () => updater.releaseHold(),
+
+    // ---- sessions ----
+    'session.create': (e, kind: SessionKind, launch: LaunchOptions) => sessions.create(kind, launch, e.sender.id),
+    'session.close': (_e, id: string) => sessions.close(id),
+    'session.restart': (_e, id: string) => sessions.restart(id),
+    'session.rename': (_e, id: string, name: string) => sessions.rename(id, name),
+    'session.buffer': (_e, id: string) => sessions.buffer(id),
+    'session.repaint': (_e, id: string) => sessions.repaint(id),
+    'session.sendPrompt': (_e, id: string, text: string, mode?: 'steer' | 'queue') => sessions.sendPrompt(id, text, mode),
+    'session.broadcast': (_e, ids: string[], text: string) => sessions.broadcastPrompt(ids, text),
+    'session.setActive': (e, id: string | undefined, focused: boolean) => sessions.setActive(e.sender.id, id, focused),
+    'session.openShell': (_e, parentId: string, command?: string) => sessions.openShell(parentId, command),
+    'session.fork': (_e, id: string, opts: { worktree?: boolean; side?: boolean }) => sessions.fork(id, opts),
+    'session.handoff': (_e, id: string) => sessions.handoff(id),
+    'session.setGoal': (_e, id: string, text: string) => sessions.setGoal(id, text),
+    'session.updateGoal': (_e, id: string, action: 'pause' | 'resume' | 'clear' | 'edit', text?: string) => sessions.updateGoal(id, action, text),
+    'session.setRole': (_e, id: string, role: MeshRole) => sessions.setRole(id, role),
+    'session.cycleMode': (_e, id: string) => sessions.cycleMode(id),
+    'session.deliverMessages': (_e, id: string) => sessions.mesh.tryWake(id, true),
+    'session.saveTabs': (_e, tabs: { sessionIds: string[] }[]) => sessions.saveOpenTabs(tabs),
+    'session.list': () => sessions.list(),
+    'session.markAllRead': () => sessions.markAllRead(),
+    'session.focus': (_e, id: string) => sessions.focus(id),
+    'term.readResult': (_e, reqId: string, text: string) => pendingReads.get(reqId)?.(text),
+
+    // ---- chat (structured Claude sessions) ----
+    'chat.snapshot': (_e, id: string) => sessions.chatSnapshot(id),
+    'chat.send': (_e, id: string, text: string, images?: { mediaType: string; data: string }[]) => sessions.chatSend(id, text, images),
+    'chat.interrupt': (_e, id: string) => sessions.chatInterrupt(id),
+    'chat.permission': (_e, id: string, requestId: string, d: { allow: boolean; always?: boolean; message?: string; updatedInput?: Record<string, unknown> }) =>
+      sessions.chatPermission(id, requestId, d),
+    'chat.setMode': (_e, id: string, mode: string) => sessions.setMode(id, mode),
+    'chat.setModel': (_e, id: string, model: string) => sessions.setModel(id, model),
+    'chat.typing': (_e, id: string) => sessions.typing(id),
+
+    // ---- files ----
+    'fs.resolveDrop': async (_e, paths: string[]) => {
+      const out: string[] = []
+      for (const p of paths) {
+        try {
+          const st = await fs.promises.stat(p)
+          out.push(st.isDirectory() ? p : path.dirname(p))
+        } catch {
+          /* ignore vanished paths */
+        }
+      }
+      return uniqueFolders(out, process.platform === 'win32')
+    },
+    'fs.stat': async (_e, p: string) => {
+      try {
+        const st = await fs.promises.stat(p)
+        return { exists: true, isDir: st.isDirectory(), size: st.size, mtime: st.mtimeMs }
+      } catch {
+        return { exists: false }
+      }
+    },
+    'fs.readFile': async (_e, p: string) => {
+      const st = await fs.promises.stat(p)
+      if (BINARY_EXT.test(p) || st.size > 8 * 1024 * 1024) return { binary: true, size: st.size, content: '' }
+      return { binary: false, size: st.size, content: await fs.promises.readFile(p, 'utf8') }
+    },
+    'fs.writeFile': (_e, p: string, content: string) => fs.promises.writeFile(p, content, 'utf8'),
+    'fs.listFiles': (_e, root: string) => listProjectFiles(root),
+    'fs.saveTempImage': async (_e, dataUrl: string) => {
+      const m = /^data:image\/(\w+);base64,(.*)$/.exec(dataUrl)
+      if (!m) throw new Error('Not an image')
+      const file = path.join(runtime.tempDir, `paste-${Date.now()}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`)
+      await fs.promises.writeFile(file, Buffer.from(m[2], 'base64'))
+      return file
+    },
+    'clipboard.readImage': async () => {
+      for (const item of await clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith('image/'))
+        if (!type) continue
+        const blob = (await item.getType(type)) as Blob
+        return `data:${type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`
+      }
+      return undefined
+    },
+    'clipboard.writeText': (_e, t: string) => clipboard.writeText(t),
+    'clipboard.readText': () => clipboard.readText(),
+    'dialog.openFolder': async (e) => {
+      const win = BrowserWindow.fromWebContents(e.sender)!
+      const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'multiSelections'] })
+      return r.canceled ? [] : r.filePaths
+    },
+    'dialog.openFile': async (e, filters?: { name: string; extensions: string[] }[]) => {
+      const win = BrowserWindow.fromWebContents(e.sender)!
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters })
+      return r.canceled ? undefined : r.filePaths[0]
+    },
+    'dialog.confirm': async (e, message: string, detail?: string, buttons: string[] = ['OK', 'Cancel']) => {
+      const win = BrowserWindow.fromWebContents(e.sender)!
+      const r = await dialog.showMessageBox(win, { type: 'question', message, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 })
+      return r.response
+    },
+    'shell.openExternal': (_e, url: string) => {
+      if (/^https?:\/\//i.test(url)) return shell.openExternal(url)
+    },
+    'shell.openPath': (_e, p: string) => shell.openPath(p),
+    'shell.showItem': (_e, p: string) => shell.showItemInFolder(p),
+    'shell.openInEditor': async (_e, p: string, line?: number) => {
+      const code = which('code') ?? which('cursor')
+      if (code) {
+        await run(code, ['-g', line ? `${p}:${line}` : p], { timeout: 15_000 })
+        return
+      }
+      await shell.openPath(p)
+    },
+
+    // ---- auth ----
+    'auth.refresh': () => auth.refresh(),
+    'auth.logout': () => auth.logout(),
+
+    // ---- library ----
+    'library.get': () => ({ projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders }),
+    'library.updateProject': (_e, id: string, patch: Partial<Project>) => updateProject(id, patch),
+    'library.removeProject': (_e, id: string) => removeProject(id),
+    'library.updateChat': (_e, id: string, patch: Partial<ChatRecord>) => updateChat(id, patch),
+    'library.archiveProjectChats': (_e, id: string) => archiveProjectChats(id),
+    'library.addFolderToProject': (_e, id: string, folder: string) => {
+      const p = state().projects.find((x) => x.id === id)
+      if (p && !p.folders.includes(folder)) updateProject(id, { folders: [...p.folders, folder] })
+    },
+    'library.makePrimary': (_e, id: string, folder: string) => {
+      const p = state().projects.find((x) => x.id === id)
+      if (p) updateProject(id, { folders: [folder, ...p.folders.filter((f) => f !== folder)] })
+    },
+    'library.transcripts': () => listTranscripts(),
+    'library.search': (_e, q: string) => searchTranscripts(q),
+    'library.insights': () => insights(),
+    'library.pinReview': (_e, key: string, pinned: boolean) => {
+      updateState((s) => {
+        s.pinnedReviews = pinned ? [...new Set([...s.pinnedReviews, key])] : s.pinnedReviews.filter((k) => k !== key)
+      })
+      return state().pinnedReviews
+    },
+    'library.viewedFiles': (_e, key: string, files?: string[]) => {
+      if (files) updateState((s) => (s.viewedFiles[key] = files))
+      return state().viewedFiles[key] ?? []
+    },
+
+    // ---- git ----
+    'git.info': (_e, cwd: string) => git.info(cwd),
+    'git.diff': (_e, cwd: string, view: DiffView, opts: { ref?: string; base?: string }) => git.diff(cwd, view, opts),
+    'git.applyHunk': (_e, cwd: string, file: DiffFile, idx: number, action: 'stage' | 'unstage' | 'revert') => git.applyHunk(cwd, file, idx, action),
+    'git.applyFile': (_e, cwd: string, file: DiffFile, action: 'stage' | 'unstage' | 'revert') => git.applyFile(cwd, file, action),
+    'git.applyAll': (_e, cwd: string, action: 'stage' | 'unstage' | 'revert') => git.applyAll(cwd, action),
+    'git.commit': (_e, cwd: string, msg: string, opts: { all?: boolean; amend?: boolean }) => git.commit(cwd, msg, opts),
+    'git.push': (_e, cwd: string) => git.push(cwd),
+    'git.pull': (_e, cwd: string) => git.pull(cwd),
+    'git.createBranch': (_e, cwd: string, name: string) => git.createBranch(cwd, name),
+    'git.switchBranch': (_e, cwd: string, name: string) => git.switchBranch(cwd, name),
+    'git.branches': (_e, cwd: string) => git.branches(cwd),
+    'git.commits': (_e, cwd: string) => git.recentCommits(cwd),
+    'git.createPr': (_e, cwd: string, opts: { title?: string; body?: string; draft?: boolean; base?: string }) => git.createPr(cwd, opts),
+    'git.generateCommitMessage': async (_e, cwd: string) => {
+      const diff = await git.rawDiffForMessage(cwd)
+      if (!diff.trim()) throw new Error('No changes to describe')
+      const r = await run(
+        locateClaude(settings().claudePath),
+        ['-p', 'Write a concise git commit message (imperative subject line under 72 chars, optional short body) for the diff on stdin. Output only the message.', '--model', 'haiku', '--tools', '', '--permission-prompts', 'none'],
+        { cwd, input: diff, timeout: 120_000 }
+      )
+      if (r.code !== 0) throw new Error(r.stderr.trim() || 'Claude could not draft a message')
+      return r.stdout.trim()
+    },
+
+    // ---- worktrees ----
+    'worktree.list': () => state().worktrees,
+    'worktree.delete': async (_e, id: string) => {
+      await wt.deleteWorktree(id)
+      emitLibrary()
+    },
+    'worktree.restore': (_e, id: string) => wt.restoreWorktree(id),
+    'worktree.createBranch': (_e, id: string, name: string) => wt.createBranchHere(id, name),
+    'worktree.createPermanent': (_e, cwd: string, name?: string) => wt.createWorktree({ repoCwd: cwd, permanent: true, name }),
+    'worktree.forget': (_e, id: string) => {
+      updateState((s) => (s.worktrees = s.worktrees.filter((w) => w.id !== id)))
+      emitLibrary()
+    },
+
+    // ---- environments ----
+    'env.load': (_e, root: string) => loadEnvironment(root),
+    'env.save': (_e, root: string, cfg: EnvironmentConfig) => saveEnvironment(root, cfg),
+    'env.runAction': (_e, parentId: string, command: string) => sessions.runAction(parentId, command),
+
+    // ---- automations ----
+    'automations.get': () => scheduler.data(),
+    'automations.upsert': (_e, a: Partial<Automation>) => scheduler.upsert(a),
+    'automations.remove': (_e, id: string) => scheduler.remove(id),
+    'automations.runNow': (_e, id: string) => scheduler.runNow(id),
+    'automations.updateRun': (_e, id: string, patch: Partial<AutomationRun>) => scheduler.updateRun(id, patch),
+    'automations.markAllRead': () => scheduler.markAllRead(),
+
+    // ---- mesh ----
+    'mesh.groups': () => sessions.mesh.allGroups(),
+    'mesh.send': (_e, key: string, to: string, text: string, kind?: MeshMessageKind) => sessions.mesh.userSend(key, to, text, kind),
+    'mesh.board': (_e, key: string, op: 'add' | 'update' | 'delete', item: Partial<BoardItem>) => sessions.mesh.userBoard(key, op, item),
+    'mesh.releaseClaim': (_e, key: string, claim: string) => sessions.mesh.userReleaseClaim(key, claim),
+    'mesh.setNote': (_e, key: string, noteKey: string, value: string | null) => sessions.mesh.userSetNote(key, noteKey, value),
+    'mesh.clear': (_e, key: string) => sessions.mesh.clearHistory(key),
+
+    // ---- github ----
+    'gh.list': (_e, cwd: string, filter: 'review' | 'assigned' | 'authored' | 'all') => gh.listPrs(cwd, filter),
+    'gh.detail': (_e, cwd: string, n: number) => gh.prDetail(cwd, n),
+    'gh.review': (_e, cwd: string, n: number, kind: 'approve' | 'request-changes' | 'comment', body: string) => gh.submitReview(cwd, n, kind, body),
+    'gh.comment': (_e, cwd: string, n: number, body: string) => gh.comment(cwd, n, body),
+
+    // ---- personalization ----
+    'claudeMd.read': async (_e, root?: string) => {
+      const file = root ? path.join(root, 'CLAUDE.md') : path.join(claudeHome(), 'CLAUDE.md')
+      try {
+        return { file, content: await fs.promises.readFile(file, 'utf8') }
+      } catch {
+        return { file, content: '' }
+      }
+    },
+    'claudeMd.write': async (_e, file: string, content: string) => {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true })
+      await fs.promises.writeFile(file, content, 'utf8')
+    },
+
+    // ---- windows ----
+    'window.popOut': (_e, id: string) => windows.popOut(id),
+    'window.popIn': (_e, id: string) => windows.popIn(id),
+    'window.devtools': (e) => e.sender.toggleDevTools(),
+    'window.setTitleBarOverlay': (e, color: string, symbolColor: string) => windows.setOverlay(e.sender.id, color, symbolColor),
+    'window.toggleBuddy': (_e, show: boolean) => windows.toggleBuddy(show),
+    'window.focusMain': () => windows.focusMain(),
+    'window.capturePageRegion': async (_e, webContentsId: number, rect: { x: number; y: number; width: number; height: number }) => {
+      const { webContents } = await import('electron')
+      const wc = webContents.fromId(webContentsId)
+      if (!wc) throw new Error('Page is gone')
+      const img = await wc.capturePage(rect)
+      const file = path.join(runtime.tempDir, `page-${Date.now()}.png`)
+      await fs.promises.writeFile(file, img.toPNG())
+      return file
+    },
+    'window.registerExplorerMenu': (_e, on: boolean) => windows.registerExplorerMenu(on),
+    'image.fromPath': (_e, p: string) => nativeImage.createFromPath(p).toDataURL()
+  }
+
+  ipcMain.handle('deck:call', async (e, method: string, args: unknown[]) => {
+    const fn = h[method]
+    if (!fn) throw new Error(`Unknown method ${method}`)
+    return (fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(e, ...args)
+  })
+
+  // Hot paths: fire-and-forget, no promise round-trip.
+  ipcMain.on('deck:write', (_e, id: string, data: string) => sessions.write(id, data))
+  ipcMain.on('deck:resize', (_e, id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
+}

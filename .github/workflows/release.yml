@@ -1,0 +1,55 @@
+# Pushing a version tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) builds the
+# installer and attaches it to a GitHub release for that tag. Installed apps on the
+# "Stable" channel auto-update to it.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - name: Stamp version from tag
+        id: version
+        run: echo "version=$(node scripts/ci-version.mjs tag ${{ github.ref_name }})" >> "$GITHUB_OUTPUT"
+
+      - name: Build installer
+        run: npx electron-vite build && npx electron-builder --win --publish never
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(dist/*.exe dist/*.exe.blockmap dist/latest.yml)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            prerelease=""
+            [[ "$TAG" == *-* ]] && prerelease="--prerelease"
+            gh release create "$TAG" "${files[@]}" $prerelease --title "Claude Deck ${TAG#v}" --generate-notes --verify-tag
+          fi
