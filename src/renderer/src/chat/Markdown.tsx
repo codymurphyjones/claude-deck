@@ -56,15 +56,18 @@ export const Markdown = memo(function Markdown({ text, streaming, cwd, dark }: {
     if (!el || streaming) return
     for (const node of el.querySelectorAll<HTMLElement>('.md-chart:not([data-done])')) {
       node.dataset.done = '1'
-      node.innerHTML = renderChart(node.querySelector('.md-src')?.textContent ?? '')
+      node.dataset.src = node.querySelector('.md-src')?.textContent ?? ''
+      node.innerHTML = renderChart(node.dataset.src)
     }
     const diagrams = [...el.querySelectorAll<HTMLElement>('.md-mermaid:not([data-done])')]
     if (!diagrams.length) return
     void loadMermaid(dark).then(async (mm) => {
       for (const node of diagrams) {
         node.dataset.done = '1'
+        // Keep the source around for "Copy as Markdown" once the diagram replaces it.
+        node.dataset.src = node.querySelector('.md-src')?.textContent ?? ''
         try {
-          const { svg } = await mm.render(`mmd-${++mermaidSeq}`, node.querySelector('.md-src')?.textContent ?? '')
+          const { svg } = await mm.render(`mmd-${++mermaidSeq}`, node.dataset.src)
           node.innerHTML = svg
         } catch (err) {
           node.classList.add('md-mermaid-error')

@@ -3,11 +3,13 @@ import type { ChatItem } from '@shared/chat'
 import type { LiveSession } from '../api'
 import { api } from '../api'
 import { Icon } from '../components/Icon'
-import { useStore } from '../store'
+import { openMenu } from '../components/ui'
+import { toast, useStore } from '../store'
 import { resolveTheme } from '../theme'
 import { ensureChat, useChat } from './chatStore'
 import { ChatComposer } from './ChatComposer'
 import { Markdown } from './Markdown'
+import { selectionToMarkdown } from './selectionMarkdown'
 import { summarizeTools, ToolCard, type ToolItem } from './ToolCards'
 
 type Block =
@@ -100,9 +102,24 @@ export function ChatView({ session: s }: { session: LiveSession }) {
     setShowJump(false)
   }
 
+  const onContextMenu = (e: React.MouseEvent): void => {
+    const sel = window.getSelection()
+    const el = scrollRef.current
+    if (!sel || sel.isCollapsed || !el || !sel.rangeCount || !sel.getRangeAt(0).intersectsNode(el)) return
+    const text = sel.toString()
+    if (!text.trim()) return
+    // Convert now: clicking the menu can collapse the selection.
+    const markdown = selectionToMarkdown(sel)
+    const copy = (t: string, what: string): void => void api.clipboard.writeText(t).then(() => toast(`${what} copied`, 'success'))
+    openMenu(e, [
+      { label: 'Copy', icon: 'copy', hint: 'Ctrl+C', onClick: () => copy(text, 'Text') },
+      { label: 'Copy as Markdown', icon: 'code', disabled: !markdown, onClick: () => copy(markdown, 'Markdown') }
+    ])
+  }
+
   return (
     <div className={`chat density-${cfg.density} width-${cfg.width}`} style={{ ['--chat-size' as string]: `${cfg.fontSize}px` }}>
-      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll} onContextMenu={onContextMenu}>
         <div className="chat-col">
           {!chat?.ready && <div className="chat-loading">Loading conversation…</div>}
           {chat?.ready && !items.length && <ChatEmpty session={s} />}
