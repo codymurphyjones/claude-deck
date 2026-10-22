@@ -140,10 +140,12 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
   )
 }
 
-export function Toasts() {
+/** Transient toasts; `children` (sticky alerts) stack above them. */
+export function Toasts({ children }: { children?: ReactNode }) {
   const toasts = useStore((s) => s.toasts)
   return (
     <div className="toasts">
+      {children}
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.kind}`}>
           <Icon name={t.kind === 'error' ? 'x' : t.kind === 'success' ? 'check' : 'bell'} size={15} style={{ marginTop: 1, color: t.kind === 'error' ? 'var(--danger)' : t.kind === 'success' ? 'var(--success)' : 'var(--accent)' }} />

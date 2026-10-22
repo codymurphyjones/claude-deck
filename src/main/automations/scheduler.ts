@@ -1,16 +1,17 @@
 import * as path from 'path'
 import { nextRunAfter } from '@shared/schedule'
 import type { Automation, AutomationRun, SessionInfo } from '@shared/types'
-import { broadcast, settings } from '../context'
+import { broadcast } from '../context'
 import { ghPath } from '../git/gitService'
 import { getChat } from '../library'
 import { notify } from '../notify/notifyService'
-import { locateClaude, runtime } from '../runtime'
+import { runtime } from '../runtime'
 import type { SessionService } from '../sessions/sessionService'
 import { JsonStore } from '../store'
-import { run, shortId, spawnLines, truncate } from '../util'
+import { run, shortId, truncate } from '../util'
 import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
-import { plainEnv } from '../sessions/launch'
+import { describeRun, type JobService } from '../jobs/jobService'
+import { runHeadless } from './headless'
 
 interface AutomationData {
   automations: Automation[]
@@ -23,7 +24,10 @@ export class Scheduler {
   private timer: NodeJS.Timeout | undefined
   private running = new Map<string, () => void>()
 
-  constructor(private sessions: SessionService) {
+  constructor(
+    private sessions: SessionService,
+    private jobs: JobService
+  ) {
     sessions.on('idle', (s: SessionInfo) => this.onIdle(s))
     // Runs left "running" by a previous app instance never finished.
     for (const r of this.store.data.runs) if (r.status === 'running') Object.assign(r, { status: 'error', output: r.output || 'Interrupted (app closed)' })
@@ -117,6 +121,7 @@ export class Scheduler {
     if (a.schedule.type === 'rrule' && a.nextRun === undefined) a.status = 'completed'
     this.emit()
     if (a.kind === 'inchat') return this.runInChat(a, extra)
+    if (a.kind === 'job') return this.runJob(a, extra)
     return this.runStandalone(a, extra)
   }
 
@@ -155,7 +160,7 @@ export class Scheduler {
     }
   }
 
-  private async runStandalone(a: Automation, extra?: string): Promise<void> {
+  private newRun(a: Automation): AutomationRun {
     const runRec: AutomationRun = {
       id: 'r' + shortId(),
       automationId: a.id,
@@ -171,6 +176,36 @@ export class Scheduler {
     this.store.data.runs.unshift(runRec)
     if (this.store.data.runs.length > 300) this.store.data.runs.length = 300
     this.emit()
+    return runRec
+  }
+
+  /** Run a repo job; its step-by-step progress lives in the Jobs view, the summary lands in the inbox. */
+  private async runJob(a: Automation, extra?: string): Promise<void> {
+    const runRec = this.newRun(a)
+    try {
+      if (!a.job?.slug) throw new Error('No job selected')
+      const { run: jr, done } = await this.jobs.start(a.cwd, a.job.slug, a.job.options, 'schedule', extra)
+      runRec.cwd = jr.cwd
+      this.running.set(a.id, () => this.jobs.stopRun(jr.id))
+      const r = await done
+      this.running.delete(a.id)
+      runRec.cwd = r.cwd
+      runRec.worktreePath = r.worktreePath
+      runRec.claudeSessionId = r.claudeSessionId
+      runRec.costUsd = r.costUsd
+      runRec.status = r.status === 'success' ? 'success' : 'error'
+      runRec.output = describeRun(r)
+    } catch (e) {
+      this.running.delete(a.id)
+      runRec.status = 'error'
+      runRec.output = (e as Error).message
+    }
+    runRec.finishedAt = Date.now()
+    this.emit()
+  }
+
+  private async runStandalone(a: Automation, extra?: string): Promise<void> {
+    const runRec = this.newRun(a)
     try {
       let cwd = a.cwd
       if (a.useWorktree) {
@@ -180,41 +215,21 @@ export class Scheduler {
         runRec.worktreePath = wt.path
       }
       runRec.cwd = cwd
-      const args = ['-p', extra ? `${a.prompt}\n\n${extra}` : a.prompt, '--output-format', 'stream-json', '--verbose', '--permission-prompts', 'none']
-      const model = a.model || settings().defaultModel
-      if (model) args.push('--model', model)
-      if (a.effort) args.push('--effort', a.effort)
-      args.push('--permission-mode', a.permissionMode || 'acceptEdits')
-      let lastText = ''
-      const proc = spawnLines(locateClaude(settings().claudePath), args, {
+      const h = runHeadless({
+        prompt: extra ? `${a.prompt}\n\n${extra}` : a.prompt,
         cwd,
-        env: plainEnv(),
-        onLine: (line) => {
-          try {
-            const j = JSON.parse(line)
-            if (j.type === 'system' && j.session_id) runRec.claudeSessionId = j.session_id
-            if (j.type === 'assistant') {
-              const t = (j.message?.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('')
-              if (t) lastText = t
-            }
-            if (j.type === 'result') {
-              runRec.output = j.result ?? lastText
-              runRec.costUsd = j.total_cost_usd
-              runRec.status = j.is_error ? 'error' : 'success'
-              runRec.claudeSessionId = j.session_id ?? runRec.claudeSessionId
-            }
-          } catch {
-            /* non-JSON line */
-          }
-        }
+        model: a.model,
+        effort: a.effort,
+        permissionMode: a.permissionMode,
+        onSession: (id) => (runRec.claudeSessionId = id)
       })
-      this.running.set(a.id, proc.kill)
-      const code = await proc.done
+      this.running.set(a.id, h.kill)
+      const res = await h.done
+      runRec.claudeSessionId = res.sessionId ?? runRec.claudeSessionId
+      runRec.costUsd = res.costUsd
+      runRec.output = res.text || `Exited with code ${res.code}`
+      runRec.status = res.finished ? (res.isError ? 'error' : 'success') : res.code === 0 ? 'success' : 'error'
       this.running.delete(a.id)
-      if (runRec.status === 'running') {
-        runRec.status = code === 0 ? 'success' : 'error'
-        runRec.output = runRec.output || lastText || `Exited with code ${code}`
-      }
     } catch (e) {
       runRec.status = 'error'
       runRec.output = (e as Error).message

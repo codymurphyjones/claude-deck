@@ -4,6 +4,8 @@ import { api } from '../api'
 import { askText, attempt, focusSessionTab, get, openSession, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
+import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
+import { ProjectActions } from './Actions'
 import { ReviewsView } from './Reviews'
 import { openMenu, Seg, shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
 
@@ -11,6 +13,7 @@ const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
   { id: 'projects', icon: 'folder', title: 'Projects & chats' },
   { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)' },
   { id: 'team', icon: 'users', title: 'Teams — sessions sharing a folder' },
+  { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
   { id: 'scheduled', icon: 'clock', title: 'Scheduled tasks' },
   { id: 'reviews', icon: 'pr', title: 'Pull request reviews' }
 ]
@@ -20,6 +23,7 @@ export function Sidebar({ open }: { open: boolean }) {
   const width = useStore((s) => s.sidebarWidth)
   const sessions = useStore((s) => s.sessions)
   const runs = useStore((s) => s.automations.runs)
+  const jobRuns = useStore((s) => s.jobRuns)
   const attention = Object.values(sessions).filter((s) => s.kind === 'claude' && (s.status === 'needs-input' || s.unread)).length
   const unreadRuns = runs.filter((r) => r.unread && !r.archived).length
   const teams = new Set(
@@ -45,7 +49,7 @@ export function Sidebar({ open }: { open: boolean }) {
     <>
       <div className="rail">
         {VIEWS.map((v) => {
-          const pip = v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'team' ? teams : 0
+          const pip = v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'team' ? teams : 0
           return (
             <button key={v.id} className={`icon-btn ${open && view === v.id ? 'on' : ''}`} title={v.title} onClick={() => showSidebar(v.id)}>
               <Icon name={v.icon} size={18} />
@@ -66,6 +70,7 @@ export function Sidebar({ open }: { open: boolean }) {
           {view === 'projects' && <ProjectsView />}
           {view === 'activity' && <ActivityView />}
           {view === 'team' && <TeamsView />}
+          {view === 'jobs' && <JobsView />}
           {view === 'scheduled' && <ScheduledView />}
           {view === 'reviews' && <ReviewsView />}
           <div className="resizer right" onMouseDown={startDrag} />
@@ -231,6 +236,7 @@ function ProjectsView() {
               </div>
               {!isCollapsed && (
                 <>
+                  <ProjectActions project={p} />
                   {chats.slice(0, 30).map((c) => (
                     <ChatItem key={c.claudeSessionId} chat={c} live={liveByChat.get(c.claudeSessionId)} indent />
                   ))}
@@ -362,6 +368,7 @@ function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnTy
 function ActivityView() {
   const sessions = useStore((s) => s.sessions)
   const runs = useStore((s) => s.automations.runs)
+  const jobRuns = useStore((s) => s.jobRuns)
   const chats = useStore((s) => s.library.chats)
   const [filter, setFilter] = useState<'all' | 'running' | 'waiting' | 'unread' | 'pinned' | 'scheduled'>('all')
   useNow(15_000)
@@ -377,6 +384,7 @@ function ActivityView() {
     })
     .sort((a, b) => b.lastActivity - a.lastActivity)
   const runList = filter === 'scheduled' || filter === 'all' || filter === 'unread' ? runs.filter((r) => !r.archived && (filter !== 'unread' || r.unread)).slice(0, 20) : []
+  const jobRunList = filter === 'scheduled' || filter === 'all' || filter === 'unread' ? jobRuns.filter((r) => filter !== 'unread' || (r.unread && r.status !== 'running')).slice(0, 20) : []
   return (
     <>
       <div className="sidebar-head">
@@ -386,6 +394,7 @@ function ActivityView() {
           onClick={() => {
             void api.session.markAllRead()
             void api.automations.markAllRead()
+            void api.jobs.markAllRead()
           }}
         >
           Mark all read
@@ -406,7 +415,7 @@ function ActivityView() {
         />
       </div>
       <div className="sidebar-body">
-        {!list.length && !runList.length && <div className="empty-note">Nothing here right now.</div>}
+        {!list.length && !runList.length && !jobRunList.length && <div className="empty-note">Nothing here right now.</div>}
         {list.map((s) => (
           <div key={s.id} className="list-item" style={{ alignItems: 'flex-start' }} onClick={() => focusSessionTab(s.id)}>
             <span className={`dot ${s.status}`} style={{ marginTop: 5 }} />
@@ -437,6 +446,36 @@ function ActivityView() {
             <span className="sub">{timeAgo(r.startedAt)}</span>
           </div>
         ))}
+        {jobRunList.length > 0 && <div className="section-label">Job runs</div>}
+        {jobRunList.map((r) => {
+          const ok = r.status === 'success'
+          const current = r.steps.findIndex((s) => s.status === 'running')
+          const passed = r.steps.filter((s) => s.status === 'passed').length
+          const ran = r.steps.filter((s) => s.status !== 'skipped').length
+          const unread = r.unread && r.status !== 'running'
+          return (
+            <div
+              key={r.id}
+              className="list-item"
+              style={{ alignItems: 'flex-start' }}
+              onClick={() => {
+                openJobsFor(r.root)
+                if (unread) void api.jobs.updateRun(r.id, { unread: false })
+              }}
+            >
+              <Icon name={r.status === 'running' ? 'refresh' : ok ? 'check' : 'x'} size={13} style={{ marginTop: 3, color: r.status === 'running' ? 'var(--accent)' : ok ? 'var(--success)' : 'var(--danger)' }} />
+              <div className="grow">
+                <div className="ellipsis" style={{ fontWeight: unread ? 650 : 500 }}>
+                  {r.jobName}
+                </div>
+                <div className="sub ellipsis">
+                  {r.status === 'running' ? `Running step ${current + 1}…` : r.error ?? `${passed}/${ran} steps passed${r.branch ? ` · ${r.branch}` : ''}`}
+                </div>
+              </div>
+              <span className="sub">{timeAgo(r.startedAt)}</span>
+            </div>
+          )
+        })}
       </div>
     </>
   )

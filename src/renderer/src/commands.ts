@@ -22,6 +22,8 @@ import {
   toggleShell
 } from './store'
 import { clearTerminal } from './terminal/registry'
+import { newJob } from '@shared/jobs'
+import { designInChat, openJobsFor } from './components/Jobs'
 
 export interface Command {
   id: string
@@ -119,6 +121,29 @@ export function buildCommands(): Command[] {
     { id: 'toggleSidebar', title: 'Toggle sidebar', group: 'Layout', icon: 'sidebar', run: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })) },
     { id: 'toggleActivity', title: 'Activity', group: 'Layout', icon: 'bell', run: () => showSidebar('activity') },
     { id: 'scheduled', title: 'Scheduled tasks', group: 'Automation', icon: 'clock', run: () => showSidebar('scheduled') },
+    { id: 'jobs', title: 'Repo jobs', group: 'Automation', icon: 'layers', run: () => openJobsFor(activeSession()?.root) },
+    {
+      id: 'newJob',
+      title: 'New repo job…',
+      group: 'Automation',
+      icon: 'layers',
+      when: hasClaude,
+      run: () => {
+        const s = activeSession()
+        if (s) set({ jobEdit: { root: s.root, draft: newJob() } })
+      }
+    },
+    { id: 'designJob', title: 'Design a repo job with Claude…', group: 'Automation', icon: 'sparkles', when: hasClaude, run: () => void designInChat(activeSession()!.root) },
+    {
+      id: 'projectActions',
+      title: 'Project actions (package.json scripts)',
+      group: 'Automation',
+      icon: 'play',
+      run: () => {
+        const pid = activeSession()?.projectId ?? get().library.projects[0]?.id
+        set({ sidebarOpen: true, sidebarView: 'projects', actionsFocus: pid })
+      }
+    },
     { id: 'newAutomation', title: 'New scheduled task…', group: 'Automation', icon: 'clock', run: () => set({ automationEdit: { cwd: activeSession()?.cwd } }) },
     {
       id: 'scheduleInChat',
@@ -190,6 +215,8 @@ export function buildCommands(): Command[] {
         await openSession('command', { cwd: activeSession()?.cwd ?? get().homedir, command: get().claudePath, args: ['--cloud', desc], name: 'Cloud task' })
       }
     },
+    // Shortcut target only; listing the palette inside itself would be noise.
+    { id: 'palette', title: 'Command palette', group: 'App', when: () => false, run: () => set((s) => ({ palette: s.palette ? false : 'all' })) },
     { id: 'settings', title: 'Settings', group: 'App', icon: 'settings', run: () => set({ settingsOpen: 'general' }) },
     { id: 'shortcuts', title: 'Keyboard shortcuts', group: 'App', icon: 'keyboard', run: () => set({ settingsOpen: 'shortcuts' }) },
     { id: 'appearance', title: 'Appearance & themes', group: 'App', icon: 'palette', run: () => set({ settingsOpen: 'appearance' }) },

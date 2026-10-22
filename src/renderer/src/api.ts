@@ -28,6 +28,8 @@ import type {
   WorktreeRecord
 } from '@shared/types'
 import type { ChatItem, ChatMeta } from '@shared/chat'
+import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
+import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 
 interface Bridge {
   call: (method: string, ...args: unknown[]) => Promise<unknown>
@@ -66,6 +68,8 @@ export interface InitData {
   auth: AuthStatus
   library: Library
   automations: { automations: Automation[]; runs: AutomationRun[] }
+  jobRuns: JobRun[]
+  processes: ProcessInfo[]
   mesh: MeshGroupState[]
   timeline: TimelineEvent[]
   savedTabs: OpenTabState[]
@@ -181,6 +185,26 @@ export const api = {
     runNow: c<void, [string]>('automations.runNow'),
     updateRun: c<void, [string, Partial<AutomationRun>]>('automations.updateRun'),
     markAllRead: c<void>('automations.markAllRead')
+  },
+  jobs: {
+    list: c<JobDef[], [string]>('jobs.list'),
+    save: c<JobDef, [string, JobDef, string?]>('jobs.save'),
+    remove: c<void, [string, string]>('jobs.remove'),
+    assist: c<JobDef, [string, string, JobDef?]>('jobs.assist'),
+    run: c<JobRun, [string, string, Partial<JobRunOptions>]>('jobs.run'),
+    stop: c<void, [string]>('jobs.stop'),
+    updateRun: c<void, [string, Partial<JobRun>]>('jobs.updateRun'),
+    removeRun: c<void, [string]>('jobs.removeRun'),
+    markAllRead: c<void>('jobs.markAllRead')
+  },
+  processes: {
+    scan: c<ScriptPackage[], [string, boolean?]>('processes.scan'),
+    list: c<ProcessInfo[]>('processes.list'),
+    start: c<ProcessInfo, [string, string, string]>('processes.start'),
+    stop: c<void, [string]>('processes.stop'),
+    restart: c<ProcessInfo, [string]>('processes.restart'),
+    dismiss: c<void, [string]>('processes.dismiss'),
+    close: c<void, [string]>('processes.close')
   },
   mesh: {
     groups: c<MeshGroupState[]>('mesh.groups'),

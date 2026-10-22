@@ -28,7 +28,7 @@ export function focusSession(id: string): void {
   broadcast('ui:focusSession', id)
 }
 
-export type NotifyKind = 'turn' | 'permission' | 'question' | 'goal' | 'automation' | 'mesh'
+export type NotifyKind = 'turn' | 'permission' | 'question' | 'goal' | 'automation' | 'job' | 'process' | 'mesh'
 
 export function notify(kind: NotifyKind, s: Pick<SessionInfo, 'id' | 'name'> | undefined, title: string, body: string): void {
   const cfg = settings().notifications
@@ -36,7 +36,9 @@ export function notify(kind: NotifyKind, s: Pick<SessionInfo, 'id' | 'name'> | u
   if (kind === 'turn' && (cfg.turnComplete === 'never' || (cfg.turnComplete === 'background' && focused))) return
   if (kind === 'permission' && !cfg.permission) return
   if (kind === 'question' && !cfg.question) return
-  if ((kind === 'goal' || kind === 'automation' || kind === 'mesh') && focused) {
+  // Failed processes already raise a sticky in-app alert.
+  if (kind === 'process' && focused) return
+  if ((kind === 'goal' || kind === 'automation' || kind === 'job' || kind === 'mesh') && focused) {
     broadcast('toast', { id: String(Date.now()), kind: 'info', text: `${title}: ${truncate(body, 140)}` })
     return
   }

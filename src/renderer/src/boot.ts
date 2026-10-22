@@ -1,7 +1,9 @@
 import type { AuthStatus, Automation, AutomationRun, MeshGroupState, SessionInfo, Settings, TimelineEvent, ToastMessage, UpdateState } from '@shared/types'
+import type { JobRun } from '@shared/jobs'
+import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
 import { comboIndex, eventCombo } from './shortcuts'
-import { addSessionToTabs, focusSessionTab, get, openFolders, openSession, removeSessionFromTabs, set, toast, type Tab } from './store'
+import { addSessionToTabs, focusSessionTab, get, loadJobs, openFolders, openSession, removeSessionFromTabs, set, toast, type Tab } from './store'
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
@@ -65,6 +67,8 @@ export async function boot(): Promise<void> {
     activeTabId: tabs[0]?.id,
     library: d.library,
     automations: d.automations,
+    jobRuns: d.jobRuns,
+    processes: d.processes,
     mesh,
     timeline: d.timeline,
     savedTabs: d.savedTabs,
@@ -128,6 +132,15 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   void api.update.state().then((updateState) => set({ updateState }))
   bridge.on('library:changed', (library: Library) => set({ library }))
   bridge.on('automations:changed', (automations: { automations: Automation[]; runs: AutomationRun[] }) => set({ automations }))
+  bridge.on('jobs:runs', (jobRuns: JobRun[]) => set({ jobRuns }))
+  bridge.on('processes:changed', (processes: ProcessInfo[]) => {
+    // Finished processes are forgotten by main; drop their terminal views too.
+    for (const p of get().processes) if (!processes.some((x) => x.id === p.id)) disposeTerminal(p.id)
+    set({ processes })
+  })
+  bridge.on('jobs:changed', (root: string) => {
+    if (get().jobDefs[root]) void loadJobs(root)
+  })
   bridge.on('mesh:changed', (g: MeshGroupState) => set((st) => ({ mesh: { ...st.mesh, [g.key]: g } })))
   bridge.on('timeline:event', (ev: TimelineEvent) => set((st) => ({ timeline: [...st.timeline.slice(-999), ev] })))
   bridge.on('toast', (t: ToastMessage) => toast(t.text, t.kind))

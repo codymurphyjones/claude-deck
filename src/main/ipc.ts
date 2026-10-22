@@ -6,6 +6,9 @@ import { uniqueFolders } from '@shared/paths'
 import type { Automation, AutomationRun, BoardItem, DiffFile, DiffView, EnvironmentConfig, LaunchOptions, MeshMessageKind, MeshRole, Project, ChatRecord, Settings, SessionKind } from '@shared/types'
 import type { AuthService } from './auth/authService'
 import type { Scheduler } from './automations/scheduler'
+import type { JobService } from './jobs/jobService'
+import type { ProcessService } from './processes/processService'
+import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import { getTimeline, settings, state, updateSettings, updateState } from './context'
 import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
@@ -54,8 +57,8 @@ async function listProjectFiles(root: string): Promise<string[]> {
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|woff2?|ttf|otf|mp[34]|mov|avi|wasm|bin)$/i
 
-export function registerIpc(deps: { sessions: SessionService; auth: AuthService; scheduler: Scheduler; windows: WindowManager }): void {
-  const { sessions, auth, scheduler, windows } = deps
+export function registerIpc(deps: { sessions: SessionService; auth: AuthService; scheduler: Scheduler; jobs: JobService; processes: ProcessService; windows: WindowManager }): void {
+  const { sessions, auth, scheduler, jobs, processes, windows } = deps
   const pendingReads = new Map<string, (text: string) => void>()
 
   sessions.terminalReader = (s, lines) =>
@@ -82,6 +85,8 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       auth: auth.status,
       library: { projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders },
       automations: scheduler.data(),
+      jobRuns: jobs.runs(),
+      processes: processes.list(),
       mesh: sessions.mesh.allGroups(),
       timeline: getTimeline().slice(-500),
       savedTabs: state().openTabs,
@@ -302,6 +307,27 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'automations.runNow': (_e, id: string) => scheduler.runNow(id),
     'automations.updateRun': (_e, id: string, patch: Partial<AutomationRun>) => scheduler.updateRun(id, patch),
     'automations.markAllRead': () => scheduler.markAllRead(),
+
+    // ---- repo jobs ----
+    'jobs.list': (_e, root: string) => jobs.list(root),
+    'jobs.save': (_e, root: string, job: JobDef, prevSlug?: string) => jobs.save(root, job, prevSlug),
+    'jobs.remove': (_e, root: string, slug: string) => jobs.remove(root, slug),
+    'jobs.assist': (_e, root: string, instruction: string, current?: JobDef) => jobs.assist(root, instruction, current),
+    'jobs.run': async (_e, root: string, slug: string, opts: Partial<JobRunOptions>) => (await jobs.start(root, slug, opts)).run,
+    'jobs.stop': (_e, id: string) => jobs.stopRun(id),
+    'jobs.runs': () => jobs.runs(),
+    'jobs.updateRun': (_e, id: string, patch: Partial<JobRun>) => jobs.updateRun(id, patch),
+    'jobs.removeRun': (_e, id: string) => jobs.removeRun(id),
+    'jobs.markAllRead': () => jobs.markAllRead(),
+
+    // ---- project actions (background processes) ----
+    'processes.scan': (_e, projectId: string, refresh?: boolean) => processes.scan(projectId, refresh),
+    'processes.list': () => processes.list(),
+    'processes.start': (_e, projectId: string, cwd: string, script: string) => processes.start(projectId, cwd, script),
+    'processes.stop': (_e, id: string) => processes.stop(id),
+    'processes.restart': (_e, id: string) => processes.restart(id),
+    'processes.dismiss': (_e, id: string) => processes.dismiss(id),
+    'processes.close': (_e, id: string) => processes.close(id),
 
     // ---- mesh ----
     'mesh.groups': () => sessions.mesh.allGroups(),

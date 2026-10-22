@@ -13,6 +13,8 @@ import type {
   ToastMessage,
   UpdateState
 } from '@shared/types'
+import type { JobDef, JobRun } from '@shared/jobs'
+import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import { api, errMsg, type Library, type LiveSession } from './api'
 
 export interface Tab {
@@ -21,7 +23,7 @@ export interface Tab {
   activePane: string
 }
 
-export type SidebarView = 'projects' | 'activity' | 'scheduled' | 'team' | 'reviews'
+export type SidebarView = 'projects' | 'activity' | 'jobs' | 'scheduled' | 'team' | 'reviews'
 export type RightPanel = 'review' | 'files' | 'team' | 'browser' | 'timeline' | null
 
 export interface NewSessionPrefill {
@@ -47,6 +49,18 @@ export interface UiState {
   activeTabId?: string
   library: Library
   automations: { automations: Automation[]; runs: AutomationRun[] }
+  jobRuns: JobRun[]
+  /** Job definitions per repo root (loaded on demand from <root>/repo_jobs). */
+  jobDefs: Record<string, JobDef[]>
+  jobsRoot?: string
+  /** Background processes owned by projects. */
+  processes: ProcessInfo[]
+  /** package.json scripts per project id (scanned on demand). */
+  scripts: Record<string, ScriptPackage[]>
+  /** Process whose log viewer is open. */
+  processLog?: string
+  /** Project whose Actions section should open (from the command palette). */
+  actionsFocus?: string
   mesh: Record<string, MeshGroupState>
   timeline: TimelineEvent[]
   toasts: ToastMessage[]
@@ -70,6 +84,9 @@ export interface UiState {
   fleetOpen: false | { cwd?: string }
   broadcastOpen: boolean
   automationEdit: false | Partial<Automation>
+  /** Job designer: `slug` edits an existing job, `draft` opens an unsaved one. */
+  jobEdit: false | { root: string; slug?: string; draft?: JobDef }
+  jobRunFor: false | { root: string; slug: string; step?: number }
   prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }
   fileToOpen?: { path: string; sessionId?: string }
   updateState?: UpdateState
@@ -91,6 +108,10 @@ export const useStore = create<UiState>(() => ({
   tabs: [],
   library: { projects: [], chats: [], worktrees: [], recentFolders: [] },
   automations: { automations: [], runs: [] },
+  jobRuns: [],
+  jobDefs: {},
+  processes: [],
+  scripts: {},
   mesh: {},
   timeline: [],
   toasts: [],
@@ -108,7 +129,9 @@ export const useStore = create<UiState>(() => ({
   newSession: false,
   fleetOpen: false,
   broadcastOpen: false,
-  automationEdit: false
+  automationEdit: false,
+  jobEdit: false,
+  jobRunFor: false
 }))
 
 export const get = useStore.getState
@@ -322,9 +345,9 @@ export async function signIn(opts: { console?: boolean; sso?: boolean; email?: s
 
 export async function toggleShell(sessionId?: string): Promise<void> {
   const id = sessionId ?? activeSessionId()
-  if (!id) return
-  const s = get().sessions[id]
-  if (!s || s.kind === 'shell') return
+  const s = id ? get().sessions[id] : undefined
+  if (!id || !s) return toast('Open a chat to use its terminal')
+  if (s.kind === 'shell') return
   const open = !get().shellOpen[id]
   set((st) => ({ shellOpen: { ...st.shellOpen, [id]: open } }))
   if (open) {
@@ -343,4 +366,18 @@ export function setRight(panel: RightPanel): void {
 
 export function showSidebar(view: SidebarView): void {
   set((s) => ({ sidebarOpen: !(s.sidebarOpen && s.sidebarView === view), sidebarView: view }))
+}
+
+// ------------------------------------------------------------------ repo jobs
+export async function loadJobs(root: string): Promise<JobDef[]> {
+  const defs = (await attempt(() => api.jobs.list(root))) ?? []
+  set((s) => ({ jobDefs: { ...s.jobDefs, [root]: defs } }))
+  return defs
+}
+
+// ------------------------------------------------------------------ project actions
+export async function loadScripts(projectId: string, refresh = false): Promise<ScriptPackage[]> {
+  const pkgs = (await attempt(() => api.processes.scan(projectId, refresh))) ?? []
+  set((s) => ({ scripts: { ...s.scripts, [projectId]: pkgs } }))
+  return pkgs
 }

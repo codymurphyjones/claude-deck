@@ -9,6 +9,8 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { SettingsModal } from './components/SettingsModal'
 import { GoalDialog, FleetDialog, BroadcastDialog } from './components/Dialogs'
 import { AutomationDialog } from './components/Automations'
+import { JobDesigner, JobRunDialog } from './components/Jobs'
+import { ProcessAlerts, ProcessLogDialog } from './components/Actions'
 import { MenuHost, PromptDialog, Toasts } from './components/ui'
 
 export function App() {
@@ -31,9 +33,12 @@ export function App() {
       <FleetDialog />
       <BroadcastDialog />
       <AutomationDialog />
+      <JobDesigner />
+      <JobRunDialog />
+      <ProcessLogDialog />
       <PromptDialog />
       <MenuHost />
-      <Toasts />
+      <Toasts>{!popout && <ProcessAlerts />}</Toasts>
     </div>
   )
 }

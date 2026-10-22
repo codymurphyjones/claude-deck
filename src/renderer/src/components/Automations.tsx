@@ -3,6 +3,7 @@ import type { Automation, AutomationSchedule } from '@shared/types'
 import { api } from '../api'
 import { attempt, openSession, set, useStore } from '../store'
 import { Icon } from './Icon'
+import { ScheduledJobFields } from './Jobs'
 import { Modal, openMenu, Seg, Switch, timeAgo, useNow } from './ui'
 
 function describe(s: AutomationSchedule): string {
@@ -57,7 +58,7 @@ export function ScheduledView() {
               ])
             }
           >
-            <Icon name={a.kind === 'inchat' ? 'message' : a.schedule.type === 'github' ? 'pr' : 'clock'} size={14} style={{ marginTop: 2, color: a.status === 'active' ? 'var(--accent)' : 'var(--muted)' }} />
+            <Icon name={a.kind === 'inchat' ? 'message' : a.kind === 'job' ? 'layers' : a.schedule.type === 'github' ? 'pr' : 'clock'} size={14} style={{ marginTop: 2, color: a.status === 'active' ? 'var(--accent)' : 'var(--muted)' }} />
             <div className="grow">
               <div className="ellipsis" style={{ fontWeight: 600 }}>
                 {a.name}
@@ -167,9 +168,9 @@ export function AutomationDialog() {
   const sch = a.schedule ?? { type: 'interval', minutes: 60 }
   const close = (): void => set({ automationEdit: false })
   const save = async (): Promise<void> => {
-    if (!a.prompt?.trim()) return
-    if (a.kind === 'standalone' && !a.cwd) return
-    const r = await attempt(() => api.automations.upsert({ ...a, name: a.name || a.prompt!.slice(0, 40) }), a.id ? 'Task updated' : 'Task scheduled')
+    if (a.kind === 'job' ? !a.job?.slug : !a.prompt?.trim()) return
+    if (a.kind !== 'inchat' && !a.cwd) return
+    const r = await attempt(() => api.automations.upsert({ ...a, name: a.name || (a.kind === 'job' ? a.job!.slug : a.prompt!.slice(0, 40)) }), a.id ? 'Task updated' : 'Task scheduled')
     if (r) close()
   }
   return (
@@ -204,17 +205,20 @@ export function AutomationDialog() {
           onChange={(kind) => setA({ ...a, kind, schedule: kind === 'inchat' && sch.type === 'github' ? { type: 'interval', minutes: 30 } : sch })}
           options={[
             ['standalone', 'Standalone (new chat per run)'],
-            ['inchat', 'Inside an existing chat']
+            ['inchat', 'Inside an existing chat'],
+            ['job', 'Repo job']
           ]}
         />
         <label className="field">
           Name
           <input className="input" value={a.name ?? ''} placeholder="Daily dependency check" onChange={(e) => setA({ ...a, name: e.target.value })} />
         </label>
-        <label className="field">
-          Prompt
-          <textarea className="textarea" rows={5} value={a.prompt ?? ''} placeholder="Check for outdated dependencies, summarize risky upgrades, and open a draft PR for safe patch bumps." onChange={(e) => setA({ ...a, prompt: e.target.value })} />
-        </label>
+        {a.kind !== 'job' && (
+          <label className="field">
+            Prompt
+            <textarea className="textarea" rows={5} value={a.prompt ?? ''} placeholder="Check for outdated dependencies, summarize risky upgrades, and open a draft PR for safe patch bumps." onChange={(e) => setA({ ...a, prompt: e.target.value })} />
+          </label>
+        )}
         {a.kind === 'inchat' ? (
           <label className="field">
             Chat
@@ -246,6 +250,7 @@ export function AutomationDialog() {
             </button>
           </div>
         )}
+        {a.kind === 'job' && <ScheduledJobFields root={a.cwd ?? ''} value={a.job} onChange={(job) => setA({ ...a, job, name: a.name || job.slug })} />}
         <label className="field">
           When
           <Seg
@@ -297,7 +302,7 @@ export function AutomationDialog() {
             </label>
           </div>
         )}
-        {a.kind !== 'inchat' && (
+        {a.kind === 'standalone' && (
           <>
             <div className="row">
               <Switch on={!!a.useWorktree} onChange={(useWorktree) => setA({ ...a, useWorktree })} />

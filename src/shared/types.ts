@@ -1,5 +1,7 @@
 // Types shared between the main process, preload and renderer.
 
+import type { JobRunOptions } from './jobs'
+
 export type SessionKind = 'claude' | 'shell' | 'login' | 'command'
 export type SessionStatus =
   | 'starting'
@@ -456,9 +458,11 @@ export interface Automation {
   id: string
   name: string
   prompt: string
-  kind: 'standalone' | 'inchat'
+  kind: 'standalone' | 'inchat' | 'job'
   schedule: AutomationSchedule
   cwd: string
+  /** kind 'job': which repo job (under cwd/repo_jobs) and how to run it. */
+  job?: { slug: string; options?: Partial<JobRunOptions> }
   projectId?: string
   useWorktree: boolean
   model?: string

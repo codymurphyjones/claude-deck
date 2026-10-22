@@ -11,6 +11,8 @@ import { PtyService } from './pty/ptyService'
 import { SessionService } from './sessions/sessionService'
 import { WindowManager } from './windows'
 import { initUpdater, stopUpdater } from './updater'
+import { JobService } from './jobs/jobService'
+import { ProcessService } from './processes/processService'
 
 // If Claude Deck was launched from inside a Claude Code session, don't let that
 // session's identity leak into the sessions we start (it disables transcripts etc.).
@@ -70,9 +72,11 @@ if (!app.requestSingleInstanceLock()) {
     const pty = new PtyService()
     const auth = new AuthService()
     const sessions = new SessionService(pty, auth)
-    const scheduler = new Scheduler(sessions)
+    const jobs = new JobService()
+    const processes = new ProcessService(pty)
+    const scheduler = new Scheduler(sessions, jobs)
     windows = new WindowManager(sessions)
-    windows.hasBackgroundWork = () => scheduler.data().automations.some((a) => a.status === 'active')
+    windows.hasBackgroundWork = () => jobs.busy() || processes.busy() || scheduler.data().automations.some((a) => a.status === 'active')
 
     const control = new ControlServer()
     control.on('hook', (sid, params) => sessions.handleHook(sid, params as never))
@@ -84,7 +88,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     await control.start()
 
-    registerIpc({ sessions, auth, scheduler, windows })
+    registerIpc({ sessions, auth, scheduler, jobs, processes, windows })
     const win = windows.createMain()
     sessions.defaultHost = win.webContents.id
     win.webContents.once('did-finish-load', () => {
@@ -101,6 +105,8 @@ if (!app.requestSingleInstanceLock()) {
     app.on('before-quit', () => {
       if (windows) windows.quitting = true
       scheduler.stop()
+      jobs.stop()
+      processes.stopAll()
       stopUpdater()
       pty.killAll()
       control.stop()
