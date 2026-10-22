@@ -1,3 +1,4 @@
+import { providerOf } from '@shared/agent'
 import { useEffect, useMemo, useState } from 'react'
 import type { ChatRecord, Project, TranscriptSummary } from '@shared/types'
 import { api } from '../api'
@@ -28,7 +29,7 @@ export function Sidebar({ open }: { open: boolean }) {
   const sessions = useStore((s) => s.sessions)
   const runs = useStore((s) => s.automations.runs)
   const jobRuns = useStore((s) => s.jobRuns)
-  const attention = Object.values(sessions).filter((s) => s.kind === 'claude' && (s.status === 'needs-input' || s.unread)).length
+  const attention = Object.values(sessions).filter((s) => s.kind === 'agent' && (s.status === 'needs-input' || s.unread)).length
   const unreadRuns = runs.filter((r) => r.unread && !r.archived).length
   const teams = new Set(
     Object.values(sessions)
@@ -93,14 +94,14 @@ function ProjectsView() {
   const home = useStore((s) => s.homedir)
   const [q, setQ] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [results, setResults] = useState<{ claudeSessionId: string; snippet: string }[] | null>(null)
+  const [results, setResults] = useState<{ agentSessionId: string; snippet: string }[] | null>(null)
   const [history, setHistory] = useState<TranscriptSummary[] | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   useNow()
 
   const liveByChat = useMemo(() => {
     const m = new Map<string, (typeof sessions)[string]>()
-    for (const s of Object.values(sessions)) if (s.claudeSessionId && s.status !== 'exited') m.set(s.claudeSessionId, s)
+    for (const s of Object.values(sessions)) if (s.agentSessionId && s.status !== 'exited') m.set(s.agentSessionId, s)
     return m
   }, [sessions])
 
@@ -125,8 +126,8 @@ function ProjectsView() {
 
   const projectMenu = (e: React.MouseEvent, p: Project): void =>
     openMenu(e, [
-      { label: 'New chat', icon: 'plus', onClick: () => openSession('claude', { cwd: p.folders[0] }) },
-      { label: 'New chat in worktree', icon: 'branch', onClick: () => openSession('claude', { cwd: p.folders[0], worktree: {} }) },
+      { label: 'New chat', icon: 'plus', onClick: () => openSession('agent', { cwd: p.folders[0] }) },
+      { label: 'New chat in worktree', icon: 'branch', onClick: () => openSession('agent', { cwd: p.folders[0], worktree: {} }) },
       { label: 'New permanent worktree…', icon: 'layers', onClick: () => askText('Worktree name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createPermanent(p.folders[0], n), 'Permanent worktree created')) },
       { label: 'Launch a team here…', icon: 'users', onClick: () => set({ fleetOpen: { cwd: p.folders[0] } }) },
       { label: 'Run a routine…', icon: 'wand', onClick: () => runRoutine(undefined, p.folders[0]) },
@@ -159,7 +160,7 @@ function ProjectsView() {
     <>
       <div className="sidebar-head">
         <span className="title">Projects</span>
-        <button className="icon-btn sm" title="Open folder…" onClick={async () => (await api.dialog.openFolder()).forEach((d) => openSession('claude', { cwd: d }))}>
+        <button className="icon-btn sm" title="Open folder…" onClick={async () => (await api.dialog.openFolder()).forEach((d) => openSession('agent', { cwd: d }))}>
           <Icon name="folder-open" size={15} />
         </button>
         <button className="icon-btn sm" title="New session" onClick={() => set({ newSession: {} })}>
@@ -184,12 +185,12 @@ function ProjectsView() {
             <div className="section-label">Full-text results</div>
             {!results.length && <div className="empty-note">No matches.</div>}
             {results.map((r) => {
-              const c = lib.chats.find((x) => x.claudeSessionId === r.claudeSessionId)
+              const c = lib.chats.find((x) => x.agentSessionId === r.agentSessionId)
               return (
-                <div key={r.claudeSessionId} className="list-item" onClick={() => (c ? resumeChat(r.claudeSessionId) : resumeTranscript(r.claudeSessionId))}>
+                <div key={r.agentSessionId} className="list-item" onClick={() => (c ? resumeChat(r.agentSessionId) : resumeTranscript(r.agentSessionId))}>
                   <Icon name="search" size={14} style={{ color: 'var(--muted)' }} />
                   <div className="grow">
-                    <div className="ellipsis">{c?.name ?? r.claudeSessionId.slice(0, 8)}</div>
+                    <div className="ellipsis">{c?.name ?? r.agentSessionId.slice(0, 8)}</div>
                     <div className="sub ellipsis">{r.snippet}</div>
                   </div>
                 </div>
@@ -203,7 +204,7 @@ function ProjectsView() {
               <Icon name="pin" size={11} /> Pinned
             </div>
             {pinned.map((c) => (
-              <ChatItem key={c.claudeSessionId} chat={c} live={liveByChat.get(c.claudeSessionId)} indent={false} />
+              <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />
             ))}
           </>
         )}
@@ -226,7 +227,7 @@ function ProjectsView() {
                     title="New chat"
                     onClick={(e) => {
                       e.stopPropagation()
-                      void openSession('claude', { cwd: p.folders[0] })
+                      void openSession('agent', { cwd: p.folders[0] })
                     }}
                   >
                     <Icon name="plus" size={13} />
@@ -246,10 +247,10 @@ function ProjectsView() {
                 <>
                   <ProjectActions project={p} />
                   {chats.slice(0, 30).map((c) => (
-                    <ChatItem key={c.claudeSessionId} chat={c} live={liveByChat.get(c.claudeSessionId)} indent />
+                    <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent />
                   ))}
                   {!chats.length && (
-                    <div className="list-item chat-item muted" onClick={() => openSession('claude', { cwd: p.folders[0] })}>
+                    <div className="list-item chat-item muted" onClick={() => openSession('agent', { cwd: p.folders[0] })}>
                       <Icon name="plus" size={13} /> New chat
                     </div>
                   )}
@@ -258,10 +259,10 @@ function ProjectsView() {
                       key={w.id}
                       className="list-item chat-item"
                       title={w.path}
-                      onClick={() => (w.deleted ? attempt(() => api.worktree.restore(w.id), 'Worktree restored') : openSession('claude', { cwd: w.path }))}
+                      onClick={() => (w.deleted ? attempt(() => api.worktree.restore(w.id), 'Worktree restored') : openSession('agent', { cwd: w.path }))}
                       onContextMenu={(e) =>
                         openMenu(e, [
-                          { label: w.deleted ? 'Restore snapshot' : 'New chat here', icon: w.deleted ? 'undo' : 'plus', onClick: () => (w.deleted ? attempt(() => api.worktree.restore(w.id)) : openSession('claude', { cwd: w.path })) },
+                          { label: w.deleted ? 'Restore snapshot' : 'New chat here', icon: w.deleted ? 'undo' : 'plus', onClick: () => (w.deleted ? attempt(() => api.worktree.restore(w.id)) : openSession('agent', { cwd: w.path })) },
                           { label: 'Create branch here…', icon: 'branch', disabled: !!w.deleted, onClick: () => askText('Branch name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createBranch(w.id, n), 'Branch created')) },
                           { label: 'Reveal folder', icon: 'folder-open', disabled: !!w.deleted, onClick: () => api.shell.openPath(w.path) },
                           { separator: true },
@@ -285,12 +286,12 @@ function ProjectsView() {
               <Icon name="zap" size={11} /> Quick chats
             </div>
             {quick.map((c) => (
-              <ChatItem key={c.claudeSessionId} chat={c} live={liveByChat.get(c.claudeSessionId)} indent={false} />
+              <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />
             ))}
           </>
         )}
         <div className="section-label" style={{ cursor: 'var(--cursor)' }} onClick={() => setShowHistory((v) => !v)}>
-          <Icon name={showHistory ? 'chevron-down' : 'chevron-right'} size={11} /> All Claude Code history
+          <Icon name={showHistory ? 'chevron-down' : 'chevron-right'} size={11} /> All agent history
         </div>
         {showHistory && !history && <div className="empty-note">Reading transcripts…</div>}
         {showHistory &&
@@ -298,12 +299,15 @@ function ProjectsView() {
             ?.filter((t) => !ql || t.title.toLowerCase().includes(ql) || t.cwd.toLowerCase().includes(ql))
             .slice(0, 80)
             .map((t) => (
-              <div key={t.claudeSessionId} className="list-item" title={`${t.cwd}\n${t.messages} prompts · ${new Date(t.lastTs).toLocaleString()}`} onClick={() => openSession('claude', { cwd: t.cwd, resumeId: t.claudeSessionId, name: t.title.slice(0, 40) })}>
+              <div key={t.agentSessionId} className="list-item" title={`${t.cwd}\n${t.messages} prompts · ${new Date(t.lastTs).toLocaleString()}`} onClick={() => openSession('agent', { cwd: t.cwd, provider: t.provider, resumeId: t.agentSessionId, name: t.title.slice(0, 40) })}>
                 <Icon name="history" size={13} style={{ color: 'var(--muted)' }} />
                 <div className="grow">
                   <div className="ellipsis">{t.title}</div>
                   <div className="sub ellipsis mono">{shortPath(t.cwd, home)}</div>
                 </div>
+                <span className="badge" title={`${providerOf(t.provider).label} session`}>
+                  {providerOf(t.provider).label}
+                </span>
                 <span className="sub">{timeAgo(t.lastTs)}</span>
               </div>
             ))}
@@ -314,8 +318,8 @@ function ProjectsView() {
 
 async function resumeTranscript(id: string): Promise<void> {
   const list = await api.library.transcripts()
-  const t = list.find((x) => x.claudeSessionId === id)
-  if (t) await openSession('claude', { cwd: t.cwd, resumeId: id, name: t.title.slice(0, 40) })
+  const t = list.find((x) => x.agentSessionId === id)
+  if (t) await openSession('agent', { cwd: t.cwd, provider: t.provider, resumeId: id, name: t.title.slice(0, 40) })
 }
 
 function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnType<typeof get>['sessions'][string]; indent: boolean }) {
@@ -327,26 +331,28 @@ function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnTy
     <div
       className={`list-item ${indent ? 'chat-item' : ''} ${active ? 'active' : ''}`}
       title={`${c.name}\n${c.cwd}${c.branch ? `\nbranch: ${c.branch}` : ''}${c.lastPrompt ? `\n\n${c.lastPrompt}` : ''}`}
-      onClick={() => (live ? focusSessionTab(live.id) : resumeChat(c.claudeSessionId))}
+      onClick={() => (live ? focusSessionTab(live.id) : resumeChat(c.agentSessionId))}
       onContextMenu={(e) =>
         openMenu(e, [
-          { label: live ? 'Focus' : 'Resume', icon: 'play', onClick: () => (live ? focusSessionTab(live.id) : resumeChat(c.claudeSessionId)) },
-          { label: 'Open in split', icon: 'split', onClick: () => resumeChat(c.claudeSessionId, 'split') },
-          { label: 'Fork', icon: 'fork', onClick: () => openSession('claude', { cwd: c.cwd, resumeId: c.claudeSessionId, fork: true, name: `${c.name} fork` }) },
-          { label: c.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => api.library.updateChat(c.claudeSessionId, { pinned: !c.pinned }) },
+          { label: live ? 'Focus' : 'Resume', icon: 'play', onClick: () => (live ? focusSessionTab(live.id) : resumeChat(c.agentSessionId)) },
+          { label: 'Open in split', icon: 'split', onClick: () => resumeChat(c.agentSessionId, 'split') },
+          ...(providerOf(c.provider).caps.fork
+            ? [{ label: 'Fork', icon: 'fork', onClick: () => openSession('agent', { cwd: c.cwd, provider: c.provider, resumeId: c.agentSessionId, fork: true, name: `${c.name} fork` }) }]
+            : []),
+          { label: c.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => api.library.updateChat(c.agentSessionId, { pinned: !c.pinned }) },
           {
             label: 'Rename…',
             icon: 'edit',
             onClick: () =>
               askText('Rename chat', c.name).then((n) => {
                 if (!n) return
-                void api.library.updateChat(c.claudeSessionId, { name: n })
+                void api.library.updateChat(c.agentSessionId, { name: n })
                 if (live) void api.session.rename(live.id, n)
               })
           },
-          { label: 'Copy session id', icon: 'copy', onClick: () => api.clipboard.writeText(c.claudeSessionId) },
+          { label: 'Copy session id', icon: 'copy', onClick: () => api.clipboard.writeText(c.agentSessionId) },
           { separator: true },
-          { label: 'Archive', icon: 'archive', onClick: () => api.library.updateChat(c.claudeSessionId, { archived: true }) }
+          { label: 'Archive', icon: 'archive', onClick: () => api.library.updateChat(c.agentSessionId, { archived: true }) }
         ])
       }
     >
@@ -362,7 +368,7 @@ function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnTy
           title="Archive"
           onClick={(e) => {
             e.stopPropagation()
-            void api.library.updateChat(c.claudeSessionId, { archived: true })
+            void api.library.updateChat(c.agentSessionId, { archived: true })
           }}
         >
           <Icon name="archive" size={12} />
@@ -381,12 +387,12 @@ function ActivityView() {
   const [filter, setFilter] = useState<'all' | 'running' | 'waiting' | 'unread' | 'pinned' | 'scheduled'>('all')
   useNow(15_000)
   const list = Object.values(sessions)
-    .filter((s) => s.kind === 'claude')
+    .filter((s) => s.kind === 'agent')
     .filter((s) => {
       if (filter === 'running') return s.status === 'working'
       if (filter === 'waiting') return s.status === 'needs-input' || s.status === 'waiting-auth' || s.goal?.status === 'blocked'
       if (filter === 'unread') return s.unread
-      if (filter === 'pinned') return chats.some((c) => c.claudeSessionId === s.claudeSessionId && c.pinned)
+      if (filter === 'pinned') return chats.some((c) => c.agentSessionId === s.agentSessionId && c.pinned)
       if (filter === 'scheduled') return false
       return true
     })

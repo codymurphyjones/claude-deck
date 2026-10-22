@@ -99,7 +99,7 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.on('updated', () => broadcast('theme:system', nativeTheme.shouldUseDarkColors))
     if (settings().buddy) windows.toggleBuddy(true)
 
-    void auth.refresh()
+    void auth.refreshAll()
     scheduler.start()
     const mergedCleanup = new MergedWorktreeCleanup((w) => sessions.isWorktreeProtected(w.id))
     mergedCleanup.start()

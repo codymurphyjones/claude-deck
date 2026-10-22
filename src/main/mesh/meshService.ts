@@ -105,7 +105,7 @@ export class MeshService {
   }
 
   members(key: string): SessionInfo[] {
-    return this.deps.sessions().filter((s) => s.kind === 'claude' && s.meshGroup === key && s.status !== 'exited')
+    return this.deps.sessions().filter((s) => s.kind === 'agent' && s.meshGroup === key && s.status !== 'exited')
   }
 
   peersOf(s: SessionInfo): SessionInfo[] {

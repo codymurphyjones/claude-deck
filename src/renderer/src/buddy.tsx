@@ -21,7 +21,7 @@ function Buddy() {
       off2()
     }
   }, [])
-  const list = sessions.filter((s) => s.kind === 'claude')
+  const list = sessions.filter((s) => s.kind === 'agent')
   const order = ['needs-input', 'waiting-auth', 'blocked', 'working', 'starting', 'idle', 'exited']
   list.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))
   const label = (s: LiveSession): string => (s.status === 'idle' ? (s.unread ? 'Ready for review' : 'Ready') : s.goal?.status === 'blocked' ? 'Blocked' : STATUS_LABEL[s.status])

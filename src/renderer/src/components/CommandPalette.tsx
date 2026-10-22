@@ -55,22 +55,22 @@ export function CommandPalette() {
     if (!onlySlash)
       for (const c of commands().filter((c) => c.when?.() ?? true))
         add({ key: 'c' + c.id, group: 'Commands', title: c.title, icon: c.icon ?? 'zap', hint: prettyCombo(sc[c.id]), run: c.run }, `${c.title} ${c.group}`)
-    if (active?.kind === 'claude' && !onlyCommands)
+    if (active?.kind === 'agent' && !onlyCommands)
       for (const [cmd, desc] of SLASH_COMMANDS)
         add({ key: 'sl' + cmd, group: 'Claude slash commands', title: cmd, sub: desc, icon: 'code', run: () => api.session.sendPrompt(active.id, cmd, 'steer') }, `${cmd} ${desc}`)
     if (!onlyCommands && !onlySlash) {
-      if (active?.kind === 'claude')
+      if (active?.kind === 'agent')
         for (const t of settings.promptTemplates)
           add({ key: 'pt' + t.id, group: 'Prompt templates', title: t.name, sub: t.text, icon: 'note', run: () => set({ composerFor: active.id, composerPrefill: t.text }) }, `${t.name} ${t.text}`)
       for (const r of routines ?? [])
         add({ key: 'rt' + r.slug, group: 'Routines', title: `Run routine: ${r.name}`, sub: r.description, icon: 'wand', run: () => runRoutine(r.slug) }, `routine ${r.name} ${r.description}`)
       for (const c of lib.chats.filter((x) => !x.archived && !x.hidden).slice(0, 300))
         add(
-          { key: 'ch' + c.claudeSessionId, group: 'Chats', title: c.name, sub: `${c.cwd.split(/[\\/]/).pop()} · ${timeAgo(c.updatedAt)}${c.branch ? ` · ${c.branch}` : ''}`, icon: 'message', run: () => resumeChat(c.claudeSessionId) },
+          { key: 'ch' + c.agentSessionId, group: 'Chats', title: c.name, sub: `${c.cwd.split(/[\\/]/).pop()} · ${timeAgo(c.updatedAt)}${c.branch ? ` · ${c.branch}` : ''}`, icon: 'message', run: () => resumeChat(c.agentSessionId) },
           `${c.name} ${c.branch ?? ''} ${c.lastPrompt ?? ''}`
         )
       for (const p of lib.projects)
-        add({ key: 'p' + p.id, group: 'Projects', title: `New chat in ${p.name}`, sub: p.folders[0], icon: 'folder', run: () => openSession('claude', { cwd: p.folders[0] }) }, `${p.name} ${p.folders.join(' ')}`)
+        add({ key: 'p' + p.id, group: 'Projects', title: `New chat in ${p.name}`, sub: p.folders[0], icon: 'folder', run: () => openSession('agent', { cwd: p.folders[0] }) }, `${p.name} ${p.folders.join(' ')}`)
     }
     const groupOrder = ['Open sessions', 'Commands', 'Claude slash commands', 'Prompt templates', 'Routines', 'Chats', 'Projects']
     if (query) out.sort((a, b) => b.score - a.score)

@@ -4,7 +4,7 @@ import { api } from '../api'
 import { activeSession, attempt, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
 import { copyJobCard } from '../jobClipboard'
-import { deleteRoutine, designRoutineInChat, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
+import { AgentSelect, deleteRoutine, designRoutineInChat, efforts, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
 // Routines are app-level jobs (~/.claude-deck/routines) that run against any repo,
@@ -168,9 +168,10 @@ export function RoutineRunDialog() {
       if (ok) close()
       return
     }
-    const s = await openSession('claude', {
+    const s = await openSession('agent', {
         cwd,
         name: job.name,
+        provider: opts.provider ?? d.provider,
         initialPrompt: buildRoutineChatPrompt(job, extra),
         model: opts.model ?? d.model,
         effort: opts.effort ?? d.effort,
@@ -251,6 +252,10 @@ export function RoutineRunDialog() {
         {job && mode === 'chat' && (
           <>
             <div className="row">
+              <label className="field">
+                Agent
+                <AgentSelect value={opts.provider ?? d.provider} onChange={(provider) => setOpts({ ...opts, provider })} />
+              </label>
               <label className="field grow">
                 Model
                 <input className="input" value={opts.model ?? ''} placeholder={d.model || 'default'} onChange={(e) => setOpts({ ...opts, model: e.target.value || undefined })} />
@@ -259,7 +264,7 @@ export function RoutineRunDialog() {
                 Effort
                 <select className="select" value={opts.effort ?? ''} onChange={(e) => setOpts({ ...opts, effort: e.target.value || undefined })}>
                   <option value="">{d.effort ? `routine default (${d.effort})` : 'default'}</option>
-                  {['low', 'medium', 'high', 'xhigh', 'max'].map((x) => (
+                  {efforts(opts.provider ?? d.provider).map((x) => (
                     <option key={x}>{x}</option>
                   ))}
                 </select>

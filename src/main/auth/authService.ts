@@ -1,62 +1,67 @@
 import { EventEmitter } from 'events'
+import { PROVIDER_IDS, type ProviderId } from '@shared/agent'
 import type { AuthStatus } from '@shared/types'
-import { broadcast, settings } from '../context'
-import { locateClaude } from '../runtime'
-import { run } from '../util'
+import { adapter } from '../agents/registry'
+import { broadcast } from '../context'
 
-/** Tracks Claude CLI sign-in state via `claude auth status --json`. */
+const empty = (provider: ProviderId): AuthStatus => ({ provider, checked: false, loggedIn: false })
+
+/** Tracks each agent CLI's sign-in state. */
 export class AuthService extends EventEmitter {
-  status: AuthStatus = { checked: false, loggedIn: false }
-  private poll: NodeJS.Timeout | undefined
-  private inflight: Promise<AuthStatus> | undefined
+  statuses: Record<ProviderId, AuthStatus> = { claude: empty('claude'), codex: empty('codex') }
+  private polls = new Map<ProviderId, NodeJS.Timeout>()
+  private inflight = new Map<ProviderId, Promise<AuthStatus>>()
 
-  async refresh(): Promise<AuthStatus> {
-    if (this.inflight) return this.inflight
-    this.inflight = (async () => {
-      const r = await run(locateClaude(settings().claudePath), ['auth', 'status', '--json'], { timeout: 30_000 })
+  statusOf(p: ProviderId): AuthStatus {
+    return this.statuses[p]
+  }
+
+  all(): AuthStatus[] {
+    return PROVIDER_IDS.map((p) => this.statuses[p])
+  }
+
+  refreshAll(): Promise<AuthStatus[]> {
+    return Promise.all(PROVIDER_IDS.map((p) => this.refresh(p)))
+  }
+
+  refresh(p: ProviderId = 'claude'): Promise<AuthStatus> {
+    const running = this.inflight.get(p)
+    if (running) return running
+    const job = (async () => {
       let next: AuthStatus
       try {
-        const j = JSON.parse(r.stdout)
-        next = {
-          checked: true,
-          loggedIn: !!j.loggedIn,
-          email: j.email,
-          authMethod: j.authMethod,
-          subscriptionType: j.subscriptionType,
-          orgName: j.orgName
-        }
-      } catch {
-        // Older CLIs or API-key setups: treat an API key as signed in.
-        next = process.env.ANTHROPIC_API_KEY
-          ? { checked: true, loggedIn: true, authMethod: 'api-key' }
-          : { checked: true, loggedIn: false, error: (r.stderr || r.stdout).trim().slice(0, 300) || undefined }
+        next = { provider: p, ...(await adapter(p).auth.status()) }
+      } catch (e) {
+        next = { provider: p, checked: true, loggedIn: false, error: (e as Error).message }
       }
-      const changed = next.loggedIn !== this.status.loggedIn || !this.status.checked
-      this.status = next
+      const prev = this.statuses[p]
+      const changed = next.loggedIn !== prev.loggedIn || !prev.checked
+      this.statuses[p] = next
       broadcast('auth:changed', next)
       if (changed) this.emit('changed', next)
-      this.schedulePoll()
+      this.schedulePoll(p)
       return next
-    })().finally(() => (this.inflight = undefined))
-    return this.inflight
+    })().finally(() => this.inflight.delete(p))
+    this.inflight.set(p, job)
+    return job
   }
 
-  private schedulePoll(): void {
-    if (this.poll) clearTimeout(this.poll)
-    // Poll quickly while signed out (to notice a login), slowly otherwise.
-    this.poll = setTimeout(() => void this.refresh(), this.status.loggedIn ? 5 * 60_000 : 5_000)
+  private schedulePoll(p: ProviderId): void {
+    const t = this.polls.get(p)
+    if (t) clearTimeout(t)
+    // Poll quickly while signed out (to notice a login), slowly otherwise. A provider
+    // whose CLI isn't installed is checked rarely.
+    const st = this.statuses[p]
+    const ms = st.loggedIn ? 5 * 60_000 : st.error && /ENOENT|not recognized|not found/i.test(st.error) ? 10 * 60_000 : 5_000
+    this.polls.set(p, setTimeout(() => void this.refresh(p), ms))
   }
 
-  loginArgs(opts: { console?: boolean; sso?: boolean; email?: string } = {}): string[] {
-    const args = ['auth', 'login']
-    if (opts.console) args.push('--console')
-    if (opts.sso) args.push('--sso')
-    if (opts.email) args.push('--email', opts.email)
-    return args
+  loginArgs(p: ProviderId, opts: { console?: boolean; sso?: boolean; email?: string } = {}): string[] {
+    return adapter(p).auth.loginArgs(opts)
   }
 
-  async logout(): Promise<void> {
-    await run(locateClaude(settings().claudePath), ['auth', 'logout'], { timeout: 30_000 })
-    await this.refresh()
+  async logout(p: ProviderId = 'claude'): Promise<void> {
+    await adapter(p).auth.logout()
+    await this.refresh(p)
   }
 }

@@ -2,6 +2,7 @@ import { webContents } from 'electron'
 import { EventEmitter } from 'events'
 import * as fs from 'fs'
 import * as path from 'path'
+import { providerOf as descriptorOf, type AgentEvent, type ProviderId } from '@shared/agent'
 import { baseName } from '@shared/paths'
 import type { GoalState, LaunchOptions, MeshRole, SessionInfo, SessionKind } from '@shared/types'
 import type { AuthService } from '../auth/authService'
@@ -12,8 +13,8 @@ import { emitLibrary, ensureProject, findProjectForFolder, getChat, updateChat, 
 import { MeshService } from '../mesh/meshService'
 import { focusSession, notify, updateSleepBlocker } from '../notify/notifyService'
 import type { PtyService } from '../pty/ptyService'
-import { defaultShell, locateClaude, runtime } from '../runtime'
-import { copyTranscriptTo, findTranscript, sessionUsage } from '../transcripts/transcriptService'
+import { defaultShell, runtime } from '../runtime'
+import { findTranscript, loadConversation, ownerOf, prepareResume, sessionUsage } from '../transcripts/transcriptService'
 import { stripAnsi, truncate, uuid } from '../util'
 import {
   createWorktree,
@@ -24,37 +25,17 @@ import {
   handoffToWorktree,
   touchWorktree
 } from '../worktrees/worktreeService'
-import { buildClaudeArgs, claudeEnv, plainEnv } from './launch'
-import { ChatProcess, type PermissionDecision } from '../chat/chatProcess'
-import { loadConversation } from '../chat/history'
+import { plainEnv } from './launch'
+import { adapter, providerOf } from '../agents/registry'
+import { hookToEvent, resultToHook, type HookPayload, type HookResult } from '../agents/claude/hooks'
+import type { AgentChat, LifecycleResult, PermissionDecision } from '../agents/types'
 import { chatToText, type ChatOp } from '@shared/chat'
-
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
-
-type HookPayload = {
-  hook_event_name?: string
-  session_id?: string
-  transcript_path?: string
-  permission_mode?: string
-  prompt?: string
-  tool_name?: string
-  tool_input?: Record<string, unknown>
-  message?: string
-  notification_type?: string
-  last_assistant_message?: string
-  stop_hook_active?: boolean
-}
-
-type HookResult = { stdout?: string; exitCode?: number }
-
-const ctxOut = (event: string, text: string | undefined): HookResult =>
-  text ? { stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } }) } : {}
 
 export class SessionService extends EventEmitter {
   readonly sessions = new Map<string, SessionInfo & { contextTokens?: number; queued?: string[]; turnFiles?: Set<string> }>()
   readonly mesh: MeshService
-  /** Claude sessions run as structured chat processes (no terminal). */
-  readonly chats = new Map<string, ChatProcess>()
+  /** Agent sessions run as structured chat processes (no terminal). */
+  readonly chats = new Map<string, AgentChat>()
   private active = new Map<number, string | undefined>()
   private reviewNudges = new Map<string, number[]>()
   /** Window that hosts sessions created without one (scheduled tasks). */
@@ -84,9 +65,9 @@ export class SessionService extends EventEmitter {
       else broadcast('pty:data', id, data)
     })
     pty.on('exit', (id: string, code: number) => this.onExit(id, code))
-    auth.on('changed', (st: { loggedIn: boolean }) => {
+    auth.on('changed', (st: { provider?: ProviderId; loggedIn: boolean }) => {
       if (!st.loggedIn) return
-      for (const s of this.sessions.values()) if (s.status === 'waiting-auth') void this.start(s)
+      for (const s of this.sessions.values()) if (s.status === 'waiting-auth' && providerOf(s) === (st.provider ?? 'claude')) void this.start(s)
     })
   }
 
@@ -133,7 +114,7 @@ export class SessionService extends EventEmitter {
   }
 
   private uniqueName(name: string, exceptId?: string): string {
-    const taken = new Set([...this.sessions.values()].filter((s) => s.id !== exceptId && s.kind === 'claude').map((s) => s.name.toLowerCase()))
+    const taken = new Set([...this.sessions.values()].filter((s) => s.id !== exceptId && s.kind === 'agent').map((s) => s.name.toLowerCase()))
     if (!taken.has(name.toLowerCase())) return name
     for (let i = 2; ; i++) if (!taken.has(`${name} ${i}`.toLowerCase())) return `${name} ${i}`
   }
@@ -145,6 +126,7 @@ export class SessionService extends EventEmitter {
     if (L.templateId) {
       const t = settings().sessionTemplates.find((x) => x.id === L.templateId)
       if (t) {
+        L.provider ??= t.provider
         L.model ??= t.model
         L.effort ??= t.effort
         L.permissionMode ??= t.permissionMode
@@ -156,8 +138,12 @@ export class SessionService extends EventEmitter {
         if (t.useWorktree && !L.worktree && !L.resumeId) L.worktree = {}
       }
     }
+    const resumed = L.resumeId ? getChat(L.resumeId) : undefined
+    if (kind === 'agent' || kind === 'login')
+      L.provider ??= resumed?.provider ?? (L.resumeId ? ownerOf(L.resumeId) : undefined) ?? settings().defaultProvider
+    if (kind === 'agent' && L.fork && !descriptorOf(L.provider).caps.fork) throw new Error(`${descriptorOf(L.provider).label} sessions can't be forked`)
     let cwd = L.cwd
-    if (kind === 'claude' && L.quick) {
+    if (kind === 'agent' && L.quick) {
       cwd = path.join(runtime.scratchDir, new Date().toISOString().slice(0, 10) + '-' + uuid().slice(0, 6))
       fs.mkdirSync(cwd, { recursive: true })
     }
@@ -165,13 +151,13 @@ export class SessionService extends EventEmitter {
     let setup: string | undefined
     let worktreeId: string | undefined
     let projectFolder = cwd
-    if (kind === 'claude' && L.worktree) {
+    if (kind === 'agent' && L.worktree) {
       const wt = await createWorktree({ repoCwd: cwd, ...L.worktree })
       projectFolder = findProjectForFolder(cwd)?.folders[0] ?? wt.repoRoot
       cwd = wt.path
       worktreeId = wt.id
       setup = setupCommand(loadEnvironment(wt.repoRoot))
-      if (L.resumeId) copyTranscriptTo(L.resumeId, cwd)
+      if (L.resumeId) prepareResume(L.provider, L.resumeId, cwd)
       void enforceLimit((w) => this.isWorktreeProtected(w.id))
     } else {
       const wt = findWorktreeByPath(cwd)
@@ -182,8 +168,8 @@ export class SessionService extends EventEmitter {
       }
     }
     const root = (await toplevel(cwd)) ?? cwd
-    const chat = L.resumeId ? getChat(L.resumeId) : undefined
-    const project = kind === 'claude' && !L.quick ? ensureProject(projectFolder) : undefined
+    const chat = resumed
+    const project = kind === 'agent' && !L.quick ? ensureProject(projectFolder) : undefined
     const id = uuid()
     const baseNm =
       L.name ||
@@ -193,10 +179,12 @@ export class SessionService extends EventEmitter {
     const s: SessionInfo = {
       id,
       kind,
-      name: kind === 'claude' ? this.uniqueName(baseNm) : baseNm,
+      name: kind === 'agent' ? this.uniqueName(baseNm) : baseNm,
       cwd,
       root,
-      claudeSessionId: kind === 'claude' ? (L.resumeId && !L.fork ? L.resumeId : L.resumeId ? undefined : uuid()) : undefined,
+      provider: kind === 'agent' || kind === 'login' ? L.provider : undefined,
+      // Claude takes a session id up front; other agents report theirs once started.
+      agentSessionId: kind === 'agent' ? (L.resumeId && !L.fork ? L.resumeId : L.resumeId || L.provider !== 'claude' ? undefined : uuid()) : undefined,
       projectId: project?.id,
       worktreeId,
       status: 'starting',
@@ -212,25 +200,26 @@ export class SessionService extends EventEmitter {
       launch: L,
       temporary: !!L.sideOf
     }
-    if (kind === 'claude' && settings().mesh.enabled) {
+    if (kind === 'agent' && settings().mesh.enabled) {
       const g = await this.mesh.groupFor(cwd, root)
       s.meshGroup = g.key
       this.mesh.ensureGroup(g.key, g.label)
     }
     this.sessions.set(id, s)
     if (s.meshGroup) s.meshColor = this.mesh.colorFor(s.meshGroup)
-    if (kind === 'claude' && s.claudeSessionId) this.recordChat(s)
+    if (kind === 'agent' && s.agentSessionId) this.recordChat(s)
     this.changed(s)
     await this.start(s)
     if (setup) await this.openShell(s.id, setup)
-    if (kind === 'claude') pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'start', text: `Started in ${cwd}`, group: s.meshGroup })
+    if (kind === 'agent') pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'start', text: `Started in ${cwd}`, group: s.meshGroup })
     return this.public(s)
   }
 
   private recordChat(s: SessionInfo): void {
-    if (!s.claudeSessionId) return
+    if (!s.agentSessionId) return
     upsertChat({
-      claudeSessionId: s.claudeSessionId,
+      agentSessionId: s.agentSessionId,
+      provider: providerOf(s),
       name: s.name,
       cwd: s.cwd,
       projectId: s.projectId,
@@ -240,7 +229,7 @@ export class SessionService extends EventEmitter {
       quick: s.launch.quick,
       hidden: s.temporary || undefined
     })
-    if (s.worktreeId) touchWorktree(s.worktreeId, { chatId: s.claudeSessionId })
+    if (s.worktreeId) touchWorktree(s.worktreeId, { chatId: s.agentSessionId })
   }
 
   isWorktreeProtected(id: string): boolean {
@@ -253,26 +242,28 @@ export class SessionService extends EventEmitter {
   private async start(s: SessionInfo): Promise<void> {
     const size = this.pty.size(s.id)
     try {
-      if (s.kind === 'claude') {
-        if (!this.auth.status.checked) await this.auth.refresh()
-        if (!this.auth.status.loggedIn) {
+      if (s.kind === 'agent') {
+        const p = providerOf(s)
+        if (!this.auth.statusOf(p).checked) await this.auth.refresh(p)
+        if (!this.auth.statusOf(p).loggedIn) {
           s.status = 'waiting-auth'
           this.changed(s)
           return
         }
         s.status = 'starting'
-        // Claude only saves a transcript once a conversation has a message; an empty
-        // session can't be resumed, so start it fresh under the same id instead.
+        // Agents only save a transcript once a conversation has a message; an empty
+        // session can't be resumed, so start it fresh (Claude: under the same id) instead.
         const rid = s.launch.resumeId
-        if (rid && !findTranscript(rid)) {
-          s.claudeSessionId = s.launch.fork ? uuid() : rid
+        if (rid && !findTranscript(p, rid)) {
+          s.agentSessionId = p !== 'claude' ? undefined : s.launch.fork ? uuid() : rid
           s.launch = { ...s.launch, resumeId: undefined, fork: false }
           this.recordChat(s)
         }
         this.startChat(s)
       } else if (s.kind === 'login') {
         s.status = 'working'
-        this.pty.spawn(s.id, locateClaude(settings().claudePath), this.auth.loginArgs(s.launch.login), { cwd: s.cwd, env: plainEnv(), ...size })
+        const p = providerOf(s)
+        this.pty.spawn(s.id, adapter(p).locate(), this.auth.loginArgs(p, s.launch.login), { cwd: s.cwd, env: plainEnv(), ...size })
       } else if (s.kind === 'shell') {
         s.status = 'idle'
         this.pty.spawn(s.id, s.launch.command || defaultShell(settings().shell), s.launch.args ?? [], { cwd: s.cwd, env: plainEnv(), ...size })
@@ -296,16 +287,17 @@ export class SessionService extends EventEmitter {
 
   private startChat(s: SessionInfo): void {
     this.chats.get(s.id)?.removeAllListeners().kill()
-    const chat = new ChatProcess()
+    const chat = adapter(providerOf(s)).createChat(s)
+    chat.lifecycle = (ev) => this.onLifecycle(s, ev)
     this.chats.set(s.id, chat)
     const rid = s.launch.resumeId
-    if (rid) chat.items = loadConversation(findTranscript(rid))
+    if (rid) chat.items = loadConversation(s.provider, rid)
     this.hostSend(s, 'chat:op', s.id, { op: 'reset', items: chat.items } satisfies ChatOp)
     chat.on('op', (o: ChatOp) => this.hostSend(s, 'chat:op', s.id, o))
     chat.on('meta', (m) => this.hostSend(s, 'chat:meta', s.id, m))
     chat.on('session', (sid: string) => {
-      if (sid !== s.claudeSessionId) {
-        s.claudeSessionId = sid
+      if (sid !== s.agentSessionId) {
+        s.agentSessionId = sid
         this.recordChat(s)
         this.changed(s)
       }
@@ -313,7 +305,7 @@ export class SessionService extends EventEmitter {
     chat.on('status', (st: 'working' | 'needs-input' | 'idle', perm?: { toolName: string; description?: string }) => {
       if (st === 'needs-input') {
         s.status = 'needs-input'
-        s.attention = `Claude wants to use ${perm?.toolName ?? 'a tool'}${perm?.description ? `: ${perm.description}` : ''}`
+        s.attention = `${descriptorOf(s.provider).label} wants to use ${perm?.toolName ?? 'a tool'}${perm?.description ? `: ${perm.description}` : ''}`
         if (!this.isActive(s)) s.unread = true
         notify(perm?.toolName === 'AskUserQuestion' ? 'question' : 'permission', s, `${s.name} needs you`, s.attention)
       } else if (st === 'working') {
@@ -332,7 +324,7 @@ export class SessionService extends EventEmitter {
       if (code !== 0 && stderr) chat.notice(stderr.split('\n').slice(-6).join('\n'), 'error')
       this.onExit(s.id, code)
     })
-    chat.start(locateClaude(settings().claudePath), buildClaudeArgs(s), { cwd: s.cwd, env: claudeEnv(s) })
+    chat.start()
     s.status = 'idle'
     if (s.launch.initialPrompt) chat.send(s.launch.initialPrompt)
   }
@@ -405,8 +397,8 @@ export class SessionService extends EventEmitter {
     s.attention = undefined
     this.mesh.onStatus(s)
     this.changed(s)
-    if (s.kind === 'login') void this.auth.refresh()
-    if (s.kind === 'claude') pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'exit', text: `Exited (${code})`, group: s.meshGroup })
+    if (s.kind === 'login') void this.auth.refresh(providerOf(s))
+    if (s.kind === 'agent') pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'exit', text: `Exited (${code})`, group: s.meshGroup })
     this.emit('exit', s)
   }
 
@@ -502,7 +494,7 @@ export class SessionService extends EventEmitter {
     s.status = 'exited'
     this.mesh.onStatus(s)
     this.sessions.delete(id)
-    if (s.temporary && s.claudeSessionId) updateChat(s.claudeSessionId, { hidden: true })
+    if (s.temporary && s.agentSessionId) updateChat(s.agentSessionId, { hidden: true })
     broadcast('session:removed', id)
     broadcast('buddy:update', this.list())
     updateSleepBlocker([...this.sessions.values()].some((x) => x.status === 'working'))
@@ -514,8 +506,8 @@ export class SessionService extends EventEmitter {
     if (!s) return
     this.pty.dispose(id)
     this.chats.get(id)?.removeAllListeners().kill()
-    if (s.kind === 'claude') {
-      s.launch = { ...s.launch, resumeId: s.claudeSessionId, fork: false, continueLast: false, initialPrompt: undefined, worktree: undefined }
+    if (s.kind === 'agent') {
+      s.launch = { ...s.launch, resumeId: s.agentSessionId, fork: false, continueLast: false, initialPrompt: undefined, worktree: undefined }
       s.exitCode = undefined
     }
     await this.start(s)
@@ -524,8 +516,8 @@ export class SessionService extends EventEmitter {
   rename(id: string, name: string): void {
     const s = this.sessions.get(id)
     if (!s || !name.trim()) return
-    s.name = s.kind === 'claude' ? this.uniqueName(name.trim(), id) : name.trim()
-    if (s.claudeSessionId) updateChat(s.claudeSessionId, { name: s.name })
+    s.name = s.kind === 'agent' ? this.uniqueName(name.trim(), id) : name.trim()
+    if (s.agentSessionId) updateChat(s.agentSessionId, { name: s.name })
     this.changed(s)
   }
 
@@ -542,19 +534,20 @@ export class SessionService extends EventEmitter {
     const s = this.sessions.get(id)
     if (!s) return
     if (!this.chats.has(id)) return this.pty.write(id, '\x1b[Z')
-    const order = ['default', 'acceptEdits', 'plan', 'auto']
+    const order = descriptorOf(s.provider).modeCycle
     const cur = order.indexOf(s.permissionMode ?? 'default')
     void this.setMode(id, order[(cur + 1) % order.length])
   }
 
   async fork(id: string, opts: { worktree?: boolean; side?: boolean }): Promise<SessionInfo> {
     const s = this.sessions.get(id)
-    if (!s?.claudeSessionId) throw new Error('This session has no conversation to fork yet')
+    if (!s?.agentSessionId) throw new Error('This session has no conversation to fork yet')
     return this.create(
-      'claude',
+      'agent',
       {
         cwd: s.cwd,
-        resumeId: s.claudeSessionId,
+        provider: s.provider,
+        resumeId: s.agentSessionId,
         fork: true,
         worktree: opts.worktree ? { carryChanges: true } : undefined,
         sideOf: opts.side ? s.id : undefined,
@@ -569,7 +562,7 @@ export class SessionService extends EventEmitter {
   /** Move a session between a worktree and the local checkout, keeping the conversation. */
   async handoff(id: string): Promise<void> {
     const s = this.sessions.get(id)
-    if (!s || s.kind !== 'claude' || !s.claudeSessionId) throw new Error('Nothing to hand off yet')
+    if (!s || s.kind !== 'agent' || !s.agentSessionId) throw new Error('Nothing to hand off yet')
     const wasRunning = this.pty.has(id) || !!this.chats.get(id)?.alive
     this.pty.dispose(id)
     this.chats.get(id)?.removeAllListeners().kill()
@@ -577,20 +570,20 @@ export class SessionService extends EventEmitter {
     try {
       if (s.worktreeId) {
         const repo = await handoffToLocal(s.worktreeId)
-        copyTranscriptTo(s.claudeSessionId, repo)
+        prepareResume(s.provider, s.agentSessionId, repo)
         const prev = s.worktreeId
         s.cwd = repo
         s.worktreeId = undefined
-        updateChat(s.claudeSessionId, { worktreeId: prev, cwd: repo })
+        updateChat(s.agentSessionId, { worktreeId: prev, cwd: repo })
         toast('Handed off to your local checkout', 'success')
       } else {
-        const chat = getChat(s.claudeSessionId)
+        const chat = getChat(s.agentSessionId)
         const rec = await handoffToWorktree(s.cwd, getWorktree(chat?.worktreeId))
-        copyTranscriptTo(s.claudeSessionId, rec.path)
+        prepareResume(s.provider, s.agentSessionId, rec.path)
         s.cwd = rec.path
         s.worktreeId = rec.id
-        touchWorktree(rec.id, { chatId: s.claudeSessionId })
-        updateChat(s.claudeSessionId, { worktreeId: rec.id, cwd: rec.path })
+        touchWorktree(rec.id, { chatId: s.agentSessionId })
+        updateChat(s.agentSessionId, { worktreeId: rec.id, cwd: rec.path })
         toast('Handed off to a background worktree', 'success')
       }
     } finally {
@@ -637,10 +630,10 @@ export class SessionService extends EventEmitter {
     this.changed(s)
   }
 
-  private goalOnStop(s: SessionInfo, p: HookPayload): HookResult | undefined {
+  /** Goal mode on turn end: an instruction to keep going, or undefined to stop. */
+  private goalOnStop(s: SessionInfo, last: string): string | undefined {
     const g = s.goal
     if (!g || g.status !== 'active') return undefined
-    const last = p.last_assistant_message ?? ''
     if (/GOAL_COMPLETE/.test(last)) {
       g.status = 'done'
       notify('goal', s, `Goal complete · ${s.name}`, g.text)
@@ -658,87 +651,88 @@ export class SessionService extends EventEmitter {
     }
     g.iterations++
     g.updatedAt = Date.now()
-    return {
-      stdout: JSON.stringify({
-        decision: 'block',
-        reason: `Claude Deck goal mode: keep working toward the goal "${g.text}" (continuation ${g.iterations}/${g.maxIterations}). If it is fully achieved and verified, say so and end with GOAL_COMPLETE. If you need the user, end with GOAL_BLOCKED.`
-      })
-    }
+    return `Claude Deck goal mode: keep working toward the goal "${g.text}" (continuation ${g.iterations}/${g.maxIterations}). If it is fully achieved and verified, say so and end with GOAL_COMPLETE. If you need the user, end with GOAL_BLOCKED.`
   }
 
-  // ---------------- hooks ----------------
+  // ---------------- lifecycle ----------------
+  /** Claude Code hook relay: translate to a lifecycle event and back. */
   async handleHook(sid: string, p: HookPayload): Promise<HookResult> {
     const s = this.sessions.get(sid)
-    if (!s) return {}
-    const ev = p.hook_event_name ?? ''
-    if (p.session_id && p.session_id !== s.claudeSessionId) {
-      s.claudeSessionId = p.session_id
+    const ev = hookToEvent(p)
+    if (!s || !ev) return {}
+    return resultToHook(p.hook_event_name, await this.onLifecycle(s, ev))
+  }
+
+  /** Every agent's lifecycle (Claude via hooks, others via their event streams). */
+  async onLifecycle(s: SessionInfo & { turnFiles?: Set<string> }, ev: AgentEvent): Promise<LifecycleResult> {
+    if (!this.sessions.has(s.id)) return {}
+    if ('sessionId' in ev && ev.sessionId && ev.sessionId !== s.agentSessionId) {
+      s.agentSessionId = ev.sessionId
       this.recordChat(s)
     }
-    if (p.transcript_path) s.transcriptPath = p.transcript_path
-    if (p.permission_mode) s.permissionMode = p.permission_mode
+    if ('transcriptPath' in ev && ev.transcriptPath) s.transcriptPath = ev.transcriptPath
+    if ('permissionMode' in ev && ev.permissionMode) s.permissionMode = ev.permissionMode
     s.lastActivity = Date.now()
-    let result: HookResult = {}
-    switch (ev) {
-      case 'SessionStart': {
+    let result: LifecycleResult = {}
+    switch (ev.type) {
+      case 'session-start': {
         if (s.status === 'starting') s.status = s.launch.initialPrompt ? 'working' : 'idle'
-        result = ctxOut('SessionStart', this.mesh.contextForPrompt(s, true))
+        result = { context: this.mesh.contextForPrompt(s, true) }
         break
       }
-      case 'UserPromptSubmit': {
+      case 'turn-start': {
         s.status = 'working'
         s.attention = undefined
         // Injected mesh/scheduler prompts aren't the session's "task".
-        const human = !!p.prompt && !/^\[(Claude Deck|Scheduled)/.test(p.prompt)
-        if (human) s.lastPrompt = p.prompt
+        const human = !!ev.prompt && !/^\[(Claude Deck|Scheduled)/.test(ev.prompt)
+        if (human) s.lastPrompt = ev.prompt
         s.turnFiles = new Set()
-        if (s.claudeSessionId && human) updateChat(s.claudeSessionId, { lastPrompt: truncate(p.prompt ?? '', 300), updatedAt: Date.now() })
+        if (s.agentSessionId && human) updateChat(s.agentSessionId, { lastPrompt: truncate(ev.prompt, 300), updatedAt: Date.now() })
         void snapshot(s.root).then((sha) => {
           if (sha) s.turnSnapshot = sha
         })
-        if (human) pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'prompt', text: truncate(p.prompt ?? '', 300), group: s.meshGroup })
-        result = ctxOut('UserPromptSubmit', this.mesh.contextForPrompt(s, false))
+        if (human) pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'prompt', text: truncate(ev.prompt, 300), group: s.meshGroup })
+        result = { context: this.mesh.contextForPrompt(s, false) }
         break
       }
-      case 'PreToolUse': {
+      case 'tool-start': {
         s.status = 'working'
-        const fp = (p.tool_input?.file_path ?? p.tool_input?.notebook_path) as string | undefined
-        const d = this.mesh.checkEdit(s, p.tool_name ?? '', fp)
+        if (ev.toolKind !== 'edit' && ev.toolKind !== 'write') break
+        const fp = (ev.input.file_path ?? ev.input.notebook_path) as string | undefined
+        const d = this.mesh.checkEdit(s, ev.name, fp)
         if (d) {
           pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'permission', text: d.reason, group: s.meshGroup })
-          result = { stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: d.decision, permissionDecisionReason: d.reason } }) }
+          result = { deny: d }
         }
         break
       }
-      case 'PostToolUse': {
+      case 'tool-end': {
         if (s.status === 'needs-input' || s.status === 'idle') s.status = 'working'
         s.attention = undefined
-        const tool = p.tool_name ?? ''
-        const fp = (p.tool_input?.file_path ?? p.tool_input?.notebook_path) as string | undefined
-        if (EDIT_TOOLS.has(tool) && fp) {
+        const fp = (ev.input.file_path ?? ev.input.notebook_path) as string | undefined
+        if ((ev.toolKind === 'edit' || ev.toolKind === 'write') && fp) {
           const abs = path.resolve(s.cwd, fp)
           s.files = [abs, ...s.files.filter((f) => f !== abs)].slice(0, 200)
           s.turnFiles?.add(abs)
-          this.mesh.recordEdit(s, tool, fp)
-          broadcast('session:fileTouched', { id: s.id, path: abs, tool })
-        } else if (tool === 'Read' && fp) this.mesh.recordRead(s, fp)
-        else if (tool === 'Bash' || tool === 'PowerShell') {
-          const cmd = String(p.tool_input?.command ?? '')
+          this.mesh.recordEdit(s, ev.name, fp)
+          broadcast('session:fileTouched', { id: s.id, path: abs, tool: ev.name })
+        } else if (ev.toolKind === 'read' && fp) this.mesh.recordRead(s, fp)
+        else if (ev.toolKind === 'shell') {
+          const cmd = String(ev.input.command ?? '')
           if (cmd) pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'tool', text: `$ ${truncate(cmd, 160)}`, group: s.meshGroup })
         }
-        result = ctxOut('PostToolUse', this.mesh.contextForTool(s))
+        result = { context: this.mesh.contextForTool(s) }
         break
       }
-      case 'Notification': {
-        const msg = p.message ?? ''
-        const type = p.notification_type ?? ''
-        if (type === 'permission_prompt' || /permission/i.test(msg)) {
+      case 'needs-input': {
+        const msg = ev.message ?? ''
+        if (ev.reason === 'permission') {
           s.status = 'needs-input'
           s.attention = msg
           notify('permission', s, `${s.name} needs permission`, msg)
           pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'permission', text: msg, group: s.meshGroup })
-        } else if (type === 'idle_prompt' || /waiting for your input/i.test(msg)) {
-          // Claude's own idle reminder; status already reflects it.
+        } else if (ev.reason === 'idle') {
+          // The agent's own idle reminder; status already reflects it.
         } else if (msg) {
           s.attention = msg
           s.status = 'needs-input'
@@ -746,22 +740,22 @@ export class SessionService extends EventEmitter {
         }
         break
       }
-      case 'Stop': {
-        s.lastAssistant = p.last_assistant_message
-        const goal = this.goalOnStop(s, p)
+      case 'turn-end': {
+        s.lastAssistant = ev.lastAssistantMessage
+        const goal = this.goalOnStop(s, ev.lastAssistantMessage ?? '')
         if (goal) {
-          result = goal
+          result = { continueWith: goal }
           break
         }
         const meshReason = this.mesh.stopReason(s)
-        if (meshReason && !p.stop_hook_active) {
-          result = { stdout: JSON.stringify({ decision: 'block', reason: meshReason }) }
+        if (meshReason && !ev.continued) {
+          result = { continueWith: meshReason }
           break
         }
         s.status = 'idle'
         s.attention = undefined
         if (!this.isActive(s)) s.unread = true
-        const usage = sessionUsage(s.transcriptPath)
+        const usage = sessionUsage(s.provider, s.transcriptPath)
         if (usage) (s as { contextTokens?: number }).contextTokens = usage.context
         notify('turn', s, `${s.name} is ready`, s.lastAssistant || 'Turn complete')
         pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'stop', text: truncate(s.lastAssistant ?? 'Turn complete', 240), group: s.meshGroup })
@@ -775,6 +769,8 @@ export class SessionService extends EventEmitter {
         this.emit('idle', s)
         break
       }
+      case 'session-end':
+        break
     }
     this.changed(s)
     return result
@@ -801,8 +797,8 @@ export class SessionService extends EventEmitter {
         .map((t) => ({
           sessions: t.sessionIds
             .map((id) => this.sessions.get(id))
-            .filter((s): s is SessionInfo => !!s && s.kind === 'claude' && !s.temporary && !s.launch.quick)
-            .map((s) => ({ claudeSessionId: s.claudeSessionId, cwd: s.cwd, name: s.name, role: s.role }))
+            .filter((s): s is SessionInfo => !!s && s.kind === 'agent' && !s.temporary && !s.launch.quick)
+            .map((s) => ({ agentSessionId: s.agentSessionId, provider: s.provider, cwd: s.cwd, name: s.name, role: s.role }))
         }))
         .filter((t) => t.sessions.length)
     })

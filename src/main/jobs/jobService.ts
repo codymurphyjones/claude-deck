@@ -31,6 +31,7 @@ import { JsonStore } from '../store'
 import { debounce, shortId, truncate } from '../util'
 import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
 import { runHeadless, type HeadlessResult } from '../automations/headless'
+import { migrateSessionRefs } from '@shared/migrate'
 
 const README = `# repo_jobs
 
@@ -84,6 +85,7 @@ export class JobService {
   private watchers = new Map<string, fs.FSWatcher>()
 
   constructor() {
+    migrateSessionRefs(this.store.data.runs)
     for (const r of this.store.data.runs)
       if (r.status === 'running') {
         r.status = 'error'
@@ -238,13 +240,13 @@ export class JobService {
 
   /** Draft or revise a job (or a routine) with Claude (read-only exploration of `cwd`). */
   async assist(root: string, instruction: string, current?: JobDef, opts: { routine?: boolean } = {}): Promise<JobDef> {
-    const r = await runHeadless({ prompt: jobAssistPrompt(instruction, current, opts), cwd: root, permissionMode: 'plan', model: settings().defaultModel }).done
-    if (r.isError || !r.text) throw new Error(truncate(r.text || `Claude exited with code ${r.code}`, 400))
+    const r = await runHeadless({ prompt: jobAssistPrompt(instruction, current, opts), cwd: root, permissionMode: 'plan' }).done
+    if (r.isError || !r.text) throw new Error(truncate(r.text || `The agent exited with code ${r.code}`, 400))
     let raw: unknown
     try {
       raw = extractJson(r.text)
     } catch {
-      throw new Error('Claude did not return a job definition: ' + truncate(r.text, 300))
+      throw new Error('The agent did not return a job definition: ' + truncate(r.text, 300))
     }
     const job = normalizeJob(raw, current?.slug)
     if (!job.steps.length) throw new Error('The drafted job has no steps')
@@ -296,6 +298,7 @@ export class JobService {
   ): Promise<{ run: JobRun; done: Promise<JobRun> }> {
     const job = source === 'routine' ? await this.getRoutine(slug) : await this.get(root, slug)
     const options = resolveRunOptions(job, override)
+    options.provider ??= settings().defaultProvider
     const order = stepsToRun(job, options)
     if (!order.length) throw new Error('No steps to run')
     const run: JobRun = {
@@ -306,6 +309,7 @@ export class JobService {
       ...(source === 'routine' ? { source } : {}),
       trigger,
       options,
+      provider: options.provider,
       status: 'running',
       startedAt: Date.now(),
       cwd: root,
@@ -363,8 +367,8 @@ export class JobService {
     await git(cwd, ['commit', '-q', '-m', message])
   }
 
-  private async claude(runId: string, prompt: string, cwd: string, resumeId: string | undefined, o: JobRunOptions, onSession: (id: string) => void): Promise<HeadlessResult> {
-    const h = runHeadless({ prompt, cwd, resumeId, model: o.model, effort: o.effort, permissionMode: o.permissionMode, onSession })
+  private async agent(runId: string, prompt: string, cwd: string, resumeId: string | undefined, o: JobRunOptions, onSession: (id: string) => void): Promise<HeadlessResult> {
+    const h = runHeadless({ provider: o.provider, prompt, cwd, resumeId, model: o.model, effort: o.effort, permissionMode: o.permissionMode, onSession })
     const ctl = this.running.get(runId)
     if (ctl) ctl.kill = h.kill
     const r = await h.done
@@ -391,13 +395,13 @@ export class JobService {
         for (let attempt = 1; attempt <= step.maxAttempts && !ctl.stopped; attempt++) {
           sr.attempts = attempt
           this.emit()
-          const res = await this.claude(run.id, prompt, run.cwd, sessionId, run.options, (id) => {
-            run.claudeSessionId = id
+          const res = await this.agent(run.id, prompt, run.cwd, sessionId, run.options, (id) => {
+            run.agentSessionId = id
             this.emit()
           })
           if (ctl.stopped) break
           sessionId = res.sessionId ?? sessionId
-          run.claudeSessionId = sessionId ?? run.claudeSessionId
+          run.agentSessionId = sessionId ?? run.agentSessionId
           sr.costUsd = (sr.costUsd ?? 0) + (res.costUsd ?? 0)
           run.costUsd += res.costUsd ?? 0
           const failures: string[] = []

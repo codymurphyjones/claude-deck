@@ -124,7 +124,7 @@ function PrModal() {
   const reviewWithClaude = async (): Promise<void> => {
     if (!pr) return
     close()
-    await openSession('claude', {
+    await openSession('agent', {
       cwd: target.cwd,
       name: `Review #${pr.number}`,
       initialPrompt: `Review pull request #${pr.number} ("${pr.title}") in ${pr.repo}. Use \`gh pr view ${pr.number}\` and \`gh pr diff ${pr.number}\`. Look for correctness bugs, security issues and missing tests. Present findings ranked by severity with file:line references, and draft review comments, but do not post anything until I confirm.${useStore.getState().settings.reviewInstructions ? `\n\nReview guidelines:\n${useStore.getState().settings.reviewInstructions}` : ''}`
@@ -134,8 +134,8 @@ function PrModal() {
     close()
     const s = activeSession()
     const prompt = `The CI check "${name}" is failing on PR #${pr?.number}${url ? ` (${url})` : ''}. Inspect the failure (e.g. \`gh run view --log-failed\`), find the root cause, and fix it.`
-    if (s?.kind === 'claude') set({ composerFor: s.id, composerPrefill: prompt })
-    else void openSession('claude', { cwd: target.cwd, initialPrompt: prompt })
+    if (s?.kind === 'agent') set({ composerFor: s.id, composerPrefill: prompt })
+    else void openSession('agent', { cwd: target.cwd, initialPrompt: prompt })
   }
   const toggleViewed = (f: string): void => {
     const next = viewed.includes(f) ? viewed.filter((x) => x !== f) : [...viewed, f]
@@ -160,7 +160,7 @@ function PrModal() {
             <button className="btn" onClick={reviewWithClaude}>
               <Icon name="sparkles" size={13} /> Review with Claude
             </button>
-            <button className="btn" onClick={() => openSession('claude', { cwd: target.cwd, extraArgs: ['--from-pr', String(pr.number)], name: `PR #${pr.number}` }).then(close)}>
+            <button className="btn" onClick={() => openSession('agent', { cwd: target.cwd, extraArgs: ['--from-pr', String(pr.number)], name: `PR #${pr.number}` }).then(close)}>
               <Icon name="history" size={13} /> Linked chat
             </button>
           </>

@@ -73,9 +73,9 @@ export async function boot(): Promise<void> {
     platform: d.platform,
     homedir: d.homedir,
     version: d.version,
-    claudePath: d.claudePath,
+    agentPaths: d.agentPaths,
     settings: d.settings,
-    auth: d.auth,
+    auths: d.auth,
     sessions,
     tabs,
     activeTabId: tabs[0]?.id,
@@ -110,8 +110,8 @@ export async function restoreSaved(): Promise<void> {
     let first: string | undefined
     for (const s of t.sessions) {
       const live = await openSession(
-        'claude',
-        { cwd: s.cwd, resumeId: s.claudeSessionId, name: s.name, role: s.role },
+        'agent',
+        { cwd: s.cwd, provider: s.provider, resumeId: s.agentSessionId, name: s.name, role: s.role },
         first ? { mode: 'split', splitOf: first } : {}
       )
       first ??= live?.id
@@ -141,7 +141,7 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
     disposeTerminal(id)
     if (isPopout && id === get().popoutSessionId) window.close()
   })
-  bridge.on('auth:changed', (auth: AuthStatus) => set({ auth }))
+  bridge.on('auth:changed', (auth: AuthStatus) => set((st) => ({ auths: { ...st.auths, [auth.provider ?? 'claude']: auth } })))
   bridge.on('update:state', (updateState: UpdateState) => set({ updateState }))
   void api.update.state().then((updateState) => set({ updateState }))
   bridge.on('library:changed', (library: Library) => set({ library }))

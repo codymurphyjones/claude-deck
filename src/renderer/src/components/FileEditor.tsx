@@ -307,7 +307,7 @@ function EditorOverlay({ initialPath }: { initialPath?: string }) {
   const askClaude = async (): Promise<void> => {
     const s = activeSession()
     const v = view.current
-    if (!s || s.kind !== 'claude' || !v) return void toast('Open a Claude chat first', 'error')
+    if (!s || s.kind !== 'agent' || !v) return void toast('Open a Claude chat first', 'error')
     const p = metaRef.current.path
     if (!p) return void toast('Save the file first so Claude can find it', 'error')
     const r = v.state.selection.main

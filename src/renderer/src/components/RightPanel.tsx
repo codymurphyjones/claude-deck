@@ -18,7 +18,7 @@ const TITLES: Record<Exclude<Panel, null>, [string, string]> = {
 export function RightPanel({ panel }: { panel: Exclude<Panel, null> }) {
   const width = useStore((s) => s.rightWidth)
   const session = useStore(() => activeSession())
-  const claudeSession = session?.kind === 'claude' ? session : undefined
+  const agentSession = session?.kind === 'agent' ? session : undefined
   const startDrag = (e: React.MouseEvent): void => {
     const x0 = e.clientX
     const w0 = width
@@ -38,7 +38,7 @@ export function RightPanel({ panel }: { panel: Exclude<Panel, null> }) {
         <Icon name={icon} size={15} style={{ color: 'var(--accent)' }} />
         <span className="grow ellipsis">
           {title}
-          {claudeSession && panel !== 'timeline' && <span className="muted" style={{ fontWeight: 400 }}> · {claudeSession.name}</span>}
+          {agentSession && panel !== 'timeline' && <span className="muted" style={{ fontWeight: 400 }}> · {agentSession.name}</span>}
         </span>
         {(Object.keys(TITLES) as Exclude<Panel, null>[])
           .filter((p) => p !== panel)
@@ -52,10 +52,10 @@ export function RightPanel({ panel }: { panel: Exclude<Panel, null> }) {
         </button>
       </div>
       <div className="right-body">
-        {panel === 'review' && <ReviewPane session={claudeSession} />}
-        {panel === 'files' && <FilesPanel session={claudeSession} />}
-        {panel === 'team' && <TeamPanel session={claudeSession} />}
-        {panel === 'browser' && <BrowserPane session={claudeSession} />}
+        {panel === 'review' && <ReviewPane session={agentSession} />}
+        {panel === 'files' && <FilesPanel session={agentSession} />}
+        {panel === 'team' && <TeamPanel session={agentSession} />}
+        {panel === 'browser' && <BrowserPane session={agentSession} />}
         {panel === 'timeline' && <TimelinePanel />}
       </div>
     </div>

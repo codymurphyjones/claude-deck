@@ -4,6 +4,8 @@
 //   repo_jobs/<slug>/context.md      shared brief given to Claude at the start of a run
 //   repo_jobs/<slug>/steps/<id>.md   the prompt for each step
 
+import type { ProviderId } from './agent'
+
 export const JOBS_DIR = 'repo_jobs'
 
 /** Where a job definition lives: a repo's repo_jobs folder, or the app-level routines library (~/.claude-deck/routines). */
@@ -48,6 +50,8 @@ export interface JobRunOptions {
   fromStep?: number
   /** Run only this zero-based step. */
   onlyStep?: number
+  /** Agent that runs the steps (default: settings.defaultProvider). */
+  provider?: ProviderId
   model?: string
   effort?: string
   permissionMode?: string
@@ -101,7 +105,8 @@ export interface JobRun {
   cwd: string
   branch?: string
   worktreePath?: string
-  claudeSessionId?: string
+  provider?: ProviderId
+  agentSessionId?: string
   steps: JobStepRun[]
   costUsd: number
   error?: string
@@ -175,6 +180,7 @@ export function normalizeJob(raw: unknown, slug?: string): JobDef {
   if (d.workspace === 'worktree' || d.workspace === 'inplace') defaults.workspace = d.workspace
   if (d.branchMode === 'new' || d.branchMode === 'direct') defaults.branchMode = d.branchMode
   for (const k of ['branch', 'model', 'effort', 'permissionMode'] as const) if (str(d[k])) defaults[k] = str(d[k])
+  if (d.provider === 'claude' || d.provider === 'codex') defaults.provider = d.provider
   const name = str(o.name) || slug || 'Untitled job'
   return { slug: slugify(slug || str(o.slug) || name), name, description: str(o.description), context: str(o.context), pivots: pivots(o.pivots), steps, defaults }
 }

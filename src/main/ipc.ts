@@ -17,7 +17,9 @@ import * as repo from './git/repoService'
 import type { CommitAction, StashAction } from '@shared/repo'
 import { archiveProjectChats, emitLibrary, removeProject, updateChat, updateProject } from './library'
 import type { LoadResult } from './loading/progressiveLoader'
-import { claudeHome, locateClaude, runtime } from './runtime'
+import { runtime } from './runtime'
+import { adapter } from './agents/registry'
+import type { ProviderId } from '@shared/agent'
 import type { SessionService } from './sessions/sessionService'
 import { insights, listTranscripts, searchTranscripts } from './transcripts/transcriptService'
 import { run, shortId, which } from './util'
@@ -101,7 +103,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'app.init': (e) => ({
       settings: settings(),
       sessions: sessions.list(),
-      auth: auth.status,
+      auth: auth.statuses,
       library: { projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders },
       automations: scheduler.data(),
       jobRuns: jobs.runs(),
@@ -113,7 +115,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       homedir: os.homedir(),
       platform: process.platform,
       version: app.getVersion(),
-      claudePath: locateClaude(settings().claudePath),
+      agentPaths: { claude: adapter('claude').locate(), codex: adapter('codex').locate() },
       pinnedReviews: state().pinnedReviews
     }),
     'settings.update': (_e, patch: Partial<Settings>) => {
@@ -252,8 +254,8 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     },
 
     // ---- auth ----
-    'auth.refresh': () => auth.refresh(),
-    'auth.logout': () => auth.logout(),
+    'auth.refresh': (_e, p?: ProviderId) => (p ? auth.refresh(p) : auth.refreshAll()),
+    'auth.logout': (_e, p: ProviderId) => auth.logout(p),
 
     // ---- library ----
     'library.get': () => ({ projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders }),
@@ -303,13 +305,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'git.generateCommitMessage': async (_e, cwd: string) => {
       const diff = await git.rawDiffForMessage(cwd)
       if (!diff.trim()) throw new Error('No changes to describe')
-      const r = await run(
-        locateClaude(settings().claudePath),
-        ['-p', 'Write a concise git commit message (imperative subject line under 72 chars, optional short body) for the diff on stdin. Output only the message.', '--model', 'haiku', '--tools', '', '--permission-prompts', 'none'],
-        { cwd, input: diff, timeout: 120_000 }
-      )
-      if (r.code !== 0) throw new Error(r.stderr.trim() || 'Claude could not draft a message')
-      return r.stdout.trim()
+      return adapter().complete('Write a concise git commit message (imperative subject line under 72 chars, optional short body) for the diff on stdin. Output only the message.', { cwd, input: diff })
     },
 
     // ---- worktrees ----
@@ -413,15 +409,15 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'repo.currentPr': (_e, cwd: string) => repo.currentPr(cwd),
 
     // ---- personalization ----
-    'claudeMd.read': async (_e, root?: string) => {
-      const file = root ? path.join(root, 'CLAUDE.md') : path.join(claudeHome(), 'CLAUDE.md')
+    'instructions.read': async (_e, provider: ProviderId, root?: string) => {
+      const file = adapter(provider).instructionsPath(root)
       try {
         return { file, content: await fs.promises.readFile(file, 'utf8') }
       } catch {
         return { file, content: '' }
       }
     },
-    'claudeMd.write': async (_e, file: string, content: string) => {
+    'instructions.write': async (_e, file: string, content: string) => {
       await fs.promises.mkdir(path.dirname(file), { recursive: true })
       await fs.promises.writeFile(file, content, 'utf8')
     },

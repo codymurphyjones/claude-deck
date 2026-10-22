@@ -1,3 +1,4 @@
+import type { ProviderId } from '@shared/agent'
 import type {
   AuthStatus,
   Automation,
@@ -67,7 +68,7 @@ export interface Library {
 export interface InitData {
   settings: Settings
   sessions: LiveSession[]
-  auth: AuthStatus
+  auth: Record<ProviderId, AuthStatus>
   library: Library
   automations: { automations: Automation[]; runs: AutomationRun[] }
   jobRuns: JobRun[]
@@ -79,7 +80,7 @@ export interface InitData {
   homedir: string
   platform: string
   version: string
-  claudePath: string
+  agentPaths: Record<ProviderId, string>
   pinnedReviews: string[]
 }
 
@@ -137,8 +138,8 @@ export const api = {
     openInEditor: c<void, [string, number?]>('shell.openInEditor')
   },
   auth: {
-    refresh: c<AuthStatus>('auth.refresh'),
-    logout: c<void>('auth.logout')
+    refresh: c<AuthStatus | AuthStatus[], [ProviderId?]>('auth.refresh'),
+    logout: c<void, [ProviderId]>('auth.logout')
   },
   library: {
     get: c<Library>('library.get'),
@@ -149,7 +150,7 @@ export const api = {
     addFolderToProject: c<void, [string, string]>('library.addFolderToProject'),
     makePrimary: c<void, [string, string]>('library.makePrimary'),
     transcripts: c<TranscriptSummary[]>('library.transcripts'),
-    search: c<{ claudeSessionId: string; snippet: string }[], [string]>('library.search'),
+    search: c<{ agentSessionId: string; snippet: string }[], [string]>('library.search'),
     insights: c<Insights>('library.insights'),
     pinReview: c<string[], [string, boolean]>('library.pinReview'),
     viewedFiles: c<string[], [string, string[]?]>('library.viewedFiles')
@@ -266,9 +267,9 @@ export const api = {
     remotes: c<RemoteInfo[], [string]>('repo.remotes'),
     currentPr: c<CurrentPr | null, [string]>('repo.currentPr')
   },
-  claudeMd: {
-    read: c<{ file: string; content: string }, [string?]>('claudeMd.read'),
-    write: c<void, [string, string]>('claudeMd.write')
+  instructions: {
+    read: c<{ file: string; content: string }, [ProviderId, string?]>('instructions.read'),
+    write: c<void, [string, string]>('instructions.write')
   },
   window: {
     popOut: c<void, [string]>('window.popOut'),

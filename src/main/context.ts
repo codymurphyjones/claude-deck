@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import * as path from 'path'
 import { DEFAULT_SETTINGS } from '@shared/defaults'
+import { migrateSessionRefs, migrateSettings } from '@shared/migrate'
 import type { ChatRecord, OpenTabState, Project, Settings, TimelineEvent, WorktreeRecord } from '@shared/types'
 import { runtime } from './runtime'
 import { JsonStore } from './store'
@@ -30,6 +31,9 @@ export function initStores(): void {
     pinnedReviews: [],
     viewedFiles: {}
   })
+  migrateSettings(settingsStore.data)
+  migrateSessionRefs(stateStore.data.chats)
+  for (const t of stateStore.data.openTabs) migrateSessionRefs(t.sessions)
 }
 
 export const settings = (): Settings => settingsStore.data

@@ -3,7 +3,7 @@ import type { Automation, AutomationSchedule } from '@shared/types'
 import { api } from '../api'
 import { attempt, openSession, set, useStore } from '../store'
 import { Icon } from './Icon'
-import { ScheduledJobFields } from './Jobs'
+import { AgentSelect, efforts, ScheduledJobFields } from './Jobs'
 import { Modal, openMenu, Seg, Switch, timeAgo, useNow } from './ui'
 
 function describe(s: AutomationSchedule): string {
@@ -65,7 +65,7 @@ export function ScheduledView() {
               </div>
               <div className="sub ellipsis">
                 {describe(a.schedule)} · {a.status === 'active' ? until(a.nextRun) : a.status}
-                {a.kind === 'inchat' && ` · in “${chats.find((c) => c.claudeSessionId === a.targetChatId)?.name ?? 'chat'}”`}
+                {a.kind === 'inchat' && ` · in “${chats.find((c) => c.agentSessionId === a.targetChatId)?.name ?? 'chat'}”`}
                 {a.pending && ' · waiting for chat to be idle'}
               </div>
             </div>
@@ -118,8 +118,8 @@ export function ScheduledView() {
                   {r.output || 'No output yet.'}
                 </div>
                 <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-                  {r.claudeSessionId && (
-                    <button className="btn sm primary" onClick={() => openSession('claude', { cwd: r.cwd, resumeId: r.claudeSessionId, name: r.automationName })}>
+                  {r.agentSessionId && (
+                    <button className="btn sm primary" onClick={() => openSession('agent', { cwd: r.cwd, resumeId: r.agentSessionId, name: r.automationName })}>
                       Continue as chat
                     </button>
                   )}
@@ -228,7 +228,7 @@ export function AutomationDialog() {
                 .filter((c) => !c.archived)
                 .slice(0, 100)
                 .map((c) => (
-                  <option key={c.claudeSessionId} value={c.claudeSessionId}>
+                  <option key={c.agentSessionId} value={c.agentSessionId}>
                     {c.name} — {c.cwd.split(/[\\/]/).pop()}
                   </option>
                 ))}
@@ -317,6 +317,10 @@ export function AutomationDialog() {
               <span>Run in a dedicated background worktree (Git repos) so it never touches your working copy</span>
             </div>
             <div className="row">
+              <label className="field">
+                Agent
+                <AgentSelect value={a.provider} onChange={(provider) => setA({ ...a, provider })} />
+              </label>
               <label className="field grow">
                 Model
                 <input className="input" value={a.model ?? ''} placeholder="default" onChange={(e) => setA({ ...a, model: e.target.value || undefined })} />
@@ -325,7 +329,7 @@ export function AutomationDialog() {
                 Effort
                 <select className="select" value={a.effort ?? ''} onChange={(e) => setA({ ...a, effort: e.target.value || undefined })}>
                   <option value="">default</option>
-                  {['low', 'medium', 'high', 'xhigh', 'max'].map((x) => (
+                  {efforts(a.provider).map((x) => (
                     <option key={x}>{x}</option>
                   ))}
                 </select>

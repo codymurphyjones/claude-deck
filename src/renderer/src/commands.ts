@@ -1,3 +1,4 @@
+import { PROVIDER_IDS, PROVIDERS, providerOf } from '@shared/agent'
 import { api } from './api'
 import {
   addSessionToTabs,
@@ -36,7 +37,8 @@ export interface Command {
   run: () => unknown
 }
 
-const hasClaude = (): boolean => activeSession()?.kind === 'claude'
+const hasAgent = (): boolean => activeSession()?.kind === 'agent'
+const canFork = (): boolean => hasAgent() && providerOf(activeSession()?.provider).caps.fork
 const withActive = (fn: (id: string) => unknown) => () => {
   const id = activeSessionId()
   if (id) return fn(id)
@@ -73,7 +75,7 @@ export function buildCommands(): Command[] {
   const cmds: Command[] = [
     { id: 'newSession', title: 'New session…', group: 'Sessions', icon: 'plus', run: () => set({ newSession: {} }) },
     { id: 'newWorktreeSession', title: 'New session in a worktree…', group: 'Sessions', icon: 'branch', run: () => set({ newSession: { worktree: true } }) },
-    { id: 'quickChat', title: 'Quick chat', group: 'Sessions', icon: 'zap', run: () => openSession('claude', { cwd: get().homedir, quick: true }) },
+    { id: 'quickChat', title: 'Quick chat', group: 'Sessions', icon: 'zap', run: () => openSession('agent', { cwd: get().homedir, quick: true }) },
     {
       id: 'openFolder',
       title: 'Open folder…',
@@ -81,25 +83,25 @@ export function buildCommands(): Command[] {
       icon: 'folder-open',
       run: async () => {
         const dirs = await api.dialog.openFolder()
-        for (const d of dirs) await openSession('claude', { cwd: d })
+        for (const d of dirs) await openSession('agent', { cwd: d })
       }
     },
     { id: 'fleet', title: 'Launch a team (lead + workers)…', group: 'Collaboration', icon: 'users', run: () => set({ fleetOpen: { cwd: activeSession()?.cwd } }) },
     { id: 'broadcast', title: 'Broadcast a prompt to sessions…', group: 'Collaboration', icon: 'radio', run: () => set({ broadcastOpen: true }) },
     { id: 'toggleTeam', title: 'Team panel', group: 'Collaboration', icon: 'users', run: () => setRight('team') },
-    { id: 'deliverMessages', title: 'Deliver pending peer messages', group: 'Collaboration', icon: 'message', when: hasClaude, run: withActive((id) => api.session.deliverMessages(id).then((ok) => !ok && toast('No pending messages (or session is busy)'))) },
+    { id: 'deliverMessages', title: 'Deliver pending peer messages', group: 'Collaboration', icon: 'message', when: hasAgent, run: withActive((id) => api.session.deliverMessages(id).then((ok) => !ok && toast('No pending messages (or session is busy)'))) },
     {
       id: 'setRoleLead',
       title: 'Set role: lead',
       group: 'Collaboration',
       icon: 'flag',
-      when: hasClaude,
+      when: hasAgent,
       run: withActive((id) => api.session.setRole(id, 'lead'))
     },
-    { id: 'setRoleWorker', title: 'Set role: worker', group: 'Collaboration', icon: 'hand', when: hasClaude, run: withActive((id) => api.session.setRole(id, 'worker')) },
-    { id: 'setRoleReviewer', title: 'Set role: reviewer', group: 'Collaboration', icon: 'eye', when: hasClaude, run: withActive((id) => api.session.setRole(id, 'reviewer')) },
-    { id: 'setRoleDriver', title: 'Set role: driver', group: 'Collaboration', icon: 'code', when: hasClaude, run: withActive((id) => api.session.setRole(id, 'driver')) },
-    { id: 'setRoleFree', title: 'Clear role', group: 'Collaboration', icon: 'x', when: hasClaude, run: withActive((id) => api.session.setRole(id, 'free')) },
+    { id: 'setRoleWorker', title: 'Set role: worker', group: 'Collaboration', icon: 'hand', when: hasAgent, run: withActive((id) => api.session.setRole(id, 'worker')) },
+    { id: 'setRoleReviewer', title: 'Set role: reviewer', group: 'Collaboration', icon: 'eye', when: hasAgent, run: withActive((id) => api.session.setRole(id, 'reviewer')) },
+    { id: 'setRoleDriver', title: 'Set role: driver', group: 'Collaboration', icon: 'code', when: hasAgent, run: withActive((id) => api.session.setRole(id, 'driver')) },
+    { id: 'setRoleFree', title: 'Clear role', group: 'Collaboration', icon: 'x', when: hasAgent, run: withActive((id) => api.session.setRole(id, 'free')) },
     { id: 'closeTab', title: 'Close session', group: 'Sessions', icon: 'x', run: withActive((id) => closeSession(id)) },
     { id: 'reopenClosed', title: 'Reopen closed session', group: 'Sessions', icon: 'undo', run: reopenClosed },
     { id: 'nextTab', title: 'Next tab', group: 'Navigation', run: () => cycleTab(1) },
@@ -113,7 +115,7 @@ export function buildCommands(): Command[] {
       icon: 'split',
       run: () => {
         const s = activeSession()
-        if (s) return openSession('claude', { cwd: s.cwd }, { mode: 'split', splitOf: s.id })
+        if (s) return openSession('agent', { cwd: s.cwd }, { mode: 'split', splitOf: s.id })
         set({ newSession: {} })
       }
     },
@@ -128,13 +130,13 @@ export function buildCommands(): Command[] {
       title: 'New repo job…',
       group: 'Automation',
       icon: 'layers',
-      when: hasClaude,
+      when: hasAgent,
       run: () => {
         const s = activeSession()
         if (s) set({ jobEdit: { root: s.root, draft: newJob() } })
       }
     },
-    { id: 'designJob', title: 'Design a repo job with Claude…', group: 'Automation', icon: 'sparkles', when: hasClaude, run: () => void designInChat(activeSession()!.root) },
+    { id: 'designJob', title: 'Design a repo job with Claude…', group: 'Automation', icon: 'sparkles', when: hasAgent, run: () => void designInChat(activeSession()!.root) },
     { id: 'routines', title: 'Routines', group: 'Automation', icon: 'wand', run: openRoutines },
     { id: 'runRoutine', title: 'Run a routine…', group: 'Automation', icon: 'wand', run: () => runRoutine() },
     { id: 'newRoutine', title: 'New routine…', group: 'Automation', icon: 'wand', run: () => set({ routineEdit: { draft: newJob('New routine') } }) },
@@ -155,10 +157,10 @@ export function buildCommands(): Command[] {
       title: 'Schedule a follow-up in this chat…',
       group: 'Automation',
       icon: 'clock',
-      when: hasClaude,
+      when: hasAgent,
       run: () => {
         const s = activeSession()
-        if (s) set({ automationEdit: { kind: 'inchat', cwd: s.cwd, targetChatId: s.claudeSessionId, name: `${s.name} follow-up`, schedule: { type: 'interval', minutes: 30 } } })
+        if (s) set({ automationEdit: { kind: 'inchat', cwd: s.cwd, targetChatId: s.agentSessionId, name: `${s.name} follow-up`, schedule: { type: 'interval', minutes: 30 } } })
       }
     },
     {
@@ -177,18 +179,18 @@ export function buildCommands(): Command[] {
     { id: 'toggleBrowser', title: 'Browser preview', group: 'Layout', icon: 'globe', run: () => setRight('browser') },
     { id: 'toggleTimeline', title: 'Cross-session timeline', group: 'Layout', icon: 'activity', run: () => setRight('timeline') },
     { id: 'toggleShell', title: 'Toggle integrated terminal', group: 'Session', icon: 'terminal', run: () => toggleShell() },
-    { id: 'composer', title: 'Open composer', group: 'Session', icon: 'edit', when: hasClaude, run: withActive((id) => set({ composerFor: id })) },
-    { id: 'setGoal', title: 'Set a goal…', group: 'Session', icon: 'target', when: hasClaude, run: withActive((id) => set({ goalFor: id })) },
-    { id: 'cycleMode', title: 'Cycle permission mode (plan / accept edits / …)', group: 'Session', icon: 'shield', when: hasClaude, run: withActive((id) => api.session.cycleMode(id)) },
-    { id: 'forkChat', title: 'Fork this chat', group: 'Session', icon: 'fork', when: hasClaude, run: withActive((id) => attempt(() => api.session.fork(id, {})).then((s) => s && reload(s.id))) },
-    { id: 'forkWorktree', title: 'Fork this chat into a worktree', group: 'Session', icon: 'branch', when: hasClaude, run: withActive((id) => attempt(() => api.session.fork(id, { worktree: true })).then((s) => s && reload(s.id))) },
-    { id: 'sideChat', title: 'Side chat (temporary fork)', group: 'Session', icon: 'message', when: hasClaude, run: withActive((id) => attempt(() => api.session.fork(id, { side: true })).then((s) => s && reload(s.id, 'split', id))) },
+    { id: 'composer', title: 'Open composer', group: 'Session', icon: 'edit', when: hasAgent, run: withActive((id) => set({ composerFor: id })) },
+    { id: 'setGoal', title: 'Set a goal…', group: 'Session', icon: 'target', when: hasAgent, run: withActive((id) => set({ goalFor: id })) },
+    { id: 'cycleMode', title: 'Cycle permission mode (plan / accept edits / …)', group: 'Session', icon: 'shield', when: hasAgent, run: withActive((id) => api.session.cycleMode(id)) },
+    { id: 'forkChat', title: 'Fork this chat', group: 'Session', icon: 'fork', when: canFork, run: withActive((id) => attempt(() => api.session.fork(id, {})).then((s) => s && reload(s.id))) },
+    { id: 'forkWorktree', title: 'Fork this chat into a worktree', group: 'Session', icon: 'branch', when: canFork, run: withActive((id) => attempt(() => api.session.fork(id, { worktree: true })).then((s) => s && reload(s.id))) },
+    { id: 'sideChat', title: 'Side chat (temporary fork)', group: 'Session', icon: 'message', when: canFork, run: withActive((id) => attempt(() => api.session.fork(id, { side: true })).then((s) => s && reload(s.id, 'split', id))) },
     {
       id: 'handoff',
       title: 'Hand off (local ⇄ worktree)',
       group: 'Session',
       icon: 'arrow',
-      when: hasClaude,
+      when: hasAgent,
       run: withActive((id) => attempt(() => api.session.handoff(id)))
     },
     {
@@ -210,12 +212,12 @@ export function buildCommands(): Command[] {
       title: 'Continue on phone / web (Remote Control)',
       group: 'Session',
       icon: 'phone',
-      when: hasClaude,
+      when: () => hasAgent() && providerOf(activeSession()?.provider).id === 'claude',
       run: withActive(async (id) => {
         const s = get().sessions[id]
-        if (!s?.claudeSessionId) return
+        if (!s?.agentSessionId) return
         await closeSession(id, false)
-        await openSession('claude', { cwd: s.cwd, resumeId: s.claudeSessionId, name: s.name, remoteControl: true })
+        await openSession('agent', { cwd: s.cwd, resumeId: s.agentSessionId, name: s.name, remoteControl: true })
         toast('Remote Control is on. Open this session from the Claude app or claude.ai/code.', 'success')
       })
     },
@@ -224,10 +226,11 @@ export function buildCommands(): Command[] {
       title: 'Run a task in the cloud…',
       group: 'Session',
       icon: 'cloud',
+      when: () => providerOf(get().settings.defaultProvider).caps.cloud,
       run: async () => {
         const desc = await askText('Cloud task description', '', { placeholder: 'What should Claude do in the cloud?' })
         if (!desc) return
-        await openSession('command', { cwd: activeSession()?.cwd ?? get().homedir, command: get().claudePath, args: ['--cloud', desc], name: 'Cloud task' })
+        await openSession('command', { cwd: activeSession()?.cwd ?? get().homedir, command: get().agentPaths.claude, args: ['--cloud', desc], name: 'Cloud task' })
       }
     },
     // Shortcut target only; listing the palette inside itself would be noise.
@@ -239,15 +242,18 @@ export function buildCommands(): Command[] {
     { id: 'checkUpdates', title: 'Check for updates', group: 'App', icon: 'refresh', run: () => api.update.check() },
     { id: 'insights', title: 'Profile & usage insights', group: 'App', icon: 'activity', run: () => set({ settingsOpen: 'profile' }) },
     { id: 'archived', title: 'Archived chats', group: 'App', icon: 'archive', run: () => set({ settingsOpen: 'archived' }) },
-    { id: 'signIn', title: 'Sign in to Claude', group: 'Account', icon: 'login', run: () => signIn() },
-    { id: 'signInConsole', title: 'Sign in with Anthropic Console (API billing)', group: 'Account', icon: 'login', run: () => signIn({ console: true }) },
+    ...PROVIDER_IDS.map((p) => ({ id: `signIn-${p}`, title: `Sign in to ${PROVIDERS[p].label}`, group: 'Account', icon: 'login', run: () => signIn({}, p) })),
+    // Kept for existing shortcuts/menus: the default agent.
+    { id: 'signIn', title: 'Sign in', group: 'Account', icon: 'login', when: () => false, run: () => signIn() },
+    { id: 'signInConsole', title: 'Sign in with Anthropic Console (API billing)', group: 'Account', icon: 'login', run: () => signIn({ console: true }, 'claude') },
     {
       id: 'signOut',
       title: 'Sign out',
       group: 'Account',
       icon: 'logout',
       run: async () => {
-        if ((await api.dialog.confirm('Sign out of Claude?', 'Running sessions keep running; new sessions will ask you to sign in.', ['Sign out', 'Cancel'])) === 0) await api.auth.logout()
+        const p = get().settings.defaultProvider
+        if ((await api.dialog.confirm(`Sign out of ${PROVIDERS[p].label}?`, 'Running sessions keep running; new sessions will ask you to sign in.', ['Sign out', 'Cancel'])) === 0) await api.auth.logout(p)
       }
     },
     {

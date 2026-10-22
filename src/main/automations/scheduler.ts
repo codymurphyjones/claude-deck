@@ -1,7 +1,7 @@
 import * as path from 'path'
 import { nextRunAfter } from '@shared/schedule'
 import type { Automation, AutomationRun, SessionInfo } from '@shared/types'
-import { broadcast } from '../context'
+import { broadcast, settings } from '../context'
 import { ghPath } from '../git/gitService'
 import { getChat } from '../library'
 import { notify } from '../notify/notifyService'
@@ -12,6 +12,7 @@ import { run, shortId, truncate } from '../util'
 import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
 import { describeRun, type JobService } from '../jobs/jobService'
 import { runHeadless } from './headless'
+import { migrateSessionRefs } from '@shared/migrate'
 
 interface AutomationData {
   automations: Automation[]
@@ -29,6 +30,7 @@ export class Scheduler {
     private jobs: JobService
   ) {
     sessions.on('idle', (s: SessionInfo) => this.onIdle(s))
+    migrateSessionRefs(this.store.data.runs)
     // Runs left "running" by a previous app instance never finished.
     for (const r of this.store.data.runs) if (r.status === 'running') Object.assign(r, { status: 'error', output: r.output || 'Interrupted (app closed)' })
   }
@@ -127,7 +129,7 @@ export class Scheduler {
 
   private async runInChat(a: Automation, extra?: string): Promise<void> {
     const prompt = extra ? `${a.prompt}\n\n${extra}` : a.prompt
-    let s = [...this.sessions.sessions.values()].find((x) => x.claudeSessionId === a.targetChatId && x.status !== 'exited')
+    let s = [...this.sessions.sessions.values()].find((x) => x.agentSessionId === a.targetChatId && x.status !== 'exited')
     if (!s) {
       const chat = getChat(a.targetChatId)
       if (!chat) {
@@ -135,7 +137,7 @@ export class Scheduler {
         this.emit()
         return
       }
-      await this.sessions.create('claude', { cwd: chat.cwd, resumeId: chat.claudeSessionId }, 0)
+      await this.sessions.create('agent', { cwd: chat.cwd, provider: chat.provider, resumeId: chat.agentSessionId }, 0)
       a.pending = true
       ;(a as Automation & { pendingPrompt?: string }).pendingPrompt = prompt
       this.emit()
@@ -151,7 +153,7 @@ export class Scheduler {
 
   private onIdle(s: SessionInfo): void {
     for (const a of this.store.data.automations) {
-      if (a.kind !== 'inchat' || !a.pending || a.targetChatId !== s.claudeSessionId) continue
+      if (a.kind !== 'inchat' || !a.pending || a.targetChatId !== s.agentSessionId) continue
       a.pending = false
       const p = (a as Automation & { pendingPrompt?: string }).pendingPrompt ?? a.prompt
       this.sessions.sendPrompt(s.id, `[Scheduled: ${a.name}] ${p}`, 'steer')
@@ -192,7 +194,7 @@ export class Scheduler {
       this.running.delete(a.id)
       runRec.cwd = r.cwd
       runRec.worktreePath = r.worktreePath
-      runRec.claudeSessionId = r.claudeSessionId
+      runRec.agentSessionId = r.agentSessionId
       runRec.costUsd = r.costUsd
       runRec.status = r.status === 'success' ? 'success' : 'error'
       runRec.output = describeRun(r)
@@ -216,17 +218,19 @@ export class Scheduler {
         runRec.worktreePath = wt.path
       }
       runRec.cwd = cwd
+      runRec.provider = a.provider ?? settings().defaultProvider
       const h = runHeadless({
+        provider: runRec.provider,
         prompt: extra ? `${a.prompt}\n\n${extra}` : a.prompt,
         cwd,
         model: a.model,
         effort: a.effort,
         permissionMode: a.permissionMode,
-        onSession: (id) => (runRec.claudeSessionId = id)
+        onSession: (id) => (runRec.agentSessionId = id)
       })
       this.running.set(a.id, h.kill)
       const res = await h.done
-      runRec.claudeSessionId = res.sessionId ?? runRec.claudeSessionId
+      runRec.agentSessionId = res.sessionId ?? runRec.agentSessionId
       runRec.costUsd = res.costUsd
       runRec.output = res.text || `Exited with code ${res.code}`
       runRec.status = res.finished ? (res.isError ? 'error' : 'success') : res.code === 0 ? 'success' : 'error'

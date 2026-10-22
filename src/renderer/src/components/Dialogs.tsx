@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { activeSession, openSession, set, toast, useStore } from '../store'
 import { Icon } from './Icon'
-import { MODELS } from './NewSessionDialog'
+import { providerOf } from '@shared/agent'
 import { Modal, Switch } from './ui'
 
 export function GoalDialog() {
@@ -81,7 +81,7 @@ export function FleetDialog() {
     close()
     const base = cwd.split(/[\\/]/).pop() ?? 'team'
     const names = Array.from({ length: workers }, (_, i) => `worker-${i + 1}`)
-    const lead = await openSession('claude', {
+    const lead = await openSession('agent', {
       cwd,
       name: 'lead',
       role: 'lead',
@@ -91,7 +91,7 @@ export function FleetDialog() {
     if (!lead) return
     for (const n of names)
       await openSession(
-        'claude',
+        'agent',
         {
           cwd,
           name: n,
@@ -102,7 +102,7 @@ export function FleetDialog() {
         },
         { mode: 'split', splitOf: lead.id, background: false }
       )
-    if (reviewer) await openSession('claude', { cwd, name: 'reviewer', role: 'reviewer', permissionMode: 'plan', model: model || undefined }, { mode: 'tab', background: true })
+    if (reviewer) await openSession('agent', { cwd, name: 'reviewer', role: 'reviewer', permissionMode: 'plan', model: model || undefined }, { mode: 'tab', background: true })
     set({ rightPanel: 'team', teamKey: lead.meshGroup })
     toast(`Team launched: lead + ${workers} worker${workers > 1 ? 's' : ''}${reviewer ? ' + reviewer' : ''}`, 'success')
   }
@@ -151,7 +151,7 @@ export function FleetDialog() {
           <label className="field" style={{ width: 200 }}>
             Model
             <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODELS.map(([v, l]) => (
+              {providerOf(useStore.getState().settings.defaultProvider).models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -175,7 +175,7 @@ export function FleetDialog() {
 export function BroadcastDialog() {
   const open = useStore((s) => s.broadcastOpen)
   const sessions = useStore((s) => s.sessions)
-  const list = Object.values(sessions).filter((s) => s.kind === 'claude' && s.status !== 'exited')
+  const list = Object.values(sessions).filter((s) => s.kind === 'agent' && s.status !== 'exited')
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [text, setText] = useState('')
   useEffect(() => {

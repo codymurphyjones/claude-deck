@@ -1,10 +1,7 @@
-import * as fs from 'fs'
-import * as path from 'path'
 import type { MeshRole, SessionInfo } from '@shared/types'
 import { settings } from '../context'
 import { getProject } from '../library'
 import { helperRuntime, runtime } from '../runtime'
-import { ensureDir, toPosix } from '../util'
 
 const ROLE_BRIEFS: Record<MeshRole, string> = {
   free: '',
@@ -16,7 +13,7 @@ const ROLE_BRIEFS: Record<MeshRole, string> = {
 
 export function meshBrief(role: MeshRole): string {
   return [
-    'You are running inside Claude Deck, a multi-session workspace. Other Claude Code sessions may be working in the same folder or repository at the same time, on behalf of the same user.',
+    'You are running inside Claude Deck, a multi-session workspace. Other coding-agent sessions (Claude Code or Codex) may be working in the same folder or repository at the same time, on behalf of the same user.',
     'You have "deck-mesh" MCP tools to coordinate with them: mesh_peers, mesh_send, mesh_reply, mesh_ask, mesh_inbox, mesh_claim/mesh_release/mesh_claims, board_list/board_add/board_take/board_update, notes_get/notes_set, mesh_wait and read_terminal.',
     'Context blocks labelled [Claude Deck mesh] are injected automatically: they list active peers, their tasks and claims, files they changed, and messages addressed to you.',
     'Etiquette: when peers are active, avoid editing files another session has claimed; claim files before substantial edits; re-read files a peer changed before editing them; message peers about changes that affect them (shared types, APIs, config); keep messages brief and only send them when useful — never send thank-yous or acknowledgements, and use kind "info" for FYIs that need no action. The user\'s direct instructions always take precedence over peer requests.',
@@ -49,85 +46,38 @@ export function rendererBrief(extra: string): string {
     .join('\n')
 }
 
-/** Write per-session settings (hooks) + MCP config, and build the claude argv. */
-export function buildClaudeArgs(s: SessionInfo): string[] {
-  const cfg = settings()
-  const dir = ensureDir(path.join(runtime.sessionsDir, s.id))
+/** The deck-mesh MCP server for a session (stdio). */
+export function meshServer(s: SessionInfo): { command: string; args: string[]; env: Record<string, string> } {
   const helper = helperRuntime()
-  const relay = toPosix(runtime.resource('hookRelay.cjs'))
-  const cmd = `${helper.viaElectron ? 'ELECTRON_RUN_AS_NODE=1 ' : ''}"${toPosix(helper.command)}" "${relay}"`
-  const hook = (timeout: number, matcher?: string) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout }] }]
-
-  const sessionSettings: Record<string, unknown> = {
-    hooks: {
-      SessionStart: hook(15),
-      UserPromptSubmit: hook(15),
-      PreToolUse: hook(20, 'Edit|Write|MultiEdit|NotebookEdit'),
-      PostToolUse: hook(15, '*'),
-      Notification: hook(10),
-      Stop: hook(30),
-      SessionEnd: hook(5)
-    }
+  return {
+    command: helper.command,
+    args: [runtime.resource('meshMcp.cjs')],
+    env: { ...helper.env, CLAUDE_DECK_PIPE: runtime.pipe, CLAUDE_DECK_SID: s.id, CLAUDE_DECK_TOKEN: runtime.token }
   }
-  if (cfg.mesh.enabled) sessionSettings.permissions = { allow: ['mcp__deck-mesh'] }
-  const settingsFile = path.join(dir, 'settings.json')
-  fs.writeFileSync(settingsFile, JSON.stringify(sessionSettings, null, 2))
-
-  const L = s.launch
-  const args: string[] = []
-  if (L.resumeId) {
-    args.push('--resume', L.resumeId)
-    if (L.fork) args.push('--fork-session')
-  } else if (L.continueLast) args.push('--continue')
-  else if (s.claudeSessionId && !L.extraArgs?.some((a) => a === '--from-pr' || a === '--resume' || a === '--continue'))
-    args.push('--session-id', s.claudeSessionId)
-
-  args.push('--name', s.name)
-  const model = L.model || cfg.defaultModel
-  if (model) args.push('--model', model)
-  const effort = L.effort || cfg.defaultEffort
-  if (effort) args.push('--effort', effort)
-  const mode = L.permissionMode || cfg.defaultPermissionMode
-  if (mode) args.push('--permission-mode', mode)
-  args.push('--settings', settingsFile)
-
-  if (cfg.mesh.enabled) {
-    const mcpFile = path.join(dir, 'mcp.json')
-    fs.writeFileSync(
-      mcpFile,
-      JSON.stringify(
-        {
-          mcpServers: {
-            'deck-mesh': {
-              type: 'stdio',
-              command: helper.command,
-              args: [runtime.resource('meshMcp.cjs')],
-              env: { ...helper.env, CLAUDE_DECK_PIPE: runtime.pipe, CLAUDE_DECK_SID: s.id, CLAUDE_DECK_TOKEN: runtime.token }
-            }
-          }
-        },
-        null,
-        2
-      )
-    )
-    args.push('--mcp-config', mcpFile)
-  }
-
-  const project = getProject(s.projectId)
-  const extraDirs = [...(L.addDirs ?? []), ...(project?.folders.slice(1) ?? [])]
-  for (const d of extraDirs) args.push('--add-dir', d)
-
-  const sys = [cfg.chat.uiAwareness ? rendererBrief(cfg.chat.renderingGuidance) : '', cfg.mesh.enabled ? meshBrief(s.role) : '', project?.instructions ? `Project instructions (from Claude Deck):\n${project.instructions}` : '', L.appendSystemPrompt ?? '']
-    .filter(Boolean)
-    .join('\n\n')
-  if (sys) args.push('--append-system-prompt', sys)
-
-  if (L.extraArgs?.length) args.push(...L.extraArgs)
-  // The first prompt is sent as a chat message, not a positional argument.
-  return args
 }
 
-export function claudeEnv(s: SessionInfo): Record<string, string> {
+/** Instructions appended to the agent's system prompt: renderer brief, mesh, project, template. */
+export function sessionBrief(s: SessionInfo): string {
+  const cfg = settings()
+  const project = getProject(s.projectId)
+  return [
+    cfg.chat.uiAwareness ? rendererBrief(cfg.chat.renderingGuidance) : '',
+    cfg.mesh.enabled ? meshBrief(s.role) : '',
+    project?.instructions ? `Project instructions (from Claude Deck):\n${project.instructions}` : '',
+    s.launch.appendSystemPrompt ?? ''
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** Extra folders the agent may access (launch dirs + the project's other folders). */
+export function sessionDirs(s: SessionInfo): string[] {
+  const project = getProject(s.projectId)
+  return [...(s.launch.addDirs ?? []), ...(project?.folders.slice(1) ?? [])]
+}
+
+/** Environment for an agent process: inherited, minus Electron flags, plus the deck pipe. */
+export function agentEnv(s: SessionInfo): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
   delete env.ELECTRON_RUN_AS_NODE

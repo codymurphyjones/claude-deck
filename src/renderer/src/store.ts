@@ -1,3 +1,4 @@
+import { providerOf, type ProviderId } from '@shared/agent'
 import { create } from 'zustand'
 import { DEFAULT_SETTINGS } from '@shared/defaults'
 import type {
@@ -48,10 +49,10 @@ export interface UiState {
   platform: string
   homedir: string
   version: string
-  claudePath: string
+  agentPaths: Record<ProviderId, string>
   settings: Settings
   systemDark: boolean
-  auth: AuthStatus
+  auths: Record<ProviderId, AuthStatus>
   sessions: Record<string, LiveSession>
   tabs: Tab[]
   activeTabId?: string
@@ -82,7 +83,7 @@ export interface UiState {
   toasts: ToastMessage[]
   savedTabs: OpenTabState[]
   pinnedReviews: string[]
-  closedStack: { cwd: string; claudeSessionId?: string; name: string }[]
+  closedStack: { cwd: string; provider?: ProviderId; agentSessionId?: string; name: string }[]
   // layout
   sidebarOpen: boolean
   sidebarView: SidebarView
@@ -122,10 +123,10 @@ export const useStore = create<UiState>(() => ({
   platform: 'win32',
   homedir: '',
   version: '',
-  claudePath: '',
+  agentPaths: { claude: '', codex: '' },
   settings: DEFAULT_SETTINGS,
   systemDark: window.matchMedia('(prefers-color-scheme: dark)').matches,
-  auth: { checked: false, loggedIn: false },
+  auths: { claude: { provider: 'claude', checked: false, loggedIn: false }, codex: { provider: 'codex', checked: false, loggedIn: false } },
   sessions: {},
   tabs: [],
   library: { projects: [], chats: [], worktrees: [], recentFolders: [] },
@@ -332,18 +333,18 @@ export async function openSession(
 }
 
 export async function openFolders(folders: string[], opts: { worktree?: boolean; templateId?: string } = {}): Promise<void> {
-  for (const cwd of folders) await openSession('claude', { cwd, worktree: opts.worktree ? {} : undefined, templateId: opts.templateId })
+  for (const cwd of folders) await openSession('agent', { cwd, worktree: opts.worktree ? {} : undefined, templateId: opts.templateId })
 }
 
 export async function closeSession(id: string, confirm = true): Promise<void> {
   const s = get().sessions[id]
   if (!s) return
-  if (confirm && s.kind === 'claude' && (s.status === 'working' || s.status === 'needs-input')) {
-    const r = await api.dialog.confirm(`Close "${s.name}"?`, 'Claude is still working in this session. Closing stops it (the conversation is saved and can be resumed).', ['Close', 'Cancel'])
+  if (confirm && s.kind === 'agent' && (s.status === 'working' || s.status === 'needs-input')) {
+    const r = await api.dialog.confirm(`Close "${s.name}"?`, `${providerOf(s.provider).label} is still working in this session. Closing stops it (the conversation is saved and can be resumed).`, ['Close', 'Cancel'])
     if (r !== 0) return
   }
-  if (s.kind === 'claude')
-    set((st) => ({ closedStack: [{ cwd: s.cwd, claudeSessionId: s.claudeSessionId, name: s.name }, ...st.closedStack].slice(0, 20) }))
+  if (s.kind === 'agent')
+    set((st) => ({ closedStack: [{ cwd: s.cwd, provider: s.provider, agentSessionId: s.agentSessionId, name: s.name }, ...st.closedStack].slice(0, 20) }))
   removeSessionFromTabs(id)
   await api.session.close(id)
 }
@@ -352,21 +353,26 @@ export async function reopenClosed(): Promise<void> {
   const [last, ...rest] = get().closedStack
   if (!last) return
   set({ closedStack: rest })
-  await openSession('claude', { cwd: last.cwd, resumeId: last.claudeSessionId, name: last.name })
+  await openSession('agent', { cwd: last.cwd, provider: last.provider, resumeId: last.agentSessionId, name: last.name })
 }
 
-export async function resumeChat(claudeSessionId: string, mode: 'tab' | 'split' = 'tab'): Promise<void> {
-  const open = Object.values(get().sessions).find((s) => s.claudeSessionId === claudeSessionId && s.status !== 'exited')
+export async function resumeChat(agentSessionId: string, mode: 'tab' | 'split' = 'tab'): Promise<void> {
+  const open = Object.values(get().sessions).find((s) => s.agentSessionId === agentSessionId && s.status !== 'exited')
   if (open) return focusSessionTab(open.id)
-  const chat = get().library.chats.find((c) => c.claudeSessionId === claudeSessionId)
+  const chat = get().library.chats.find((c) => c.agentSessionId === agentSessionId)
   if (!chat) return toast('Chat not found', 'error')
-  await openSession('claude', { cwd: chat.cwd, resumeId: claudeSessionId, name: chat.name }, { mode })
+  await openSession('agent', { cwd: chat.cwd, provider: chat.provider, resumeId: agentSessionId, name: chat.name }, { mode })
 }
 
-export async function signIn(opts: { console?: boolean; sso?: boolean; email?: string } = {}): Promise<void> {
-  const existing = Object.values(get().sessions).find((s) => s.kind === 'login' && s.status !== 'exited')
+export async function signIn(opts: { console?: boolean; sso?: boolean; email?: string } = {}, provider: ProviderId = get().settings.defaultProvider): Promise<void> {
+  const existing = Object.values(get().sessions).find((s) => s.kind === 'login' && s.provider === provider && s.status !== 'exited')
   if (existing) return focusSessionTab(existing.id)
-  await openSession('login', { cwd: get().homedir, login: opts, name: 'Sign in' })
+  await openSession('login', { cwd: get().homedir, provider, login: opts, name: `Sign in to ${providerOf(provider).label}` })
+}
+
+/** Sign-in state for a provider (the default provider when omitted). */
+export function useAuth(provider?: ProviderId): AuthStatus {
+  return useStore((s) => s.auths[provider ?? s.settings.defaultProvider])
 }
 
 export async function toggleShell(sessionId?: string): Promise<void> {

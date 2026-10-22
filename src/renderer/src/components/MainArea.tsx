@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { providerOf } from '@shared/agent'
 import type { EnvironmentConfig } from '@shared/types'
 import { api, type LiveSession } from '../api'
 import { restoreSaved } from '../boot'
@@ -15,6 +16,7 @@ import {
   shellFor,
   signIn,
   toggleShell,
+  useAuth,
   useStore,
   type Tab
 } from '../store'
@@ -28,7 +30,8 @@ import { openMenuAt, shortPath, STATUS_LABEL, timeAgo } from './ui'
 export function MainArea() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
-  const auth = useStore((s) => s.auth)
+  const auth = useAuth()
+  const provider = useStore((s) => s.settings.defaultProvider)
   const saved = useStore((s) => s.savedTabs)
   const restoreMode = useStore((s) => s.settings.restoreSessions)
   const popout = useStore((s) => s.popoutSessionId)
@@ -38,17 +41,21 @@ export function MainArea() {
         <div className="banner warn">
           <Icon name="lock" />
           <div className="grow">
-            <b>You're not signed in to Claude.</b> <span className="muted">Sessions you open will start as soon as you sign in.</span>
+            <b>You're not signed in to {providerOf(provider).label}.</b> <span className="muted">Sessions you open will start as soon as you sign in.</span>
           </div>
           <button className="btn primary sm" onClick={() => signIn()}>
-            Sign in with Claude
+            Sign in to {providerOf(provider).label}
           </button>
-          <button className="btn sm" onClick={() => signIn({ console: true })}>
-            Anthropic Console
-          </button>
-          <button className="btn sm ghost" onClick={() => signIn({ sso: true })}>
-            SSO
-          </button>
+          {provider === 'claude' && (
+            <>
+              <button className="btn sm" onClick={() => signIn({ console: true })}>
+                Anthropic Console
+              </button>
+              <button className="btn sm ghost" onClick={() => signIn({ sso: true })}>
+                SSO
+              </button>
+            </>
+          )}
         </div>
       )}
       {!popout && <UpdateBanner />}
@@ -112,7 +119,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
   const windowId = useStore((st) => st.windowId)
   const shellOpen = useStore((st) => !!st.shellOpen[id])
   const home = useStore((st) => st.homedir)
-  const peers = useStore((st) => (s?.meshGroup ? Object.values(st.sessions).filter((x) => x.meshGroup === s.meshGroup && x.id !== id && x.status !== 'exited' && x.kind === 'claude').length : 0))
+  const peers = useStore((st) => (s?.meshGroup ? Object.values(st.sessions).filter((x) => x.meshGroup === s.meshGroup && x.id !== id && x.status !== 'exited' && x.kind === 'agent').length : 0))
   const hostRef = useRef<HTMLDivElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -150,7 +157,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
 
   if (!s) return <div className="pane" />
 
-  const isClaude = s.kind === 'claude'
+  const isAgent = s.kind === 'agent'
   const restart = (): void => {
     clearTerminal(id)
     void api.session.restart(id)
@@ -159,7 +166,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
   const moreMenu = (el: HTMLElement): void =>
     openMenuAt(el, [
       { label: 'Rename…', icon: 'edit', onClick: () => askText('Rename session', s.name).then<unknown>((n) => n && api.session.rename(id, n)) },
-      ...(isClaude
+      ...(isAgent
         ? [
             { label: 'Fork chat', icon: 'fork', onClick: () => runCommand('forkChat') },
             { label: 'Fork into worktree', icon: 'branch', onClick: () => runCommand('forkWorktree') },
@@ -216,7 +223,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
             worktree
           </span>
         )}
-        {isClaude && s.permissionMode && s.permissionMode !== 'default' && (
+        {isAgent && s.permissionMode && s.permissionMode !== 'default' && (
           <span className="badge" title="Permission mode — click to cycle (Shift+Tab in the terminal)" style={{ cursor: 'var(--cursor)' }} onClick={() => api.session.cycleMode(id)}>
             <Icon name="shield" size={11} /> {MODE_LABEL[s.permissionMode] ?? s.permissionMode}
           </span>
@@ -242,7 +249,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
           </span>
         ) : null}
         <div className="tools">
-          {isClaude && (
+          {isAgent && (
             <>
               <EnvActions session={s} />
               <button className={`icon-btn sm ${shellOpen ? 'on' : ''}`} title="Integrated terminal (Ctrl+`)" onClick={() => toggleShell(id)}>
@@ -266,7 +273,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
           )}
         </div>
       </div>
-      {!isClaude && s.status === 'needs-input' && s.attention && (
+      {!isAgent && s.status === 'needs-input' && s.attention && (
         <div className="attention">
           <Icon name="hand" size={14} style={{ color: 'var(--warning)' }} />
           <span className="grow ellipsis">{s.attention}</span>
@@ -290,14 +297,14 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
           </button>
         </div>
       )}
-      {!isClaude && !!s.queuedCount && (
+      {!isAgent && !!s.queuedCount && (
         <div className="goal-row" style={{ background: 'var(--panel2)' }}>
           <Icon name="list" size={14} />
           <span className="text">{s.queuedCount} follow-up(s) queued — they send when this turn finishes.</span>
         </div>
       )}
-      {isClaude && hostedHere && <ChatView session={s} />}
-      {isClaude && !hostedHere && (
+      {isAgent && hostedHere && <ChatView session={s} />}
+      {isAgent && !hostedHere && (
         <div className="term-wrap">
           <div className="overlay-center">
             <div className="card col" style={{ alignItems: 'center', textAlign: 'center' }}>
@@ -317,7 +324,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
           </div>
         </div>
       )}
-      {!isClaude && (
+      {!isAgent && (
       <div className="term-wrap">
         <div className="term-host" ref={hostRef} />
         {searchOpen && (
@@ -380,8 +387,8 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
             <div className="card col" style={{ alignItems: 'center', textAlign: 'center', maxWidth: 380 }}>
               <Icon name="lock" size={22} />
               <b>Waiting for sign-in</b>
-              <div className="muted">This session will start automatically once you're signed in to Claude.</div>
-              <button className="btn primary" onClick={() => signIn()}>
+              <div className="muted">This session will start automatically once you're signed in to {providerOf(s.provider).label}.</div>
+              <button className="btn primary" onClick={() => signIn({}, s.provider)}>
                 Sign in
               </button>
             </div>
@@ -395,7 +402,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
               </span>
               {s.kind !== 'login' && (
                 <button className="btn sm primary" onClick={restart} autoFocus>
-                  <Icon name="refresh" size={13} /> {isClaude ? 'Resume' : 'Restart'}
+                  <Icon name="refresh" size={13} /> {isAgent ? 'Resume' : 'Restart'}
                 </button>
               )}
               <button className="btn sm" onClick={() => closeSession(id, false)}>
@@ -559,7 +566,7 @@ function EmptyState() {
   const chats = lib.chats.filter((c) => !c.archived && !c.hidden && !c.quick).slice(0, 6)
   const open = async (): Promise<void> => {
     const dirs = await api.dialog.openFolder()
-    for (const d of dirs) await openSession('claude', { cwd: d })
+    for (const d of dirs) await openSession('agent', { cwd: d })
   }
   return (
     <div className="empty">
@@ -608,7 +615,7 @@ function EmptyState() {
           </div>
           <div className="recent-grid">
             {recent.map((f) => (
-              <div key={f} className="recent-card" onClick={() => openSession('claude', { cwd: f })} title={f}>
+              <div key={f} className="recent-card" onClick={() => openSession('agent', { cwd: f })} title={f}>
                 <Icon name="folder" size={15} style={{ color: 'var(--accent)' }} />
                 <div className="grow">
                   <div className="ellipsis">{f.split(/[\\/]/).pop()}</div>
@@ -628,7 +635,7 @@ function EmptyState() {
           </div>
           <div className="recent-grid">
             {chats.map((c) => (
-              <div key={c.claudeSessionId} className="recent-card" onClick={() => resumeChat(c.claudeSessionId)} title={c.lastPrompt}>
+              <div key={c.agentSessionId} className="recent-card" onClick={() => resumeChat(c.agentSessionId)} title={c.lastPrompt}>
                 <Icon name="message" size={15} style={{ color: 'var(--muted)' }} />
                 <div className="grow">
                   <div className="ellipsis">{c.name}</div>

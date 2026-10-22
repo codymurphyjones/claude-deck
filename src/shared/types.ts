@@ -1,8 +1,9 @@
 // Types shared between the main process, preload and renderer.
 
+import type { ProviderId, ProviderSettings } from './agent'
 import type { JobRunOptions } from './jobs'
 
-export type SessionKind = 'claude' | 'shell' | 'login' | 'command'
+export type SessionKind = 'agent' | 'shell' | 'login' | 'command'
 export type SessionStatus =
   | 'starting'
   | 'waiting-auth'
@@ -16,11 +17,13 @@ export type MeshRole = 'free' | 'lead' | 'worker' | 'driver' | 'reviewer'
 
 export interface LaunchOptions {
   cwd: string
+  /** Agent backing the session ('agent' kind); defaults to settings.defaultProvider. */
+  provider?: ProviderId
   name?: string
   model?: string
   effort?: string
   permissionMode?: string
-  /** Claude session id to resume. */
+  /** Agent session id to resume. */
   resumeId?: string
   continueLast?: boolean
   /** With resumeId: fork into a new session id. */
@@ -63,7 +66,8 @@ export interface SessionInfo {
   cwd: string
   /** Root used for git + mesh grouping (git toplevel, else cwd). */
   root: string
-  claudeSessionId?: string
+  provider?: ProviderId
+  agentSessionId?: string
   projectId?: string
   worktreeId?: string
   status: SessionStatus
@@ -102,7 +106,8 @@ export interface Project {
 }
 
 export interface ChatRecord {
-  claudeSessionId: string
+  agentSessionId: string
+  provider?: ProviderId
   name: string
   cwd: string
   projectId?: string
@@ -182,6 +187,7 @@ export interface ThemeDef {
 export interface SessionTemplate {
   id: string
   name: string
+  provider?: ProviderId
   model?: string
   effort?: string
   permissionMode?: string
@@ -224,10 +230,8 @@ export interface Settings {
   preventSleep: boolean
   followUp: 'steer' | 'queue'
   composerEnter: 'enter' | 'ctrlEnter'
-  defaultModel: string
-  defaultEffort: string
-  defaultPermissionMode: string
-  claudePath: string
+  defaultProvider: ProviderId
+  providers: Record<ProviderId, ProviderSettings>
   shell: string
   worktrees: { root: string; keep: number; autoDelete: boolean; branchPrefix: string; cleanupMerged: boolean; deleteRemoteMerged: boolean }
   mesh: {
@@ -298,6 +302,7 @@ export interface ChatSettings {
 }
 
 export interface AuthStatus {
+  provider?: ProviderId
   checked: boolean
   loggedIn: boolean
   email?: string
@@ -467,6 +472,7 @@ export interface Automation {
   job?: { slug: string; options?: Partial<JobRunOptions>; routine?: boolean }
   projectId?: string
   useWorktree: boolean
+  provider?: ProviderId
   model?: string
   effort?: string
   permissionMode?: string
@@ -492,13 +498,15 @@ export interface AutomationRun {
   pinned: boolean
   worktreePath?: string
   costUsd?: number
-  claudeSessionId?: string
+  provider?: ProviderId
+  agentSessionId?: string
   cwd: string
 }
 
 // ---------- Transcripts / history ----------
 export interface TranscriptSummary {
-  claudeSessionId: string
+  agentSessionId: string
+  provider: ProviderId
   cwd: string
   title: string
   firstTs: number
@@ -546,7 +554,7 @@ export interface PullRequestDetail extends PullRequestSummary {
 
 // ---------- App state snapshot ----------
 export interface OpenTabState {
-  sessions: { claudeSessionId?: string; cwd: string; name: string; role?: MeshRole }[]
+  sessions: { agentSessionId?: string; provider?: ProviderId; cwd: string; name: string; role?: MeshRole }[]
 }
 
 export interface ToastMessage {

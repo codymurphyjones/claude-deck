@@ -435,7 +435,7 @@ export function RepoView() {
               { separator: true },
               ...(origin?.webUrl ? [{ label: 'Open on the web', icon: 'globe', onClick: () => api.shell.openExternal(origin.webUrl!) }] : []),
               { label: 'Reveal in Explorer', icon: 'folder-open', onClick: () => api.shell.openPath(root) },
-              { label: 'New chat here', icon: 'message', onClick: () => openSession('claude', { cwd: root }) }
+              { label: 'New chat here', icon: 'message', onClick: () => openSession('agent', { cwd: root }) }
             ])
           }
         >
@@ -534,7 +534,7 @@ export function RepoView() {
                       <button
                         className="btn sm"
                         onClick={() =>
-                          openSession('claude', {
+                          openSession('agent', {
                             cwd: root,
                             name: 'Resolve conflicts',
                             initialPrompt: `A git ${st.operation} stopped with conflicts in:\n${st.conflicted.map((f) => `- ${f}`).join('\n')}\n\nResolve each conflict, keeping the intent of both sides; ask me if a choice is unclear. Then \`git add\` the resolved files, but do not continue or commit the ${st.operation}.`

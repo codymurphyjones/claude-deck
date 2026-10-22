@@ -40,7 +40,7 @@ export function TeamPanel({ session }: { session?: LiveSession }) {
         No team yet. Sessions that share a folder (or worktrees of one repository) form a team automatically.
         <div style={{ marginTop: 12 }} className="row">
           {session && (
-            <button className="btn sm" onClick={() => openSession('claude', { cwd: session.cwd }, { mode: 'split', splitOf: session.id })}>
+            <button className="btn sm" onClick={() => openSession('agent', { cwd: session.cwd }, { mode: 'split', splitOf: session.id })}>
               <Icon name="split" size={13} /> Add a peer here
             </button>
           )}
@@ -51,7 +51,7 @@ export function TeamPanel({ session }: { session?: LiveSession }) {
       </div>
     )
 
-  const members = Object.values(sessions).filter((s) => s.meshGroup === g.key && s.kind === 'claude' && s.status !== 'exited')
+  const members = Object.values(sessions).filter((s) => s.meshGroup === g.key && s.kind === 'agent' && s.status !== 'exited')
   const send = (): void => {
     if (!text.trim()) return
     void api.mesh.send(g.key, to, text.trim(), kind)
@@ -83,8 +83,8 @@ export function TeamPanel({ session }: { session?: LiveSession }) {
             title="Team actions"
             onClick={(e) =>
               openMenuAt(e.currentTarget, [
-                { label: 'Add a session to this team', icon: 'plus', onClick: () => members[0] && openSession('claude', { cwd: members[0].cwd }) },
-                { label: 'Add a reviewer', icon: 'eye', onClick: () => members[0] && openSession('claude', { cwd: members[0].cwd, role: 'reviewer', name: 'reviewer', permissionMode: 'plan' }) },
+                { label: 'Add a session to this team', icon: 'plus', onClick: () => members[0] && openSession('agent', { cwd: members[0].cwd }) },
+                { label: 'Add a reviewer', icon: 'eye', onClick: () => members[0] && openSession('agent', { cwd: members[0].cwd, role: 'reviewer', name: 'reviewer', permissionMode: 'plan' }) },
                 { label: 'Broadcast a prompt…', icon: 'radio', onClick: () => set({ broadcastOpen: true }) },
                 { separator: true },
                 { label: 'Clear message & edit history', icon: 'trash', danger: true, onClick: () => api.mesh.clear(g.key) }

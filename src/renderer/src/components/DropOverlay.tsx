@@ -60,7 +60,7 @@ export function DropOverlay() {
   const handle = async (paths: string[], zone: Zone, pickTemplate: boolean): Promise<void> => {
     const s = activeSession()
     if (zone === 'insert' && s) {
-      if (s.kind === 'claude') window.dispatchEvent(new CustomEvent('deck:insert', { detail: { id: s.id, paths } }))
+      if (s.kind === 'agent') window.dispatchEvent(new CustomEvent('deck:insert', { detail: { id: s.id, paths } }))
       else bridge.write(s.id, paths.map(quote).join(' ') + ' ')
       return
     }

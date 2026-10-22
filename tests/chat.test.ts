@@ -4,7 +4,7 @@ import * as path from 'path'
 import { describe, expect, it } from 'vitest'
 import { applyChatOp, chatToText, type ChatItem } from '@shared/chat'
 import { lineDiff } from '@shared/lineDiff'
-import { loadConversation } from '../src/main/chat/history'
+import { loadConversation } from '../src/main/agents/claude/history'
 
 describe('chat ops', () => {
   it('appends, streams deltas and patches items', () => {

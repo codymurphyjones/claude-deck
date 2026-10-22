@@ -311,6 +311,7 @@ function tryPartial(partial: string, key: string): string {
 
 // ---------------------------------------------------------------- permission
 function suggestionLabel(perm: PermissionRequest): string | undefined {
+  if (perm.sessionApproval) return 'Allow for this session'
   const s = perm.suggestions?.[0] as { type?: string; mode?: string; rules?: { toolName?: string; ruleContent?: string }[]; destination?: string } | undefined
   if (!s) return undefined
   if (s.type === 'setMode' && s.mode === 'acceptEdits') return 'Allow all edits this session'

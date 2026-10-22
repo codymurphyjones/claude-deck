@@ -43,28 +43,21 @@ export function helperRuntime(): { command: string; env: Record<string, string>;
   return { command: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' }, viaElectron: true }
 }
 
-let cachedClaude: string | undefined
+const located = new Map<string, string>()
 
-export function locateClaude(override?: string): string {
+/** Find a CLI: explicit override, then PATH, then known install locations. */
+export function locateBinary(name: string, override: string | undefined, extra: (string | undefined)[] = []): string {
   if (override && fs.existsSync(override)) return override
-  if (cachedClaude && fs.existsSync(cachedClaude)) return cachedClaude
-  const home = os.homedir()
-  const candidates = [
-    which('claude'),
-    path.join(home, '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude'),
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', 'claude.cmd') : undefined,
-    path.join(home, '.claude', 'local', process.platform === 'win32' ? 'claude.exe' : 'claude')
-  ].filter(Boolean) as string[]
-  cachedClaude = candidates.find((c) => fs.existsSync(c)) ?? 'claude'
-  return cachedClaude
+  const cached = located.get(name)
+  if (cached && fs.existsSync(cached)) return cached
+  const candidates = [which(name), ...extra].filter(Boolean) as string[]
+  const found = candidates.find((c) => fs.existsSync(c)) ?? name
+  located.set(name, found)
+  return found
 }
 
 export function defaultShell(override?: string): string {
   if (override) return override
   if (process.platform === 'win32') return which('pwsh') ?? 'powershell.exe'
   return process.env.SHELL || '/bin/bash'
-}
-
-export function claudeHome(): string {
-  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
 }

@@ -1,3 +1,4 @@
+import { PROVIDER_IDS, PROVIDERS, providerOf, type ProviderId } from '@shared/agent'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   jobDesignBrief,
@@ -31,7 +32,7 @@ export function useRoots(): string[] {
       if (p && !out.some((x) => x.toLowerCase() === p.toLowerCase())) out.push(p)
     }
     for (const p of projects) add(p.folders[0])
-    for (const s of Object.values(sessions)) if (s.kind === 'claude' && !s.worktreeId) add(s.root)
+    for (const s of Object.values(sessions)) if (s.kind === 'agent' && !s.worktreeId) add(s.root)
     return out
   }, [projects, sessions])
 }
@@ -68,7 +69,7 @@ const runBadge = (r: JobRun): string => (r.status === 'success' ? 'ok' : r.statu
 export async function designInChat(root: string): Promise<void> {
   const goal = await askText('What should the job do? (optional — you can also describe it in the chat)', '', { multiline: true, placeholder: 'Upgrade to React 20: audit usages, migrate, fix tests, update docs' })
   if (goal === null) return
-  await openSession('claude', {
+  await openSession('agent', {
     cwd: root,
     name: 'Job design',
     appendSystemPrompt: jobDesignBrief(),
@@ -84,7 +85,7 @@ export async function designRoutineInChat(): Promise<void> {
   if (goal === null) return
   const dir = await attempt(() => api.routines.dir())
   if (!dir) return
-  await openSession('claude', {
+  await openSession('agent', {
     cwd: dir,
     name: 'Routine design',
     appendSystemPrompt: routineDesignBrief(),
@@ -310,8 +311,8 @@ function RunDetail({ r }: { r: JobRun }) {
             <Icon name="stop" size={12} /> Stop
           </button>
         )}
-        {r.claudeSessionId && r.status !== 'running' && (
-          <button className="btn sm primary" onClick={() => openSession('claude', { cwd: ws, resumeId: r.claudeSessionId, name: r.jobName })}>
+        {r.agentSessionId && r.status !== 'running' && (
+          <button className="btn sm primary" onClick={() => openSession('agent', { cwd: ws, resumeId: r.agentSessionId, name: r.jobName })}>
             Continue as chat
           </button>
         )}
@@ -485,6 +486,10 @@ export function RunOptionsFields({ root, job, value, onChange }: { root?: string
         </div>
       )}
       <div className="row">
+        <label className="field">
+          Agent
+          <AgentSelect value={value.provider ?? d.provider} onChange={(provider) => onChange({ ...value, provider })} />
+        </label>
         <label className="field grow">
           Model
           <input className="input" value={value.model ?? ''} placeholder={d.model || 'default'} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
@@ -493,7 +498,7 @@ export function RunOptionsFields({ root, job, value, onChange }: { root?: string
           Effort
           <select className="select" value={value.effort ?? ''} onChange={(e) => onChange({ ...value, effort: e.target.value || undefined })}>
             <option value="">{d.effort ? `job default (${d.effort})` : 'default'}</option>
-            {['low', 'medium', 'high', 'xhigh', 'max'].map((x) => (
+            {efforts(value.provider ?? d.provider).map((x) => (
               <option key={x}>{x}</option>
             ))}
           </select>
@@ -506,6 +511,24 @@ export function RunOptionsFields({ root, job, value, onChange }: { root?: string
     </>
   )
 }
+
+/** Which agent runs it ('' = the default agent from settings). */
+export function AgentSelect({ value, onChange }: { value?: ProviderId; onChange: (p?: ProviderId) => void }) {
+  const def = useStore((s) => s.settings.defaultProvider)
+  return (
+    <select className="select" value={value ?? ''} onChange={(e) => onChange((e.target.value || undefined) as ProviderId | undefined)}>
+      <option value="">default ({PROVIDERS[def].label})</option>
+      {PROVIDER_IDS.map((p) => (
+        <option key={p} value={p}>
+          {PROVIDERS[p].label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+/** Effort levels the agent understands (without the '' default entry). */
+export const efforts = (p?: ProviderId): string[] => providerOf(p ?? useStore.getState().settings.defaultProvider).efforts.filter(Boolean)
 
 export function PermissionSelect({ value, fallback, onChange }: { value?: string; fallback?: string; onChange: (v?: string) => void }) {
   return (

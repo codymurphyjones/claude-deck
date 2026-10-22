@@ -1,32 +1,23 @@
 import { useEffect, useState } from 'react'
+import { PROVIDER_IDS, PROVIDERS, type ProviderId } from '@shared/agent'
 import type { GitInfo, LaunchOptions, MeshRole } from '@shared/types'
 import { api } from '../api'
 import { activeSession, openSession, set, useStore } from '../store'
 import { Icon } from './Icon'
 import { Modal, Seg, Switch } from './ui'
 
-export const MODELS: [string, string][] = [
-  ['', 'Default'],
-  ['fable', 'Fable (most capable)'],
-  ['opus', 'Opus'],
-  ['sonnet', 'Sonnet'],
-  ['haiku', 'Haiku (fastest)']
-]
-export const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
-export const MODES: [string, string][] = [
-  ['', 'Default'],
-  ['plan', 'Plan (read-only until approved)'],
-  ['acceptEdits', 'Accept edits'],
-  ['auto', 'Auto'],
-  ['manual', 'Ask for everything'],
-  ['bypassPermissions', 'Bypass permissions (full access)']
-]
+/** Provider picker shown wherever an agent is chosen. */
+export function ProviderSeg({ value, onChange }: { value: ProviderId; onChange: (p: ProviderId) => void }) {
+  return <Seg value={value} onChange={onChange} options={PROVIDER_IDS.map((p) => [p, PROVIDERS[p].label] as [ProviderId, string])} />
+}
 
 export function NewSessionDialog() {
   const pre = useStore((s) => s.newSession)
   const lib = useStore((s) => s.library)
   const templates = useStore((s) => s.settings.sessionTemplates)
   const home = useStore((s) => s.homedir)
+  const defaultProvider = useStore((s) => s.settings.defaultProvider)
+  const [provider, setProvider] = useState<ProviderId>(defaultProvider)
   const [cwd, setCwd] = useState('')
   const [where, setWhere] = useState<'local' | 'worktree'>('local')
   const [git, setGit] = useState<GitInfo | null>(null)
@@ -55,6 +46,7 @@ export function NewSessionDialog() {
     setCarry(false)
     setPermanent(false)
     setLayout('tab')
+    setProvider(defaultProvider)
   }, [pre])
 
   useEffect(() => {
@@ -75,6 +67,7 @@ export function NewSessionDialog() {
   useEffect(() => {
     const t = templates.find((x) => x.id === templateId)
     if (!t) return
+    if (t.provider) setProvider(t.provider)
     setModel(t.model ?? '')
     setEffort(t.effort ?? '')
     setMode(t.permissionMode ?? '')
@@ -85,29 +78,38 @@ export function NewSessionDialog() {
   }, [templateId])
 
   if (!pre) return null
+  const desc = PROVIDERS[provider]
+  const pickProvider = (p: ProviderId): void => {
+    if (p === provider) return
+    setProvider(p)
+    setModel('')
+    setEffort('')
+    setMode('')
+  }
   const close = (): void => set({ newSession: false })
   const create = async (): Promise<void> => {
     if (!cwd) return
     const launch: LaunchOptions = {
       cwd,
+      provider,
       name: name || undefined,
       model: model || undefined,
       effort: effort || undefined,
       permissionMode: mode || undefined,
       initialPrompt: prompt.trim() || undefined,
       role,
-      remoteControl: remote || undefined,
+      remoteControl: (provider === 'claude' && remote) || undefined,
       templateId: templateId || undefined,
       quick: pre.quick,
       worktree: where === 'worktree' ? { baseRef: baseRef || undefined, carryChanges: carry, permanent } : undefined
     }
     close()
     const s = activeSession()
-    await openSession('claude', launch, layout === 'split' && s ? { mode: 'split', splitOf: s.id } : {})
+    await openSession('agent', launch, layout === 'split' && s ? { mode: 'split', splitOf: s.id } : {})
   }
   return (
     <Modal
-      title="New Claude session"
+      title="New agent session"
       icon="plus"
       onClose={close}
       footer={
@@ -125,6 +127,10 @@ export function NewSessionDialog() {
       }
     >
       <div className="modal-body">
+        <div className="row">
+          <span className="muted">Agent</span>
+          <ProviderSeg value={provider} onChange={pickProvider} />
+        </div>
         <div className="row" style={{ alignItems: 'flex-end' }}>
           <label className="field grow">
             Folder
@@ -205,7 +211,7 @@ export function NewSessionDialog() {
           <label className="field grow">
             Model
             <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODELS.map(([v, l]) => (
+              {desc.models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -215,7 +221,7 @@ export function NewSessionDialog() {
           <label className="field" style={{ width: 120 }}>
             Effort
             <select className="select" value={effort} onChange={(e) => setEffort(e.target.value)}>
-              {EFFORTS.map((x) => (
+              {desc.efforts.map((x) => (
                 <option key={x} value={x}>
                   {x || 'Default'}
                 </option>
@@ -225,7 +231,7 @@ export function NewSessionDialog() {
           <label className="field grow">
             Permissions
             <select className="select" value={mode} onChange={(e) => setMode(e.target.value)}>
-              {MODES.map(([v, l]) => (
+              {desc.permissionModes.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -235,7 +241,7 @@ export function NewSessionDialog() {
         </div>
         <label className="field">
           First prompt (optional)
-          <textarea className="textarea" rows={3} value={prompt} placeholder="What should Claude do?" onChange={(e) => setPrompt(e.target.value)} />
+          <textarea className="textarea" rows={3} value={prompt} placeholder={`What should ${desc.label} do?`} onChange={(e) => setPrompt(e.target.value)} />
         </label>
         <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
           <label className="field" style={{ width: 200 }}>
@@ -248,10 +254,12 @@ export function NewSessionDialog() {
               <option value="reviewer">Reviewer</option>
             </select>
           </label>
-          <div className="row" style={{ marginTop: 16 }}>
-            <Switch on={remote} onChange={setRemote} />
-            <span>Remote Control — continue from the Claude mobile app or web</span>
-          </div>
+          {provider === 'claude' && (
+            <div className="row" style={{ marginTop: 16 }}>
+              <Switch on={remote} onChange={setRemote} />
+              <span>Remote Control — continue from the Claude mobile app or web</span>
+            </div>
+          )}
         </div>
       </div>
     </Modal>

@@ -56,8 +56,8 @@ export function getProject(id?: string): Project | undefined {
   return id ? state().projects.find((p) => p.id === id) : undefined
 }
 
-export function upsertChat(rec: Partial<ChatRecord> & { claudeSessionId: string }): ChatRecord {
-  let chat = state().chats.find((c) => c.claudeSessionId === rec.claudeSessionId)
+export function upsertChat(rec: Partial<ChatRecord> & { agentSessionId: string }): ChatRecord {
+  let chat = state().chats.find((c) => c.agentSessionId === rec.agentSessionId)
   updateState((s) => {
     if (chat) Object.assign(chat, rec, { updatedAt: Date.now() })
     else {
@@ -80,14 +80,14 @@ export function upsertChat(rec: Partial<ChatRecord> & { claudeSessionId: string 
 
 export function updateChat(id: string, patch: Partial<ChatRecord>): void {
   updateState((s) => {
-    const c = s.chats.find((x) => x.claudeSessionId === id)
+    const c = s.chats.find((x) => x.agentSessionId === id)
     if (c) Object.assign(c, patch)
   })
   emitLibrary()
 }
 
 export function getChat(id?: string): ChatRecord | undefined {
-  return id ? state().chats.find((c) => c.claudeSessionId === id) : undefined
+  return id ? state().chats.find((c) => c.agentSessionId === id) : undefined
 }
 
 export function archiveProjectChats(projectId: string): void {

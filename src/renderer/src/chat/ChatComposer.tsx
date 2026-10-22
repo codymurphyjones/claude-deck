@@ -3,7 +3,7 @@ import type { ChatMeta } from '@shared/chat'
 import { api, type LiveSession } from '../api'
 import { SLASH_COMMANDS } from '../commands'
 import { Icon } from '../components/Icon'
-import { MODELS, MODES } from '../components/NewSessionDialog'
+import { providerOf } from '@shared/agent'
 import { openMenuAt, fuzzyScore } from '../components/ui'
 import { set, toast, useStore } from '../store'
 import { useChat, useDrafts } from './chatStore'
@@ -186,8 +186,10 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
     setDraft({ images: [...draft.images, ...imgs] })
   }
 
-  const mode = s.permissionMode || settings.defaultPermissionMode || 'default'
-  const model = (s.launch.model || meta?.model || settings.defaultModel || 'default').replace(/^claude-/, '')
+  const desc = providerOf(s.provider)
+  const prov = settings.providers[desc.id]
+  const mode = s.permissionMode || prov.defaultPermissionMode || 'default'
+  const model = (s.launch.model || meta?.model || prov.defaultModel || 'default').replace(/^claude-/, '')
 
   return (
     <div className="composer-wrap">
@@ -249,7 +251,7 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
             onClick={(e) =>
               openMenuAt(
                 e.currentTarget,
-                MODES.filter(([v]) => v).map(([v, l]) => ({ label: l, icon: v === mode ? 'check' : undefined, onClick: () => api.chat.setMode(s.id, v) })).concat([{ label: 'Default', icon: mode === 'default' ? 'check' : undefined, onClick: () => api.chat.setMode(s.id, 'default') }])
+                desc.permissionModes.filter(([v]) => v).map(([v, l]) => ({ label: l, icon: v === mode ? 'check' : undefined, onClick: () => api.chat.setMode(s.id, v) })).concat([{ label: 'Default', icon: mode === 'default' ? 'check' : undefined, onClick: () => api.chat.setMode(s.id, 'default') }])
               )
             }
           >
@@ -258,11 +260,11 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
           <button
             className="chip"
             title="Model"
-            onClick={(e) => openMenuAt(e.currentTarget, MODELS.map(([v, l]) => ({ label: l, icon: (s.launch.model ?? '') === v ? 'check' : undefined, onClick: () => api.chat.setModel(s.id, v) })))}
+            onClick={(e) => openMenuAt(e.currentTarget, desc.models.map(([v, l]) => ({ label: l, icon: (s.launch.model ?? '') === v ? 'check' : undefined, onClick: () => api.chat.setModel(s.id, v) })))}
           >
             <Icon name="sparkles" size={12} /> {model}
           </button>
-          <button className="chip" title="Set a goal — Claude keeps going until it's done" onClick={() => set({ goalFor: s.id })}>
+          <button className="chip" title={`Set a goal — ${desc.label} keeps going until it's done`} onClick={() => set({ goalFor: s.id })}>
             <Icon name="target" size={12} /> Goal
           </button>
           {s.contextTokens ? (

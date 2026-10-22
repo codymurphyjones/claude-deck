@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { PROVIDER_IDS, PROVIDERS, type ProviderId, type ProviderSettings } from '@shared/agent'
 import { DEFAULT_SHORTCUTS } from '@shared/defaults'
 import type { EnvAction, EnvironmentConfig, Insights, PromptTemplate, SessionTemplate, Settings, ThemeDef } from '@shared/types'
 import { api } from '../api'
 import { commands } from '../commands'
 import { eventCombo, normalizeCombo, prettyCombo, shortcutMap } from '../shortcuts'
-import { activeSession, attempt, resumeChat, set, signIn, toast, useStore } from '../store'
+import { activeSession, attempt, resumeChat, set, signIn, toast, useAuth, useStore } from '../store'
 import { allThemes, resolveTheme } from '../theme'
 import { Icon } from './Icon'
-import { EFFORTS, MODELS, MODES } from './NewSessionDialog'
+import { ProviderSeg } from './NewSessionDialog'
 import { Modal, Seg, Switch, timeAgo } from './ui'
 import { UpdatesSection } from './Updates'
 
@@ -85,6 +86,39 @@ export function SettingsModal() {
 
 type P = { s: Settings; update: (p: Partial<Settings>) => void }
 
+function ProviderDefaults({ provider, s, update }: P & { provider: ProviderId }) {
+  const desc = PROVIDERS[provider]
+  const cur = s.providers[provider]
+  const set = (patch: Partial<ProviderSettings>): void => update({ providers: { ...s.providers, [provider]: { ...cur, ...patch } } })
+  return (
+    <Row label={`${desc.label} defaults`} desc="Model, effort and permission mode for new sessions.">
+      <div className="row">
+        <select className="select" value={cur.defaultModel} onChange={(e) => set({ defaultModel: e.target.value })}>
+          {desc.models.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <select className="select" value={cur.defaultEffort} onChange={(e) => set({ defaultEffort: e.target.value })}>
+          {desc.efforts.map((x) => (
+            <option key={x} value={x}>
+              {x ? `${x} effort` : 'Default effort'}
+            </option>
+          ))}
+        </select>
+        <select className="select" value={cur.defaultPermissionMode} onChange={(e) => set({ defaultPermissionMode: e.target.value })}>
+          {desc.permissionModes.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </div>
+    </Row>
+  )
+}
+
 function General({ s, update }: P) {
   const [explorer, setExplorer] = useState(false)
   return (
@@ -99,33 +133,12 @@ function General({ s, update }: P) {
       <Row label="Composer: Enter key" desc="In the rich composer (Ctrl+Shift+Enter).">
         <Seg value={s.composerEnter} onChange={(composerEnter) => update({ composerEnter })} options={[['enter', 'Enter sends'], ['ctrlEnter', 'Ctrl+Enter sends']]} />
       </Row>
-      <Row label="Default model">
-        <select className="select" value={s.defaultModel} onChange={(e) => update({ defaultModel: e.target.value })}>
-          {MODELS.map(([v, l]) => (
-            <option key={v} value={v}>
-              {l}
-            </option>
-          ))}
-        </select>
+      <Row label="Default agent" desc="Used for new sessions, jobs and scheduled tasks unless you pick another one.">
+        <ProviderSeg value={s.defaultProvider} onChange={(defaultProvider) => update({ defaultProvider })} />
       </Row>
-      <Row label="Default effort">
-        <select className="select" value={s.defaultEffort} onChange={(e) => update({ defaultEffort: e.target.value })}>
-          {EFFORTS.map((x) => (
-            <option key={x} value={x}>
-              {x || 'Default'}
-            </option>
-          ))}
-        </select>
-      </Row>
-      <Row label="Default permission mode">
-        <select className="select" value={s.defaultPermissionMode} onChange={(e) => update({ defaultPermissionMode: e.target.value })}>
-          {MODES.map(([v, l]) => (
-            <option key={v} value={v}>
-              {l}
-            </option>
-          ))}
-        </select>
-      </Row>
+      {PROVIDER_IDS.map((p) => (
+        <ProviderDefaults key={p} provider={p} s={s} update={update} />
+      ))}
       <Row label="Goal mode limit" desc="Maximum automatic continuation turns before a goal pauses.">
         <input className="input" type="number" min={1} max={200} style={{ width: 90 }} value={s.goalMaxIterations} onChange={(e) => update({ goalMaxIterations: Math.max(1, +e.target.value) })} />
       </Row>
@@ -145,9 +158,11 @@ function General({ s, update }: P) {
       <Row label="Integrated terminal shell" desc="Leave empty for PowerShell 7 (pwsh) if installed, otherwise Windows PowerShell.">
         <input className="input mono" placeholder="pwsh.exe" value={s.shell} onChange={(e) => update({ shell: e.target.value })} />
       </Row>
-      <Row label="Claude executable" desc={`Leave empty to auto-detect (currently ${useStore.getState().claudePath}).`}>
-        <input className="input mono" placeholder="auto" value={s.claudePath} onChange={(e) => update({ claudePath: e.target.value })} />
-      </Row>
+      {PROVIDER_IDS.map((p) => (
+        <Row key={p} label={`${PROVIDERS[p].label} executable`} desc={`Leave empty to auto-detect (currently ${useStore.getState().agentPaths[p]}).`}>
+          <input className="input mono" placeholder="auto" value={s.providers[p].path} onChange={(e) => update({ providers: { ...s.providers, [p]: { ...s.providers[p], path: e.target.value } } })} />
+        </Row>
+      ))}
       <h3>Window</h3>
       <Row label="Always on top">
         <Switch on={s.alwaysOnTop} onChange={(alwaysOnTop) => update({ alwaysOnTop })} />
@@ -427,9 +442,21 @@ function Notifications({ s, update }: P) {
 }
 
 function Account() {
-  const auth = useStore((s) => s.auth)
   return (
     <>
+      {PROVIDER_IDS.map((p) => (
+        <ProviderAccount key={p} provider={p} />
+      ))}
+    </>
+  )
+}
+
+function ProviderAccount({ provider }: { provider: ProviderId }) {
+  const auth = useAuth(provider)
+  const label = PROVIDERS[provider].label
+  return (
+    <>
+      <h3>{label}</h3>
       <Row label="Status">
         {auth.loggedIn ? <span className="badge ok">Signed in</span> : <span className="badge warn">{auth.checked ? 'Signed out' : 'Checking…'}</span>}
       </Row>
@@ -438,20 +465,24 @@ function Account() {
       {(auth.subscriptionType || auth.authMethod) && <Row label="Plan / method">{[auth.subscriptionType, auth.authMethod].filter(Boolean).join(' · ')}</Row>}
       {auth.error && <div className="muted mono" style={{ fontSize: 12 }}>{auth.error}</div>}
       <div className="row" style={{ flexWrap: 'wrap' }}>
-        <button className="btn primary" onClick={() => (set({ settingsOpen: false }), signIn())}>
-          <Icon name="login" size={13} /> {auth.loggedIn ? 'Switch account' : 'Sign in with Claude'}
+        <button className="btn primary" onClick={() => (set({ settingsOpen: false }), signIn({}, provider))}>
+          <Icon name="login" size={13} /> {auth.loggedIn ? 'Switch account' : `Sign in to ${label}`}
         </button>
-        <button className="btn" onClick={() => (set({ settingsOpen: false }), signIn({ console: true }))}>
-          Use Anthropic Console (API billing)
-        </button>
-        <button className="btn" onClick={() => (set({ settingsOpen: false }), signIn({ sso: true }))}>
-          SSO
-        </button>
-        <button className="btn ghost" onClick={() => api.auth.refresh()}>
+        {provider === 'claude' && (
+          <>
+            <button className="btn" onClick={() => (set({ settingsOpen: false }), signIn({ console: true }, provider))}>
+              Use Anthropic Console (API billing)
+            </button>
+            <button className="btn" onClick={() => (set({ settingsOpen: false }), signIn({ sso: true }, provider))}>
+              SSO
+            </button>
+          </>
+        )}
+        <button className="btn ghost" onClick={() => api.auth.refresh(provider)}>
           <Icon name="refresh" size={13} /> Refresh
         </button>
         {auth.loggedIn && (
-          <button className="btn danger" onClick={() => api.auth.logout()}>
+          <button className="btn danger" onClick={() => api.auth.logout(provider)}>
             <Icon name="logout" size={13} /> Sign out
           </button>
         )}
@@ -572,15 +603,23 @@ function Templates({ s, update }: P) {
             </button>
           </div>
           <div className="row">
+            <select className="select" value={t.provider ?? ''} onChange={(e) => setTpl(i, { provider: (e.target.value || undefined) as ProviderId | undefined, model: undefined, permissionMode: undefined })}>
+              <option value="">Default agent</option>
+              {PROVIDER_IDS.map((p) => (
+                <option key={p} value={p}>
+                  {PROVIDERS[p].label}
+                </option>
+              ))}
+            </select>
             <select className="select" value={t.model ?? ''} onChange={(e) => setTpl(i, { model: e.target.value || undefined })}>
-              {MODELS.map(([v, l]) => (
+              {PROVIDERS[t.provider ?? s.defaultProvider].models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
               ))}
             </select>
             <select className="select" value={t.permissionMode ?? ''} onChange={(e) => setTpl(i, { permissionMode: e.target.value || undefined })}>
-              {MODES.map(([v, l]) => (
+              {PROVIDERS[t.provider ?? s.defaultProvider].permissionModes.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -693,23 +732,26 @@ function EnvironmentEditor({ initialRoot }: { initialRoot?: string }) {
 
 function Personalization() {
   const session = activeSession()
+  const [provider, setProvider] = useState<ProviderId>(session?.provider ?? useStore.getState().settings.defaultProvider)
+  const fileName = PROVIDERS[provider].instructionsFile
   const [scope, setScope] = useState<'user' | 'project'>('user')
   const [file, setFile] = useState('')
   const [content, setContent] = useState('')
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
-    void api.claudeMd.read(scope === 'project' ? session?.root : undefined).then((r) => {
+    void api.instructions.read(provider, scope === 'project' ? session?.root : undefined).then((r) => {
       setFile(r.file)
       setContent(r.content)
       setDirty(false)
     })
-  }, [scope])
+  }, [scope, provider])
   return (
     <>
       <div className="muted" style={{ lineHeight: 1.5 }}>
-        Claude reads <code>CLAUDE.md</code> files as standing instructions. Your personal file applies to every project on this machine; a project file applies to everyone working in that repository.
+        {PROVIDERS[provider].label} reads <code>{fileName}</code> files as standing instructions. Your personal file applies to every project on this machine; a project file applies to everyone working in that repository.
       </div>
-      <Seg value={scope} onChange={setScope} options={[['user', 'Personal (~/.claude/CLAUDE.md)'], ...(session ? ([['project', `Project (${session.root.split(/[\\/]/).pop()})`]] as ['project', string][]) : [])]} />
+      <ProviderSeg value={provider} onChange={setProvider} />
+      <Seg value={scope} onChange={setScope} options={[['user', `Personal (${fileName})`], ...(session ? ([['project', `Project (${session.root.split(/[\\/]/).pop()})`]] as ['project', string][]) : [])]} />
       <div className="mono muted" style={{ fontSize: 11.5 }}>
         {file}
       </div>
@@ -725,7 +767,7 @@ function Personalization() {
       />
       <div className="row">
         <span className="grow" />
-        <button className="btn primary" disabled={!dirty} onClick={() => attempt(() => api.claudeMd.write(file, content), 'Saved').then(() => setDirty(false))}>
+        <button className="btn primary" disabled={!dirty} onClick={() => attempt(() => api.instructions.write(file, content), 'Saved').then(() => setDirty(false))}>
           Save
         </button>
       </div>
@@ -751,7 +793,7 @@ function Archived() {
         <div key={name}>
           <h3>{name}</h3>
           {chats.map((c) => (
-            <div key={c.claudeSessionId} className="setting" style={{ padding: '6px 0' }}>
+            <div key={c.agentSessionId} className="setting" style={{ padding: '6px 0' }}>
               <div className="label">
                 <span>{c.name}</span>
                 <span className="desc">
@@ -759,15 +801,15 @@ function Archived() {
                 </span>
               </div>
               <div className="row">
-                <button className="btn sm" onClick={() => api.library.updateChat(c.claudeSessionId, { archived: false })}>
+                <button className="btn sm" onClick={() => api.library.updateChat(c.agentSessionId, { archived: false })}>
                   Unarchive
                 </button>
                 <button
                   className="btn sm"
                   onClick={() => {
-                    void api.library.updateChat(c.claudeSessionId, { archived: false })
+                    void api.library.updateChat(c.agentSessionId, { archived: false })
                     set({ settingsOpen: false })
-                    void resumeChat(c.claudeSessionId)
+                    void resumeChat(c.agentSessionId)
                   }}
                 >
                   Open
@@ -784,7 +826,7 @@ function Archived() {
 const fmt = (n: number): string => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n))
 
 function Profile() {
-  const auth = useStore((s) => s.auth)
+  const auth = useAuth()
   const [ins, setIns] = useState<Insights | null>(null)
   useEffect(() => {
     void api.library.insights().then(setIns)
@@ -801,7 +843,7 @@ function Profile() {
           <div className="muted">{[auth.subscriptionType, auth.orgName].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
-      {!ins && <div className="empty-note">Crunching your Claude Code history…</div>}
+      {!ins && <div className="empty-note">Crunching your agent history…</div>}
       {ins && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
@@ -847,7 +889,7 @@ function Profile() {
 
 function About() {
   const v = useStore((s) => s.version)
-  const claude = useStore((s) => s.claudePath)
+  const paths = useStore((s) => s.agentPaths)
   return (
     <>
       <div className="row">
@@ -859,11 +901,13 @@ function About() {
           <div className="muted">Version {v}</div>
         </div>
       </div>
-      <Row label="Claude Code executable">
-        <span className="mono" style={{ fontSize: 12 }}>
-          {claude}
-        </span>
-      </Row>
+      {PROVIDER_IDS.map((p) => (
+        <Row key={p} label={`${PROVIDERS[p].label} executable`}>
+          <span className="mono" style={{ fontSize: 12 }}>
+            {paths[p]}
+          </span>
+        </Row>
+      ))}
       <div className="row">
         <button className="btn" onClick={() => api.shell.openExternal('https://docs.claude.com/en/docs/claude-code/overview')}>
           Claude Code docs

@@ -54,10 +54,11 @@ export const DEFAULT_SETTINGS: Settings = {
   preventSleep: true,
   followUp: 'steer',
   composerEnter: 'enter',
-  defaultModel: '',
-  defaultEffort: '',
-  defaultPermissionMode: '',
-  claudePath: '',
+  defaultProvider: 'claude',
+  providers: {
+    claude: { path: '', defaultModel: '', defaultEffort: '', defaultPermissionMode: '' },
+    codex: { path: '', defaultModel: '', defaultEffort: '', defaultPermissionMode: '' }
+  },
   shell: '',
   worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true },
   mesh: {

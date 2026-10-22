@@ -1,5 +1,7 @@
 // Structured conversation model for the native chat UI (replaces the terminal).
 
+import type { ToolKind } from './agent'
+
 export interface PermissionRequest {
   requestId: string
   toolName: string
@@ -7,6 +9,8 @@ export interface PermissionRequest {
   description?: string
   /** Rules the CLI suggests for "always allow" (passed back as updatedPermissions). */
   suggestions?: unknown[]
+  /** The agent can approve this for the rest of the session (no rule suggestions needed). */
+  sessionApproval?: boolean
   status: 'pending' | 'allowed' | 'denied'
   decidedAt?: number
 }
@@ -19,7 +23,10 @@ export type ChatItem =
       kind: 'tool'
       id: string
       ts: number
+      /** Display name in the agent's own vocabulary. */
       name: string
+      /** Normalized category (set by the adapter; derived from name when absent). */
+      toolKind?: ToolKind
       input: Record<string, unknown>
       partialInput?: string
       status: 'streaming' | 'running' | 'done' | 'error' | 'denied'

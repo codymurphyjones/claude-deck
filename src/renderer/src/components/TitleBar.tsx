@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { runCommand } from '../commands'
 import { shortcutMap, prettyCombo } from '../shortcuts'
-import { closeSession, focusTab, get, mergeTabInto, moveTab, openSession, set, signIn, useStore, type Tab } from '../store'
+import { closeSession, focusTab, get, mergeTabInto, moveTab, openSession, set, signIn, useAuth, useStore, type Tab } from '../store'
 import { Icon } from './Icon'
 import { openMenu, openMenuAt, STATUS_LABEL } from './ui'
 
@@ -17,7 +17,7 @@ export function TitleBar() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const sessions = useStore((s) => s.sessions)
-  const auth = useStore((s) => s.auth)
+  const auth = useAuth()
   const popout = useStore((s) => s.popoutSessionId)
   const settings = useStore((s) => s.settings)
   const [dropBefore, setDropBefore] = useState<string | null>(null)
@@ -40,9 +40,9 @@ export function TitleBar() {
     const s = sessions[t.activePane]
     openMenu(e, [
       { label: 'Rename…', icon: 'edit', onClick: () => (focusTab(t.id), runCommand('renameSession')) },
-      { label: 'Split with new session', icon: 'split', onClick: () => s && openSession('claude', { cwd: s.cwd }, { mode: 'split', splitOf: s.id }) },
+      { label: 'Split with new session', icon: 'split', onClick: () => s && openSession('agent', { cwd: s.cwd }, { mode: 'split', splitOf: s.id }) },
       { label: 'Pop out', icon: 'popout', onClick: () => api.window.popOut(t.activePane) },
-      { label: 'Fork chat', icon: 'fork', disabled: s?.kind !== 'claude', onClick: () => (focusTab(t.id), runCommand('forkChat')) },
+      { label: 'Fork chat', icon: 'fork', disabled: s?.kind !== 'agent', onClick: () => (focusTab(t.id), runCommand('forkChat')) },
       { label: 'Restart', icon: 'refresh', onClick: () => (focusTab(t.id), runCommand('restartSession')) },
       { label: 'Reveal folder', icon: 'folder-open', onClick: () => s && api.shell.openPath(s.cwd) },
       { separator: true },

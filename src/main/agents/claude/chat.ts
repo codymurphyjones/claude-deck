@@ -1,34 +1,21 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { EventEmitter } from 'events'
-import { applyChatOp, type ChatItem, type ChatMeta, type ChatOp, type PermissionRequest, type SlashCommandInfo } from '@shared/chat'
+import type { PermissionRequest, SlashCommandInfo } from '@shared/chat'
+import type { SessionInfo } from '@shared/types'
+import { ChatBase } from '../chatBase'
+import type { AgentChat, PermissionDecision } from '../types'
+import { buildClaudeArgs, claudeEnv } from './launch'
 
 type Json = Record<string, unknown>
-type ToolItem = Extract<ChatItem, { kind: 'tool' }>
-
-const DELTA_FLUSH_MS = 24
-
-export interface PermissionDecision {
-  allow: boolean
-  /** Apply the CLI's suggested rules so the same request isn't asked again. */
-  always?: boolean
-  message?: string
-  updatedInput?: Json
-}
 
 /**
  * One Claude Code process in headless streaming mode (`-p --input-format stream-json
  * --output-format stream-json --permission-prompt-tool stdio`), normalized into ChatItems.
- *
- * Events: 'op' (ChatOp), 'status' ('working' | 'needs-input' | 'idle'), 'session' (id),
- * 'meta' (ChatMeta), 'turn' (result json), 'exit' (code, stderr).
+ * Lifecycle events reach the app through the injected hooks, not this stream.
  */
-export class ChatProcess extends EventEmitter {
-  items: ChatItem[] = []
-  meta: ChatMeta = { commands: [], tools: [], busy: false, queued: 0 }
+export class ClaudeChat extends ChatBase implements AgentChat {
   private proc: ChildProcessWithoutNullStreams | undefined
   private buf = ''
   private stderr = ''
-  private seq = 0
   private reqSeq = 0
   private pendingControl = new Map<string, (res: Json) => void>()
   private pendingPerms = new Map<string, { toolUseId: string; input: Json; suggestions?: unknown[] }>()
@@ -36,19 +23,25 @@ export class ChatProcess extends EventEmitter {
   private msgItems = new Map<string, string[]>() // msgId -> item ids (text/thinking) in order
   private finalized = new Set<string>()
   private currentMsg: { id: string; parent?: string } | undefined
-  private pendingDeltas = new Map<string, { field: 'text' | 'partialInput'; text: string }>()
-  private deltaTimer: NodeJS.Timeout | undefined
-  private turnStart = 0
+
+  constructor(
+    private command: string,
+    private session: SessionInfo
+  ) {
+    super()
+  }
 
   get alive(): boolean {
     return !!this.proc && this.proc.exitCode === null && !this.proc.killed
   }
 
-  start(command: string, args: string[], opts: { cwd: string; env: Record<string, string> }): void {
+  start(): void {
+    const command = this.command
     const useShell = /\.(cmd|bat)$/i.test(command)
+    const args = buildClaudeArgs(this.session)
     this.proc = spawn(command, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-prompt-tool', 'stdio', ...args], {
-      cwd: opts.cwd,
-      env: opts.env,
+      cwd: this.session.cwd,
+      env: claudeEnv(this.session),
       windowsHide: true,
       shell: useShell
     }) as ChildProcessWithoutNullStreams
@@ -152,61 +145,6 @@ export class ChatProcess extends EventEmitter {
 
   hasPendingPermission(): boolean {
     return this.pendingPerms.size > 0
-  }
-
-  // ------------------------------------------------------------------ model ops
-  private nid(prefix: string): string {
-    return `${prefix}${++this.seq}`
-  }
-
-  op(o: ChatOp): void {
-    if (o.op !== 'delta') this.flushDeltas()
-    this.items = applyChatOp(this.items, o)
-    if (this.items.length > 4000) this.items = this.items.slice(-3000)
-    this.emit('op', o)
-  }
-
-  private delta(id: string, field: 'text' | 'partialInput', text: string): void {
-    const cur = this.pendingDeltas.get(id)
-    if (cur && cur.field === field) cur.text += text
-    else {
-      if (cur) this.flushDeltas()
-      this.pendingDeltas.set(id, { field, text })
-    }
-    if (!this.deltaTimer) this.deltaTimer = setTimeout(() => this.flushDeltas(), DELTA_FLUSH_MS)
-  }
-
-  private flushDeltas(): void {
-    if (this.deltaTimer) clearTimeout(this.deltaTimer)
-    this.deltaTimer = undefined
-    if (!this.pendingDeltas.size) return
-    const all = [...this.pendingDeltas.entries()]
-    this.pendingDeltas.clear()
-    for (const [id, d] of all) {
-      const o: ChatOp = { op: 'delta', id, field: d.field, text: d.text }
-      this.items = applyChatOp(this.items, o)
-      this.emit('op', o)
-    }
-  }
-
-  notice(text: string, level: Extract<ChatItem, { kind: 'notice' }>['level'] = 'info'): void {
-    this.op({ op: 'append', item: { kind: 'notice', id: this.nid('n'), ts: Date.now(), text, level } })
-  }
-
-  private findTool(id: string): ToolItem | undefined {
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const it = this.items[i]
-      if (it.kind === 'tool' && it.id === id) return it
-    }
-    return undefined
-  }
-
-  private patchTool(id: string, patch: Partial<ToolItem>): void {
-    if (this.findTool(id)) this.op({ op: 'patch', id, patch })
-  }
-
-  private emitMeta(): void {
-    this.emit('meta', { ...this.meta })
   }
 
   // ------------------------------------------------------------------ incoming
