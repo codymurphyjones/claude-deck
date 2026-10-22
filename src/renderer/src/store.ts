@@ -23,8 +23,16 @@ export interface Tab {
   activePane: string
 }
 
-export type SidebarView = 'projects' | 'activity' | 'jobs' | 'routines' | 'scheduled' | 'team' | 'reviews'
+export type SidebarView = 'projects' | 'activity' | 'repo' | 'jobs' | 'routines' | 'scheduled' | 'team' | 'reviews'
 export type RightPanel = 'review' | 'files' | 'team' | 'browser' | 'timeline' | null
+
+/** What the Repo manager's diff viewer shows. `path` focuses one file. */
+export type RepoDiffSource = { cwd: string; title: string; path?: string } & (
+  | { kind: 'working'; view: 'staged' | 'unstaged' }
+  | { kind: 'commit'; ref: string }
+  | { kind: 'stash'; index: number }
+  | { kind: 'compare'; base: string }
+)
 
 export interface NewSessionPrefill {
   cwd?: string
@@ -53,6 +61,12 @@ export interface UiState {
   /** Job definitions per repo root (loaded on demand from <root>/repo_jobs). */
   jobDefs: Record<string, JobDef[]>
   jobsRoot?: string
+  /** Repository shown in the Repo manager view. */
+  repoRoot?: string
+  /** Full-screen file editor over the content area; `path` is the file to open. */
+  editorFile: false | { path?: string }
+  /** Wide diff viewer opened from the Repo manager. */
+  repoDiff: false | RepoDiffSource
   /** App-level routines (loaded on demand from ~/.claude-deck/routines). */
   routineDefs?: JobDef[]
   /** Background processes owned by projects. */
@@ -139,7 +153,9 @@ export const useStore = create<UiState>(() => ({
   jobEdit: false,
   jobRunFor: false,
   routineEdit: false,
-  routineRunFor: false
+  routineRunFor: false,
+  repoDiff: false,
+  editorFile: false
 }))
 
 export const get = useStore.getState

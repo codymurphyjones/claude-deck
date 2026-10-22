@@ -13,6 +13,8 @@ import { getTimeline, settings, state, updateSettings, updateState } from './con
 import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
 import * as gh from './github/ghService'
+import * as repo from './git/repoService'
+import type { CommitAction, StashAction } from '@shared/repo'
 import { archiveProjectChats, emitLibrary, removeProject, updateChat, updateProject } from './library'
 import { claudeHome, locateClaude, runtime } from './runtime'
 import type { SessionService } from './sessions/sessionService'
@@ -204,6 +206,11 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters })
       return r.canceled ? undefined : r.filePaths[0]
     },
+    'dialog.saveFile': async (e, defaultPath?: string) => {
+      const win = BrowserWindow.fromWebContents(e.sender)!
+      const r = await dialog.showSaveDialog(win, { defaultPath, properties: ['showOverwriteConfirmation', 'createDirectory'] })
+      return r.canceled ? undefined : r.filePath
+    },
     'dialog.confirm': async (e, message: string, detail?: string, buttons: string[] = ['OK', 'Cancel']) => {
       const win = BrowserWindow.fromWebContents(e.sender)!
       const r = await dialog.showMessageBox(win, { type: 'question', message, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 })
@@ -350,6 +357,36 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'gh.detail': (_e, cwd: string, n: number) => gh.prDetail(cwd, n),
     'gh.review': (_e, cwd: string, n: number, kind: 'approve' | 'request-changes' | 'comment', body: string) => gh.submitReview(cwd, n, kind, body),
     'gh.comment': (_e, cwd: string, n: number, body: string) => gh.comment(cwd, n, body),
+
+    // ---- repo manager ----
+    'repo.status': (_e, cwd: string) => repo.status(cwd),
+    'repo.init': (_e, cwd: string) => repo.init(cwd),
+    'repo.fetch': (_e, cwd: string) => repo.fetch(cwd),
+    'repo.pull': (_e, cwd: string, mode?: 'rebase' | 'merge') => repo.pull(cwd, mode),
+    'repo.push': (_e, cwd: string, opts?: { force?: boolean; tags?: boolean }) => repo.push(cwd, opts),
+    'repo.branches': (_e, cwd: string) => repo.branchList(cwd),
+    'repo.createBranch': (_e, cwd: string, name: string, opts?: { from?: string; checkout?: boolean }) => repo.createBranch(cwd, name, opts),
+    'repo.checkout': (_e, cwd: string, name: string, remote?: boolean) => repo.checkout(cwd, name, remote),
+    'repo.deleteBranch': (_e, cwd: string, name: string, opts?: { force?: boolean; remote?: boolean }) => repo.deleteBranch(cwd, name, opts),
+    'repo.renameBranch': (_e, cwd: string, from: string, to: string) => repo.renameBranch(cwd, from, to),
+    'repo.merge': (_e, cwd: string, name: string) => repo.merge(cwd, name),
+    'repo.rebase': (_e, cwd: string, onto: string) => repo.rebase(cwd, onto),
+    'repo.resolveOperation': (_e, cwd: string, action: 'continue' | 'abort') => repo.resolveOperation(cwd, action),
+    'repo.markResolved': (_e, cwd: string, file: string) => repo.markResolved(cwd, file),
+    'repo.log': (_e, cwd: string, opts?: { limit?: number; skip?: number; ref?: string }) => repo.log(cwd, opts),
+    'repo.lastMessage': (_e, cwd: string) => repo.lastMessage(cwd),
+    'repo.commitAction': (_e, cwd: string, sha: string, action: CommitAction) => repo.commitAction(cwd, sha, action),
+    'repo.compare': (_e, cwd: string, base: string) => repo.compare(cwd, base),
+    'repo.stashes': (_e, cwd: string) => repo.stashes(cwd),
+    'repo.stashSave': (_e, cwd: string, message: string, opts?: { untracked?: boolean; staged?: boolean }) => repo.stashSave(cwd, message, opts),
+    'repo.stashAction': (_e, cwd: string, index: number, action: StashAction) => repo.stashAction(cwd, index, action),
+    'repo.stashDiff': (_e, cwd: string, index: number) => repo.stashDiff(cwd, index),
+    'repo.tags': (_e, cwd: string) => repo.tags(cwd),
+    'repo.createTag': (_e, cwd: string, name: string, opts?: { ref?: string; message?: string }) => repo.createTag(cwd, name, opts),
+    'repo.deleteTag': (_e, cwd: string, name: string, remote?: string) => repo.deleteTag(cwd, name, remote),
+    'repo.pushTag': (_e, cwd: string, name: string, remote?: string) => repo.pushTag(cwd, name, remote),
+    'repo.remotes': (_e, cwd: string) => repo.remotes(cwd),
+    'repo.currentPr': (_e, cwd: string) => repo.currentPr(cwd),
 
     // ---- personalization ----
     'claudeMd.read': async (_e, root?: string) => {

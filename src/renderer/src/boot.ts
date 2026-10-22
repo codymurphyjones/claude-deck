@@ -27,6 +27,8 @@ function handleKey(e: KeyboardEvent): boolean {
   if (!cmd) return false
   // Let plain typing shortcuts work inside text fields.
   const t = e.target as HTMLElement | null
+  // The full-screen file editor owns its own shortcuts (save, open, find, zoom…).
+  if (t?.closest?.('.file-editor')) return false
   const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && !t.closest('.xterm')
   if (inField && !e.ctrlKey && !e.altKey) return false
   if (inField && ['zoomIn', 'zoomOut', 'zoomReset'].includes(cmd)) return false

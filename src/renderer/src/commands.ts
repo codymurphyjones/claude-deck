@@ -161,6 +161,16 @@ export function buildCommands(): Command[] {
         if (s) set({ automationEdit: { kind: 'inchat', cwd: s.cwd, targetChatId: s.claudeSessionId, name: `${s.name} follow-up`, schedule: { type: 'interval', minutes: 30 } } })
       }
     },
+    {
+      id: 'repo',
+      title: 'Repository manager',
+      group: 'Git',
+      icon: 'branch',
+      run: () => {
+        const root = activeSession()?.root
+        set({ sidebarOpen: true, sidebarView: 'repo', ...(root ? { repoRoot: root } : {}) })
+      }
+    },
     { id: 'reviews', title: 'Pull request reviews', group: 'Git', icon: 'pr', run: () => showSidebar('reviews') },
     { id: 'toggleReview', title: 'Review changes (diff)', group: 'Git', icon: 'branch', run: () => setRight('review') },
     { id: 'toggleFiles', title: 'Files touched by Claude', group: 'Layout', icon: 'file', run: () => setRight('files') },

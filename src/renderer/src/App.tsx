@@ -11,6 +11,7 @@ import { GoalDialog, FleetDialog, BroadcastDialog } from './components/Dialogs'
 import { AutomationDialog } from './components/Automations'
 import { JobDesigner, JobRunDialog } from './components/Jobs'
 import { RoutineRunDialog } from './components/Routines'
+import { RepoDiffDialog } from './components/RepoManager'
 import { ProcessAlerts, ProcessLogDialog } from './components/Actions'
 import { MenuHost, PromptDialog, Toasts } from './components/ui'
 
@@ -38,6 +39,7 @@ export function App() {
       <JobRunDialog />
       <JobDesigner scope="routine" />
       <RoutineRunDialog />
+      <RepoDiffDialog />
       <ProcessLogDialog />
       <PromptDialog />
       <MenuHost />

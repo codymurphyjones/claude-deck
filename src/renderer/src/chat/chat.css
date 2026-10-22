@@ -473,6 +473,38 @@ li.task.done > div {
 .hljs-strong {
   font-weight: 700;
 }
+/* token types used by the less common languages */
+.hljs-doctag,
+.hljs-template-tag,
+.hljs-meta .hljs-keyword,
+.hljs-variable.language_ {
+  color: var(--t-magenta);
+}
+.hljs-meta .hljs-string,
+.hljs-char.escape_,
+.hljs-link {
+  color: var(--t-green);
+}
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-title.function_.invoke__ {
+  color: var(--t-blue);
+}
+.hljs-bullet,
+.hljs-code,
+.hljs-operator {
+  color: var(--t-cyan);
+}
+.hljs-params,
+.hljs-subst,
+.hljs-punctuation {
+  color: inherit;
+}
+.hljs-link {
+  text-decoration: underline;
+}
 
 /* diagrams & charts */
 .md-mermaid {

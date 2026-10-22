@@ -430,6 +430,8 @@ export interface CommitInfo {
   subject: string
   author: string
   date: string
+  /** Branches/tags pointing at this commit. */
+  refs?: string[]
 }
 
 // ---------- Environments ----------

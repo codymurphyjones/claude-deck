@@ -5,6 +5,10 @@ import { api, bridge, errMsg, type LiveSession } from '../api'
 import { askText, attempt, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { Seg } from './ui'
+import { highlightDiffLines, langForFile } from '../highlight'
+
+/** Files with more diff lines than this are shown without highlighting. */
+const HIGHLIGHT_MAX_LINES = 6000
 
 interface Comment {
   file: string
@@ -46,10 +50,20 @@ export function DiffList({
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [draft, setDraft] = useState<{ file: string; line: number; code: string; text: string } | null>(null)
+  // Per file, per hunk: highlighted HTML for each line's content (without its +/- prefix).
+  const html = useMemo(
+    () =>
+      files.map((f) => {
+        const n = f.hunks.reduce((k, h) => k + h.lines.length, 0)
+        const lang = n > HIGHLIGHT_MAX_LINES ? 'plaintext' : langForFile(f.newPath || f.oldPath)
+        return f.hunks.map((h) => highlightDiffLines(h.lines, lang))
+      }),
+    [files]
+  )
   if (!files.length) return <div className="empty-note">No changes.</div>
   return (
     <div>
-      {files.map((f) => {
+      {files.map((f, fi) => {
         const path = f.newPath || f.oldPath
         const isViewed = viewed?.includes(path)
         const isCollapsed = collapsed[path] ?? isViewed ?? false
@@ -142,7 +156,10 @@ export function DiffList({
                               )}
                               <span className="no">{o ?? ''}</span>
                               <span className="no">{n ?? ''}</span>
-                              <span className="code">{l}</span>
+                              <span className="code hljs">
+                                {l[0]}
+                                <span dangerouslySetInnerHTML={{ __html: html[fi]?.[hi]?.[li] ?? '' }} />
+                              </span>
                             </div>
                             {lineComments.map((c, ci) => (
                               <div key={ci} className="inline-comment">

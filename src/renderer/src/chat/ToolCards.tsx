@@ -5,6 +5,7 @@ import { lineDiff, type DiffLine } from '@shared/lineDiff'
 import { api } from '../api'
 import { Icon } from '../components/Icon'
 import { highlight, langFromPath } from './mdRender'
+import { highlightDiffLines } from '../highlight'
 import { Markdown, resolvePath } from './Markdown'
 
 export type ToolItem = Extract<ChatItem, { kind: 'tool' }>
@@ -94,12 +95,13 @@ export function summarizeTools(tools: ToolItem[]): string {
 
 function DiffView({ lines, lang, max = 400 }: { lines: DiffLine[]; lang?: string; max?: number }) {
   const shown = lines.slice(0, max)
+  const html = useMemo(() => highlightDiffLines(shown.map((l) => l.t + l.s), lang), [lines, lang, max])
   return (
     <pre className="tool-diff">
       {shown.map((l, i) => (
         <span key={i} className={`d-line ${l.t === '+' ? 'd-add' : l.t === '-' ? 'd-del' : ''}`}>
           <span className="d-sign">{l.t}</span>
-          <span dangerouslySetInnerHTML={{ __html: highlight(l.s, lang) || ' ' }} />
+          <span dangerouslySetInnerHTML={{ __html: html[i] || ' ' }} />
         </span>
       ))}
       {lines.length > max && <span className="d-line d-hunk">… {lines.length - max} more lines</span>}
@@ -223,7 +225,7 @@ export const ToolCard = memo(function ToolCard({
       </>
     )
   } else if (Object.keys(t.input).length) {
-    body = <pre className="tool-out">{JSON.stringify(t.input, null, 2)}</pre>
+    body = <pre className="tool-out hljs" dangerouslySetInnerHTML={{ __html: highlight(JSON.stringify(t.input, null, 2), 'json') }} />
   }
 
   return (

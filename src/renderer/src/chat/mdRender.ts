@@ -1,29 +1,16 @@
 import { Lexer, Marked, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js/lib/common'
+import { highlight, langForFile } from '../highlight'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-const LANG_ALIAS: Record<string, string> = { sh: 'bash', shell: 'bash', zsh: 'bash', ps1: 'powershell', pwsh: 'powershell', yml: 'yaml', tsx: 'typescript', jsx: 'javascript', ts: 'typescript', js: 'javascript', py: 'python', rs: 'rust', md: 'markdown', cs: 'csharp', 'c++': 'cpp', lua: 'lua', toml: 'ini' }
+// Highlighting lives in ../highlight (full highlight.js, every language); re-exported for chat code.
+export { highlight }
 
-export function highlight(code: string, lang?: string): string {
-  const l = lang ? (LANG_ALIAS[lang.toLowerCase()] ?? lang.toLowerCase()) : ''
-  try {
-    if (l && hljs.getLanguage(l)) return hljs.highlight(code, { language: l, ignoreIllegals: true }).value
-    if (!l && code.length < 20_000) return hljs.highlightAuto(code).value
-  } catch {
-    /* fall through */
-  }
-  return esc(code)
-}
-
-export function langFromPath(p: string): string | undefined {
-  const ext = p.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = { ts: 'typescript', tsx: 'typescript', mts: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', py: 'python', rs: 'rust', go: 'go', java: 'java', cs: 'csharp', cpp: 'cpp', cc: 'cpp', h: 'cpp', c: 'c', rb: 'ruby', php: 'php', json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'xml', xml: 'xml', vue: 'xml', svelte: 'xml', yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', sh: 'bash', ps1: 'powershell', sql: 'sql', lua: 'lua', kt: 'kotlin', swift: 'swift', dart: 'dart', toc: 'ini' }
-  return map[ext]
-}
+/** highlight.js language for a file path ('plaintext' when unknown). */
+export const langFromPath = (p: string): string => langForFile(p)
 
 const FILE_REF = /^((?:[A-Za-z]:)?[\w.\-@~/\\]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:[-:]\d+)?)?$/
 

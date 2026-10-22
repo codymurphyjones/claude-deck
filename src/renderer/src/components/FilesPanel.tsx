@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
 import { EditorView, basicSetup } from 'codemirror'
-import { EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { javascript } from '@codemirror/lang-javascript'
-import { python } from '@codemirror/lang-python'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
-import { html } from '@codemirror/lang-html'
-import { css } from '@codemirror/lang-css'
+import { loadLanguage } from '../cmLanguage'
 import { api, bridge, type LiveSession } from '../api'
 import { askText, attempt, set, toast, useStore } from '../store'
 import { Icon } from './Icon'
@@ -20,18 +15,6 @@ export const fileUrl = (p: string): string => 'deck-file://local/' + p.replace(/
 
 const ext = (p: string): string => (p.split('.').pop() ?? '').toLowerCase()
 const IMG = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']
-
-function langFor(p: string): Extension[] {
-  const e = ext(p)
-  if (['js', 'jsx', 'mjs', 'cjs'].includes(e)) return [javascript({ jsx: true })]
-  if (['ts', 'tsx', 'mts', 'cts'].includes(e)) return [javascript({ jsx: true, typescript: true })]
-  if (e === 'py') return [python()]
-  if (e === 'json' || e === 'jsonc') return [json()]
-  if (e === 'md' || e === 'mdx') return [markdown()]
-  if (e === 'html' || e === 'htm' || e === 'vue' || e === 'svelte') return [html()]
-  if (e === 'css' || e === 'scss' || e === 'less') return [css()]
-  return []
-}
 
 function parseCsv(text: string, sep: string): string[][] {
   const rows: string[][] = []
@@ -66,13 +49,14 @@ function CodeView({ path, content, dark, onSave, onSelection }: { path: string; 
   const view = useRef<EditorView | null>(null)
   useEffect(() => {
     if (!host.current) return
+    const lang = new Compartment()
     const v = new EditorView({
       parent: host.current,
       state: EditorState.create({
         doc: content,
         extensions: [
           basicSetup,
-          ...langFor(path),
+          lang.of([]),
           ...(dark ? [oneDark] : []),
           EditorView.theme({ '&': { backgroundColor: 'var(--bg)' }, '.cm-gutters': { backgroundColor: 'var(--panel)', borderRight: '1px solid var(--border)' } }),
           keymap.of([
@@ -94,6 +78,8 @@ function CodeView({ path, content, dark, onSave, onSelection }: { path: string; 
       })
     })
     view.current = v
+    // Language support loads on demand (any of ~150 languages).
+    void loadLanguage(path, content.slice(0, 200).split('\n', 1)[0]).then((l) => l && view.current === v && v.dispatch({ effects: lang.reconfigure(l.support) }))
     return () => v.destroy()
   }, [path, dark])
   useEffect(() => {
@@ -169,8 +155,8 @@ export function FilesPanel({ session }: { session?: LiveSession }) {
               </option>
             ))}
           </select>
-          <button className="icon-btn sm" title="Open a file…" onClick={async () => setPath((await api.dialog.openFile()) ?? path)}>
-            <Icon name="folder-open" size={14} />
+          <button className="btn sm" title="Edit in the full-screen editor" onClick={() => set({ editorFile: { path } })}>
+            <Icon name="edit" size={13} /> Edit file
           </button>
           {path && (
             <>

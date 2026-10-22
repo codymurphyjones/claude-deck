@@ -180,18 +180,16 @@ export function JobsView() {
                     {!lr && j.description && ` · ${j.description}`}
                   </div>
                 </div>
-                <span className="actions">
-                  <button
-                    className="icon-btn sm"
-                    title="Run…"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      set({ jobRunFor: { root, slug: j.slug } })
-                    }}
-                  >
-                    <Icon name="play" size={12} />
-                  </button>
-                </span>
+                <button
+                  className="run-btn"
+                  title="Run…"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    set({ jobRunFor: { root, slug: j.slug } })
+                  }}
+                >
+                  <Icon name="play" size={11} /> Run
+                </button>
               </div>
             )
           })}

@@ -22,6 +22,7 @@ import { attach, clearSearch, clearTerminal, detach, focusTerminal, hydrate, ref
 import { Icon } from './Icon'
 import { ChatView } from '../chat/ChatView'
 import { UpdateBanner } from './Updates'
+import { FileEditor } from './FileEditor'
 import { openMenuAt, shortPath, STATUS_LABEL, timeAgo } from './ui'
 
 export function MainArea() {
@@ -71,6 +72,7 @@ export function MainArea() {
         ))}
         {!tabs.length && <EmptyState />}
       </div>
+      {!popout && <FileEditor />}
     </div>
   )
 }

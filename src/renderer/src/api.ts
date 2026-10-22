@@ -29,6 +29,7 @@ import type {
 } from '@shared/types'
 import type { ChatItem, ChatMeta } from '@shared/chat'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
+import type { BranchInfo, CommitAction, CurrentPr, RemoteInfo, RepoStatus, StashAction, StashInfo, TagInfo } from '@shared/repo'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 
 interface Bridge {
@@ -124,6 +125,7 @@ export const api = {
   dialog: {
     openFolder: c<string[]>('dialog.openFolder'),
     openFile: c<string | undefined, [{ name: string; extensions: string[] }[]?]>('dialog.openFile'),
+    saveFile: c<string | undefined, [string?]>('dialog.saveFile'),
     confirm: c<number, [string, string?, string[]?]>('dialog.confirm')
   },
   shell: {
@@ -227,6 +229,36 @@ export const api = {
     detail: c<PullRequestDetail, [string, number]>('gh.detail'),
     review: c<void, [string, number, 'approve' | 'request-changes' | 'comment', string]>('gh.review'),
     comment: c<void, [string, number, string]>('gh.comment')
+  },
+  repo: {
+    status: c<RepoStatus, [string]>('repo.status'),
+    init: c<void, [string]>('repo.init'),
+    fetch: c<string, [string]>('repo.fetch'),
+    pull: c<string, [string, ('rebase' | 'merge')?]>('repo.pull'),
+    push: c<string, [string, { force?: boolean; tags?: boolean }?]>('repo.push'),
+    branches: c<BranchInfo[], [string]>('repo.branches'),
+    createBranch: c<void, [string, string, { from?: string; checkout?: boolean }?]>('repo.createBranch'),
+    checkout: c<void, [string, string, boolean?]>('repo.checkout'),
+    deleteBranch: c<void, [string, string, { force?: boolean; remote?: boolean }?]>('repo.deleteBranch'),
+    renameBranch: c<void, [string, string, string]>('repo.renameBranch'),
+    merge: c<string, [string, string]>('repo.merge'),
+    rebase: c<string, [string, string]>('repo.rebase'),
+    resolveOperation: c<void, [string, 'continue' | 'abort']>('repo.resolveOperation'),
+    markResolved: c<void, [string, string]>('repo.markResolved'),
+    log: c<CommitInfo[], [string, { limit?: number; skip?: number; ref?: string }?]>('repo.log'),
+    lastMessage: c<string, [string]>('repo.lastMessage'),
+    commitAction: c<string, [string, string, CommitAction]>('repo.commitAction'),
+    compare: c<DiffFile[], [string, string]>('repo.compare'),
+    stashes: c<StashInfo[], [string]>('repo.stashes'),
+    stashSave: c<void, [string, string, { untracked?: boolean; staged?: boolean }?]>('repo.stashSave'),
+    stashAction: c<void, [string, number, StashAction]>('repo.stashAction'),
+    stashDiff: c<DiffFile[], [string, number]>('repo.stashDiff'),
+    tags: c<TagInfo[], [string]>('repo.tags'),
+    createTag: c<void, [string, string, { ref?: string; message?: string }?]>('repo.createTag'),
+    deleteTag: c<void, [string, string, string?]>('repo.deleteTag'),
+    pushTag: c<string, [string, string, string?]>('repo.pushTag'),
+    remotes: c<RemoteInfo[], [string]>('repo.remotes'),
+    currentPr: c<CurrentPr | null, [string]>('repo.currentPr')
   },
   claudeMd: {
     read: c<{ file: string; content: string }, [string?]>('claudeMd.read'),
