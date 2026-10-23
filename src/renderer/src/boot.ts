@@ -169,7 +169,14 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
     set({ systemDark: dark })
     applyLook()
   })
-  bridge.on('ui:focusSession', (id: string) => focusSessionTab(id))
+  // From a notification click: show the session even if its tab was closed or a modal is open.
+  bridge.on('ui:focusSession', (id: string) => {
+    const s = get().sessions[id]
+    if (isPopout || !s) return
+    set({ settingsOpen: false, palette: false })
+    if (s.hostWindow === windowId && s.kind !== 'shell' && !get().tabs.some((t) => t.sessionIds.includes(id))) addSessionToTabs(id, 'tab')
+    focusSessionTab(id)
+  })
   bridge.on('app:openPaths', async (paths: string[]) => {
     const folders = await api.fs.resolveDrop(paths)
     await openFolders(folders)

@@ -11,7 +11,7 @@ import { loadEnvironment, setupCommand } from '../env/environmentService'
 import { currentBranch, snapshot, toplevel } from '../git/gitService'
 import { emitLibrary, ensureProject, findProjectForFolder, getChat, updateChat, upsertChat } from '../library'
 import { MeshService } from '../mesh/meshService'
-import { focusSession, notify, updateSleepBlocker } from '../notify/notifyService'
+import { dismissNotification, focusSession, notify, updateSleepBlocker } from '../notify/notifyService'
 import type { PtyService } from '../pty/ptyService'
 import { defaultShell, runtime } from '../runtime'
 import { findTranscript, loadConversation, ownerOf, prepareResume, sessionUsage } from '../transcripts/transcriptService'
@@ -29,7 +29,10 @@ import { plainEnv } from './launch'
 import { adapter, providerOf } from '../agents/registry'
 import { hookToEvent, resultToHook, type HookPayload, type HookResult } from '../agents/claude/hooks'
 import type { AgentChat, LifecycleResult, PermissionDecision } from '../agents/types'
-import { chatToText, type ChatOp } from '@shared/chat'
+import { chatToText, type ChatOp, type PermissionRequest } from '@shared/chat'
+
+/** Tag of the toast asking for one permission request. */
+const permTag = (sessionId: string, requestId: string): string => `perm:${sessionId}:${requestId}`
 
 export class SessionService extends EventEmitter {
   readonly sessions = new Map<string, SessionInfo & { contextTokens?: number; queued?: string[]; turnFiles?: Set<string> }>()
@@ -302,12 +305,23 @@ export class SessionService extends EventEmitter {
         this.changed(s)
       }
     })
-    chat.on('status', (st: 'working' | 'needs-input' | 'idle', perm?: { toolName: string; description?: string }) => {
+    chat.on('status', (st: 'working' | 'needs-input' | 'idle', perm?: PermissionRequest) => {
       if (st === 'needs-input') {
         s.status = 'needs-input'
         s.attention = `${descriptorOf(s.provider).label} wants to use ${perm?.toolName ?? 'a tool'}${perm?.description ? `: ${perm.description}` : ''}`
         if (!this.isActive(s)) s.unread = true
-        notify(perm?.toolName === 'AskUserQuestion' ? 'question' : 'permission', s, `${s.name} needs you`, s.attention)
+        if (perm?.toolName === 'AskUserQuestion' || !perm?.requestId) notify('question', s, `${s.name} needs you`, s.attention)
+        else {
+          // Answerable straight from the toast; clicking its body opens the session instead.
+          const decide = (allow: boolean) => () => this.chatPermission(s.id, perm.requestId, { allow })
+          notify('permission', s, `${s.name} needs you`, s.attention, {
+            tag: permTag(s.id, perm.requestId),
+            actions: [
+              { label: 'Allow', run: decide(true) },
+              { label: 'Deny', run: decide(false) }
+            ]
+          })
+        }
       } else if (st === 'working') {
         s.status = 'working'
         s.attention = undefined
@@ -351,6 +365,7 @@ export class SessionService extends EventEmitter {
   }
 
   chatPermission(id: string, requestId: string, d: PermissionDecision): void {
+    dismissNotification(permTag(id, requestId))
     this.chats.get(id)?.respondPermission(requestId, d)
     const s = this.sessions.get(id)
     if (s && !this.chats.get(id)?.hasPendingPermission() && s.status === 'needs-input') {
@@ -809,7 +824,7 @@ export class SessionService extends EventEmitter {
   }
 
   focus(id: string): void {
-    focusSession(id)
+    focusSession(id, this.sessions.get(id)?.hostWindow)
   }
 
   emitLibrary(): void {

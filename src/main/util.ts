@@ -41,6 +41,37 @@ export function run(
   })
 }
 
+/**
+ * Splits streamed text into lines. Only the new chunk is scanned and a partial line is kept as
+ * pieces, so a multi-megabyte line (big tool results, images) costs linear time, not quadratic.
+ */
+export class LineBuffer {
+  private parts: string[] = []
+
+  push(chunk: string, onLine: (line: string) => void): void {
+    let start = 0
+    let i: number
+    while ((i = chunk.indexOf('\n', start)) >= 0) {
+      let line = chunk.slice(start, i)
+      if (this.parts.length) {
+        this.parts.push(line)
+        line = this.parts.join('')
+        this.parts = []
+      }
+      start = i + 1
+      onLine(line)
+    }
+    if (start < chunk.length) this.parts.push(chunk.slice(start))
+  }
+
+  /** The unterminated tail (cleared). */
+  rest(): string {
+    const r = this.parts.join('')
+    this.parts = []
+    return r
+  }
+}
+
 /** Spawn a long-running process and stream stdout lines. */
 export function spawnLines(
   file: string,
@@ -53,22 +84,21 @@ export function spawnLines(
     windowsHide: true,
     shell: /\.(cmd|bat)$/i.test(file)
   })
-  let buf = ''
-  child.stdout.on('data', (d: Buffer) => {
-    buf += d.toString('utf8')
-    let i: number
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).replace(/\r$/, '')
-      buf = buf.slice(i + 1)
+  const buf = new LineBuffer()
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (d: string) =>
+    buf.push(d, (l) => {
+      const line = l.replace(/\r$/, '')
       if (line) opts.onLine(line)
-    }
-  })
+    })
+  )
   child.stderr.on('data', () => {})
   if (opts.input !== undefined) child.stdin.end(opts.input)
   else child.stdin.end()
   const done = new Promise<number>((resolve) => {
     child.on('close', (code) => {
-      if (buf.trim()) opts.onLine(buf.trim())
+      const rest = buf.rest().trim()
+      if (rest) opts.onLine(rest)
       resolve(code ?? 1)
     })
     child.on('error', () => resolve(1))

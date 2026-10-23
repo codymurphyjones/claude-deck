@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { EventEmitter } from 'events'
+import { LineBuffer } from '../../util'
 
 type Json = Record<string, unknown>
 
@@ -11,7 +12,7 @@ type Json = Record<string, unknown>
  */
 export class AppServer extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams | undefined
-  private buf = ''
+  private buf = new LineBuffer()
   private stderr = ''
   private seq = 0
   private pending = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void }>()
@@ -90,27 +91,24 @@ export class AppServer extends EventEmitter {
   }
 
   private onData(d: string): void {
-    this.buf += d
-    let i: number
-    while ((i = this.buf.indexOf('\n')) >= 0) {
-      const line = this.buf.slice(0, i).trim()
-      this.buf = this.buf.slice(i + 1)
-      if (!line) continue
+    this.buf.push(d, (raw) => {
+      const line = raw.trim()
+      if (!line) return
       let j: Json
       try {
         j = JSON.parse(line)
       } catch {
-        continue
+        return
       }
       const hasId = j.id !== undefined && j.id !== null
       if (hasId && typeof j.method === 'string') this.emit('request', j.id, j.method, (j.params as Json) ?? {})
       else if (hasId) {
         const p = this.pending.get(Number(j.id))
-        if (!p) continue
+        if (!p) return
         this.pending.delete(Number(j.id))
         if (j.error) p.reject(new Error(String((j.error as Json).message ?? 'Codex error')))
         else p.resolve((j.result as Json) ?? {})
       } else if (typeof j.method === 'string') this.emit('notification', j.method, (j.params as Json) ?? {})
-    }
+    })
   }
 }

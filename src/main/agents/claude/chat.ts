@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import type { PermissionRequest, SlashCommandInfo } from '@shared/chat'
 import type { SessionInfo } from '@shared/types'
+import { LineBuffer } from '../../util'
 import { ChatBase } from '../chatBase'
 import type { AgentChat, PermissionDecision } from '../types'
 import { buildClaudeArgs, claudeEnv } from './launch'
@@ -14,7 +15,7 @@ type Json = Record<string, unknown>
  */
 export class ClaudeChat extends ChatBase implements AgentChat {
   private proc: ChildProcessWithoutNullStreams | undefined
-  private buf = ''
+  private buf = new LineBuffer()
   private stderr = ''
   private reqSeq = 0
   private pendingControl = new Map<string, (res: Json) => void>()
@@ -149,24 +150,21 @@ export class ClaudeChat extends ChatBase implements AgentChat {
 
   // ------------------------------------------------------------------ incoming
   private onData(d: string): void {
-    this.buf += d
-    let i: number
-    while ((i = this.buf.indexOf('\n')) >= 0) {
-      const line = this.buf.slice(0, i).trim()
-      this.buf = this.buf.slice(i + 1)
-      if (!line) continue
+    this.buf.push(d, (raw) => {
+      const line = raw.trim()
+      if (!line) return
       let j: Json
       try {
         j = JSON.parse(line)
       } catch {
-        continue
+        return
       }
       try {
         this.handle(j)
       } catch (e) {
         this.notice(`Display error: ${(e as Error).message}`, 'warn')
       }
-    }
+    })
   }
 
   private handle(j: Json): void {

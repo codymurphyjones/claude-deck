@@ -96,6 +96,41 @@ export function applyChatOp(items: ChatItem[], op: ChatOp): ChatItem[] {
   }
 }
 
+/**
+ * Apply a burst of ops with a single array copy (applyChatOp copies per op, which is quadratic
+ * over a burst). Changed items still get new object identities so memoized views re-render.
+ */
+export function applyChatOps(items: ChatItem[], ops: ChatOp[]): ChatItem[] {
+  if (ops.length === 1) return applyChatOp(items, ops[0])
+  let next = items.slice()
+  for (const op of ops) {
+    switch (op.op) {
+      case 'reset':
+        next = op.items.slice()
+        break
+      case 'append':
+        next.push(op.item)
+        break
+      case 'remove':
+        next = next.filter((i) => i.id !== op.id)
+        break
+      case 'patch': {
+        const idx = findIdx(next, op.id)
+        if (idx >= 0) next[idx] = { ...next[idx], ...op.patch } as ChatItem
+        break
+      }
+      case 'delta': {
+        const idx = findIdx(next, op.id)
+        if (idx < 0) break
+        const it = next[idx] as ChatItem & { text?: string; partialInput?: string }
+        next[idx] = { ...it, [op.field]: (it[op.field] ?? '') + op.text } as ChatItem
+        break
+      }
+    }
+  }
+  return next
+}
+
 function findIdx(items: ChatItem[], id: string): number {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].id === id) return i
   return -1

@@ -58,7 +58,41 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
   return { blocks, children }
 }
 
-const fmtDur = (ms?: number): string => (!ms ? '' : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
+const sameList = (a?: readonly unknown[], b?: readonly unknown[]): boolean => a === b || (!!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]))
+
+/**
+ * Blocks and the children map are rebuilt on every op, so compare what a block actually shows:
+ * its items (by identity) and their subagent children. Unchanged blocks then skip rendering.
+ */
+function sameBlock(a: Block, b: Block, ca: Map<string, ChatItem[]>, cb: Map<string, ChatItem[]>): boolean {
+  if (a.type === 'tools' || b.type === 'tools') {
+    if (a.type !== 'tools' || b.type !== 'tools') return false
+    return sameList(a.tools, b.tools) && sameList(a.thinking, b.thinking) && a.tools.every((t) => sameList(ca.get(t.id), cb.get(t.id)))
+  }
+  return a.type === b.type && a.item === b.item && (a.type !== 'special' || sameList(ca.get(a.item.id), cb.get(b.item.id)))
+}
+
+type BlockProps = {
+  block: Block
+  session: LiveSession
+  dark: boolean
+  children: Map<string, ChatItem[]>
+  thinkingMode: 'collapsed' | 'expanded' | 'hidden'
+  toolsMode: 'grouped' | 'expanded'
+  isLast: boolean
+  busy: boolean
+}
+
+const sameBlockProps = (p: BlockProps, n: BlockProps): boolean =>
+  p.session === n.session &&
+  p.dark === n.dark &&
+  p.thinkingMode === n.thinkingMode &&
+  p.toolsMode === n.toolsMode &&
+  p.isLast === n.isLast &&
+  p.busy === n.busy &&
+  sameBlock(p.block, n.block, p.children, n.children)
+
+const fmtDur =(ms?: number): string => (!ms ? '' : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
 const fmtTok = (n?: number): string => (!n ? '' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 
 export function ChatView({ session: s }: { session: LiveSession }) {
@@ -124,7 +158,7 @@ export function ChatView({ session: s }: { session: LiveSession }) {
           {!chat?.ready && <div className="chat-loading">Loading conversation…</div>}
           {chat?.ready && !items.length && <ChatEmpty session={s} />}
           {blocks.map((b, i) => (
-            <BlockView key={'item' in b ? b.item.id : b.id} block={b} session={s} dark={dark} children={children} thinkingMode={cfg.thinking} toolsMode={cfg.tools} isLast={i === blocks.length - 1} busy={busy} />
+            <BlockView key={'item' in b ? b.item.id : b.id} block={b} session={s} dark={dark} children={children} thinkingMode={cfg.thinking} toolsMode={cfg.tools} isLast={i === blocks.length - 1} busy={i === blocks.length - 1 && busy} />
           ))}
           {busy && !streamingText && <WorkingIndicator session={s} />}
           {s.status === 'exited' && (
@@ -161,16 +195,7 @@ const BlockView = memo(function BlockView({
   toolsMode,
   isLast,
   busy
-}: {
-  block: Block
-  session: LiveSession
-  dark: boolean
-  children: Map<string, ChatItem[]>
-  thinkingMode: 'collapsed' | 'expanded' | 'hidden'
-  toolsMode: 'grouped' | 'expanded'
-  isLast: boolean
-  busy: boolean
-}) {
+}: BlockProps) {
   switch (b.type) {
     case 'user':
       return <UserMessage item={b.item} cwd={s.cwd} dark={dark} />
@@ -211,7 +236,7 @@ const BlockView = memo(function BlockView({
         </div>
       )
   }
-})
+}, sameBlockProps)
 
 function UserMessage({ item, cwd, dark }: { item: Extract<ChatItem, { kind: 'user' }>; cwd: string; dark: boolean }) {
   if (item.injected) {

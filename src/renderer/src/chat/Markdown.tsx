@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useEffect, useMemo, useRef } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { toast } from '../store'
 import { renderChart } from './chart'
@@ -46,9 +46,37 @@ export function handleMarkdownClick(e: React.MouseEvent, cwd: string): void {
   }
 }
 
+/**
+ * While streaming, re-render at most every few times the last render's cost (each render parses
+ * the whole message so far), so long responses keep the UI responsive. Final text shows at once.
+ */
+function useStreamThrottle(text: string, streaming: boolean | undefined, costMs: React.RefObject<number>): string {
+  const [shown, setShown] = useState(text)
+  const last = useRef(0)
+  useEffect(() => {
+    if (!streaming) return
+    const interval = Math.min(1000, Math.max(60, costMs.current * 5))
+    const t = setTimeout(
+      () => {
+        last.current = performance.now()
+        setShown(text)
+      },
+      Math.max(0, last.current + interval - performance.now())
+    )
+    return () => clearTimeout(t)
+  }, [text, streaming, costMs])
+  return streaming ? shown : text
+}
+
 export const Markdown = memo(function Markdown({ text, streaming, cwd, dark }: { text: string; streaming?: boolean; cwd: string; dark: boolean }) {
-  const deferred = useDeferredValue(text)
-  const html = useMemo(() => renderMarkdown(deferred, streaming), [deferred, streaming])
+  const cost = useRef(0)
+  const deferred = useDeferredValue(useStreamThrottle(text, streaming, cost))
+  const html = useMemo(() => {
+    const t0 = performance.now()
+    const out = renderMarkdown(deferred, streaming)
+    cost.current = performance.now() - t0
+    return out
+  }, [deferred, streaming])
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
