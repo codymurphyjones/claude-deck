@@ -8,6 +8,8 @@ import { highlight, langFromPath } from './mdRender'
 import { highlightDiffLines } from '../highlight'
 import { Markdown, resolvePath } from './Markdown'
 
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch'])
+
 export type ToolItem = Extract<ChatItem, { kind: 'tool' }>
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : v === undefined ? '' : JSON.stringify(v, null, 2))
@@ -354,6 +356,15 @@ export function PermissionBar({ sessionId, perm }: { sessionId: string; perm: Pe
           </button>
           <button className="btn sm ghost" onClick={() => setFeedback('')}>
             Deny with feedback…
+          </button>
+          {/* Switching mode also approves every waiting prompt the new mode covers (see setPermissionMode). */}
+          {EDIT_TOOLS.has(perm.toolName) && (
+            <button className="btn sm ghost" title="Switch to Accept edits — approves this and any further edits" onClick={() => void api.chat.setMode(sessionId, 'acceptEdits')}>
+              Accept all edits
+            </button>
+          )}
+          <button className="btn sm ghost danger" title="Switch to Bypass permissions — approves this and everything after it" onClick={() => void api.chat.setMode(sessionId, 'bypassPermissions')}>
+            Bypass from here
           </button>
         </div>
       ) : (

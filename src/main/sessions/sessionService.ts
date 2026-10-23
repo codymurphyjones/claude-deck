@@ -378,9 +378,18 @@ export class SessionService extends EventEmitter {
   async setMode(id: string, mode: string): Promise<void> {
     const c = this.chats.get(id)
     if (!c) return
-    await c.setPermissionMode(mode)
+    try {
+      await c.setPermissionMode(mode)
+    } catch (e) {
+      c.notice(`Could not switch permission mode: ${(e as Error).message}`, 'error')
+      return
+    }
     const s = this.sessions.get(id)
     if (s) {
+      if (!c.hasPendingPermission() && s.status === 'needs-input') {
+        s.status = 'working'
+        s.attention = undefined
+      }
       s.permissionMode = mode
       s.launch = { ...s.launch, permissionMode: mode }
       this.changed(s)

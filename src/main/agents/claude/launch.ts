@@ -47,6 +47,9 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
   if (effort) args.push('--effort', effort)
   const mode = L.permissionMode || prov.defaultPermissionMode
   if (mode) args.push('--permission-mode', mode)
+  // Without this the CLI refuses a later switch to bypassPermissions (error "bypass_not_launched").
+  // It only makes bypass selectable; the session still starts in `mode`.
+  args.push('--allow-dangerously-skip-permissions')
   args.push('--settings', settingsFile)
 
   if (cfg.mesh.enabled) {

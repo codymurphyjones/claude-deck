@@ -32,7 +32,7 @@ export class CodexChat extends ChatBase implements AgentChat {
   private ready: Promise<void> | undefined
   private queue: Send[] = []
   private pendingContext: string[] = []
-  private pendingPerms = new Map<string, { rpcId: number | string; itemId: string; legacy: boolean }>()
+  private pendingPerms = new Map<string, { rpcId: number | string; itemId: string; legacy: boolean; isCommand: boolean }>()
   private denials = new Map<string, string>()
   private toolIds = new Map<string, string[]>() // codex item id -> tool item ids
   private outputs = new Map<string, string>()
@@ -178,6 +178,8 @@ export class CodexChat extends ChatBase implements AgentChat {
   async setPermissionMode(mode: string): Promise<void> {
     this.mode = mode === 'default' ? undefined : mode
     this.modeDirty = true
+    // The new policy only applies from the next turn; settle approvals already waiting in this one.
+    for (const [requestId, p] of [...this.pendingPerms]) if (mode === 'bypassPermissions' || (mode === 'acceptEdits' && !p.isCommand)) this.respondPermission(requestId, { allow: true })
   }
 
   async setModel(model: string): Promise<void> {
@@ -353,7 +355,7 @@ export class CodexChat extends ChatBase implements AgentChat {
     const first = this.findTool(this.toolIds.get(itemId)![0])!
     const requestId = String(rpcId)
     const permission: PermissionRequest = { requestId, toolName: first.name, input: first.input, description: (p.reason as string | undefined) ?? undefined, sessionApproval: true, status: 'pending' }
-    this.pendingPerms.set(requestId, { rpcId, itemId, legacy })
+    this.pendingPerms.set(requestId, { rpcId, itemId, legacy, isCommand })
     this.patchTool(first.id, { permission })
     // The session service notifies from this status (as for Claude's can_use_tool).
     this.emit('status', 'needs-input', permission)

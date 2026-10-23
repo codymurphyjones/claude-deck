@@ -8,6 +8,15 @@ import { buildClaudeArgs, claudeEnv } from './launch'
 
 type Json = Record<string, unknown>
 
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+/** Tools that ask the user something rather than for permission — never auto-answered. */
+const INTERACTIVE_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
+
+function modeAllows(mode: string, tool: string | undefined): boolean {
+  if (!tool || INTERACTIVE_TOOLS.has(tool)) return false
+  return mode === 'bypassPermissions' || (mode === 'acceptEdits' && EDIT_TOOLS.has(tool))
+}
+
 /**
  * One Claude Code process in headless streaming mode (`-p --input-format stream-json
  * --output-format stream-json --permission-prompt-tool stdio`), normalized into ChatItems.
@@ -123,8 +132,12 @@ export class ClaudeChat extends ChatBase implements AgentChat {
     void this.control({ subtype: 'interrupt' })
   }
 
-  setPermissionMode(mode: string): Promise<Json> {
-    return this.control({ subtype: 'set_permission_mode', mode })
+  /** Switch modes live; prompts already waiting that the new mode would allow are approved on the spot. */
+  async setPermissionMode(mode: string): Promise<Json> {
+    const res = await this.control({ subtype: 'set_permission_mode', mode })
+    if (res.error) throw new Error(String(res.error))
+    for (const [requestId, p] of [...this.pendingPerms]) if (modeAllows(mode, this.findTool(p.toolUseId)?.name)) this.respondPermission(requestId, { allow: true })
+    return res
   }
 
   setModel(model: string): Promise<Json> {
@@ -185,7 +198,7 @@ export class ClaudeChat extends ChatBase implements AgentChat {
         const cb = this.pendingControl.get(r.request_id as string)
         if (cb) {
           this.pendingControl.delete(r.request_id as string)
-          cb((r.response as Json) ?? {})
+          cb(r.subtype === 'error' ? { error: r.error ?? 'Request failed' } : ((r.response as Json) ?? {}))
         }
         return
       }
