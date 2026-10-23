@@ -4,6 +4,7 @@ import type { LiveSession } from '../api'
 import { api } from '../api'
 import { Icon } from '../components/Icon'
 import { openMenu } from '../components/ui'
+import { useFind } from '../components/FindBar'
 import { toast, useStore } from '../store'
 import { resolveTheme } from '../theme'
 import { ensureChat, useChat } from './chatStore'
@@ -103,6 +104,7 @@ export function ChatView({ session: s }: { session: LiveSession }) {
   const stick = useRef(true)
   const [showJump, setShowJump] = useState(false)
   const cfg = settings.chat
+  const find = useFind({ searchRoot: () => scrollRef.current })
 
   useEffect(() => {
     void ensureChat(s.id)
@@ -152,7 +154,8 @@ export function ChatView({ session: s }: { session: LiveSession }) {
   }
 
   return (
-    <div className={`chat density-${cfg.density} width-${cfg.width}`} style={{ ['--chat-size' as string]: `${cfg.fontSize}px` }}>
+    <div ref={find.scope} className={`chat density-${cfg.density} width-${cfg.width}`} style={{ ['--chat-size' as string]: `${cfg.fontSize}px` }}>
+      {find.bar}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll} onContextMenu={onContextMenu}>
         <div className="chat-col">
           {!chat?.ready && <div className="chat-loading">Loading conversation…</div>}

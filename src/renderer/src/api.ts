@@ -147,6 +147,7 @@ export const api = {
     removeProject: c<void, [string]>('library.removeProject'),
     updateChat: c<void, [string, Partial<ChatRecord>]>('library.updateChat'),
     archiveProjectChats: c<void, [string]>('library.archiveProjectChats'),
+    removeChat: c<void, [string]>('library.removeChat'),
     addFolderToProject: c<void, [string, string]>('library.addFolderToProject'),
     makePrimary: c<void, [string, string]>('library.makePrimary'),
     transcripts: c<TranscriptSummary[]>('library.transcripts'),

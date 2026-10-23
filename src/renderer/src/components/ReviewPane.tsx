@@ -5,6 +5,7 @@ import { api, bridge, errMsg, type LiveSession } from '../api'
 import { askText, attempt, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { Seg, useExclusive } from './ui'
+import { useFind } from './FindBar'
 import { loadProgressive, type ProgressiveLoad } from '../progressive'
 import { highlightDiffLines, langForFile } from '../highlight'
 
@@ -64,9 +65,11 @@ export function DiffList({
       }),
     [files]
   )
+  const find = useFind()
   if (!files.length) return <div className="empty-note">No changes.</div>
   return (
-    <div>
+    <div ref={find.scope}>
+      {find.bar}
       {files.map((f, fi) => {
         const path = f.newPath || f.oldPath
         const isViewed = viewed?.includes(path)
@@ -158,8 +161,8 @@ export function DiffList({
                                   +
                                 </button>
                               )}
-                              <span className="no">{o ?? ''}</span>
-                              <span className="no">{n ?? ''}</span>
+                              <span className="no" data-find-skip>{o ?? ''}</span>
+                              <span className="no" data-find-skip>{n ?? ''}</span>
                               <span className="code hljs">
                                 {l[0]}
                                 <span dangerouslySetInnerHTML={{ __html: html[fi]?.[hi]?.[li] ?? '' }} />

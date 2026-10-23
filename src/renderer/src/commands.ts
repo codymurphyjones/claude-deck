@@ -23,6 +23,7 @@ import {
   toggleShell
 } from './store'
 import { clearTerminal } from './terminal/registry'
+import { openFind } from './find'
 import { newJob } from '@shared/jobs'
 import { designInChat, designRoutineInChat, openJobsFor } from './components/Jobs'
 import { openRoutines, runRoutine } from './components/Routines'
@@ -206,6 +207,8 @@ export function buildCommands(): Command[] {
     },
     { id: 'restartSession', title: 'Restart session', group: 'Session', icon: 'refresh', run: withActive((id) => { clearTerminal(id); return api.session.restart(id) }) },
     { id: 'clearTerminal', title: 'Clear terminal view', group: 'Session', icon: 'trash', run: withActive((id) => clearTerminal(id)) },
+    // Find in the chat / diff / file view being worked in, else in the focused pane.
+    { id: 'find', title: 'Find…', group: 'Session', icon: 'search', run: () => void (openFind() || window.dispatchEvent(new CustomEvent('deck:find'))) },
     { id: 'findInTerminal', title: 'Find in terminal', group: 'Session', icon: 'search', run: () => window.dispatchEvent(new CustomEvent('deck:find')) },
     {
       id: 'remoteControl',

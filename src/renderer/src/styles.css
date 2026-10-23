@@ -822,6 +822,27 @@ label.check {
   width: 220px;
   height: 26px;
 }
+/* In-view find bar: pinned to the top of the scrolling view without taking layout space. */
+.find-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 6;
+}
+.find-count {
+  min-width: 64px;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+::highlight(deck-find) {
+  background-color: var(--accent-soft);
+}
+::highlight(deck-find-current) {
+  background-color: var(--accent);
+  color: var(--bg);
+}
 
 /* ---------------- empty state ---------------- */
 .empty {

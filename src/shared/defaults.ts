@@ -20,6 +20,7 @@ export const DEFAULT_SHORTCUTS: Record<string, string> = {
   toggleTimeline: 'Ctrl+Alt+L',
   composer: 'Ctrl+Shift+Enter',
   deliverMessages: 'Ctrl+Shift+M',
+  find: 'Ctrl+F',
   findInTerminal: 'Ctrl+Shift+F',
   splitRight: 'Ctrl+Shift+D',
   sideChat: 'Ctrl+Alt+S',

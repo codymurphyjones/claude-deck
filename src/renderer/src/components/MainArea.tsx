@@ -23,6 +23,7 @@ import {
 import { attach, clearSearch, clearTerminal, detach, focusTerminal, hydrate, refit, rehydrate, searchTerminal } from '../terminal/registry'
 import { Icon } from './Icon'
 import { ChatView } from '../chat/ChatView'
+import { openFind } from '../find'
 import { UpdateBanner } from './Updates'
 import { FileEditor } from './FileEditor'
 import { openMenuAt, shortPath, STATUS_LABEL, timeAgo } from './ui'
@@ -121,6 +122,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
   const home = useStore((st) => st.homedir)
   const peers = useStore((st) => (s?.meshGroup ? Object.values(st.sessions).filter((x) => x.meshGroup === s.meshGroup && x.id !== id && x.status !== 'exited' && x.kind === 'agent').length : 0))
   const hostRef = useRef<HTMLDivElement>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [q, setQ] = useState('')
   const hostedHere = !!s && s.hostWindow === windowId
@@ -149,11 +151,14 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
 
   useEffect(() => {
     const onFind = (): void => {
-      if (tabActive && focused) setSearchOpen(true)
+      if (!tabActive || !focused) return
+      // Agent sessions render a chat, which has its own find bar.
+      if (s?.kind === 'agent') openFind(paneRef.current)
+      else setSearchOpen(true)
     }
     window.addEventListener('deck:find', onFind)
     return () => window.removeEventListener('deck:find', onFind)
-  }, [tabActive, focused])
+  }, [tabActive, focused, s?.kind])
 
   if (!s) return <div className="pane" />
 
@@ -202,6 +207,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
 
   return (
     <div
+      ref={paneRef}
       className={`pane ${focused && multi ? 'focused' : ''}`}
       onMouseDown={() => {
         if (!focused) focusTab(tabId, id)

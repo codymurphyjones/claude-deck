@@ -3,12 +3,14 @@ import { marked } from 'marked'
 import { EditorView, basicSetup } from 'codemirror'
 import { Compartment, EditorState } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
+import { openSearchPanel } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { loadLanguage } from '../cmLanguage'
 import { api, bridge, type LiveSession } from '../api'
 import { askText, attempt, set, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { Seg } from './ui'
+import { useFind } from './FindBar'
 import { resolveTheme } from '../theme'
 
 export const fileUrl = (p: string): string => 'deck-file://local/' + p.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:')
@@ -44,9 +46,8 @@ function parseCsv(text: string, sep: string): string[][] {
   return rows
 }
 
-function CodeView({ path, content, dark, onSave, onSelection }: { path: string; content: string; dark: boolean; onSave: (t: string) => void; onSelection: (sel: { from: number; to: number; text: string } | null) => void }) {
+function CodeView({ path, content, dark, onSave, onSelection, view }: { path: string; content: string; dark: boolean; onSave: (t: string) => void; onSelection: (sel: { from: number; to: number; text: string } | null) => void; view: React.MutableRefObject<EditorView | null> }) {
   const host = useRef<HTMLDivElement>(null)
-  const view = useRef<EditorView | null>(null)
   useEffect(() => {
     if (!host.current) return
     const lang = new Compartment()
@@ -80,7 +81,10 @@ function CodeView({ path, content, dark, onSave, onSelection }: { path: string; 
     view.current = v
     // Language support loads on demand (any of ~150 languages).
     void loadLanguage(path, content.slice(0, 200).split('\n', 1)[0]).then((l) => l && view.current === v && v.dispatch({ effects: lang.reconfigure(l.support) }))
-    return () => v.destroy()
+    return () => {
+      v.destroy()
+      if (view.current === v) view.current = null
+    }
   }, [path, dark])
   useEffect(() => {
     const v = view.current
@@ -97,6 +101,17 @@ export function FilesPanel({ session }: { session?: LiveSession }) {
   const [mode, setMode] = useState<'rendered' | 'source'>('rendered')
   const [sel, setSel] = useState<{ from: number; to: number; text: string } | null>(null)
   const [version, setVersion] = useState(0)
+  const cm = useRef<EditorView | null>(null)
+  const body = useRef<HTMLDivElement>(null)
+  // Source view: CodeMirror's own search. Previews: the DOM find bar.
+  const find = useFind({
+    searchRoot: () => body.current,
+    override: () => {
+      if (!cm.current) return false
+      openSearchPanel(cm.current)
+      return true
+    }
+  })
 
   useEffect(() => {
     if (toOpen) {
@@ -143,7 +158,7 @@ export function FilesPanel({ session }: { session?: LiveSession }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div ref={find.scope} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="col" style={{ padding: '8px 10px', gap: 6, borderBottom: '1px solid var(--border)' }}>
         <div className="row" style={{ gap: 4 }}>
           <select className="select" style={{ flex: 1 }} value={path ?? ''} onChange={(ev) => setPath(ev.target.value || undefined)}>
@@ -190,7 +205,8 @@ export function FilesPanel({ session }: { session?: LiveSession }) {
           </div>
         )}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>
+      <div ref={body} style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>
+        {find.bar}
         {!path && <div className="empty-note">Files Claude creates or edits show up here. Turn on “Open generated files automatically” in Settings to follow along live.</div>}
         {path && !content && <div className="empty-note">Loading…</div>}
         {path && content && IMG.includes(e) && (
@@ -219,6 +235,7 @@ export function FilesPanel({ session }: { session?: LiveSession }) {
                 path={path}
                 content={content.content}
                 dark={dark}
+                view={cm}
                 onSelection={setSel}
                 onSave={(t) => attempt(() => api.fs.writeFile(path, t), 'Saved')}
               />

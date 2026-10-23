@@ -15,7 +15,7 @@ import * as git from './git/gitService'
 import * as gh from './github/ghService'
 import * as repo from './git/repoService'
 import type { CommitAction, StashAction } from '@shared/repo'
-import { archiveProjectChats, emitLibrary, removeProject, updateChat, updateProject } from './library'
+import { archiveProjectChats, emitLibrary, removeChat, removeProject, updateChat, updateProject } from './library'
 import type { LoadResult } from './loading/progressiveLoader'
 import { runtime } from './runtime'
 import { adapter } from './agents/registry'
@@ -263,6 +263,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'library.removeProject': (_e, id: string) => removeProject(id),
     'library.updateChat': (_e, id: string, patch: Partial<ChatRecord>) => updateChat(id, patch),
     'library.archiveProjectChats': (_e, id: string) => archiveProjectChats(id),
+    'library.removeChat': (_e, id: string) => removeChat(id),
     'library.addFolderToProject': (_e, id: string, folder: string) => {
       const p = state().projects.find((x) => x.id === id)
       if (p && !p.folders.includes(folder)) updateProject(id, { folders: [...p.folders, folder] })

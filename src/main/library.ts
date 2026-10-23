@@ -86,6 +86,13 @@ export function updateChat(id: string, patch: Partial<ChatRecord>): void {
   emitLibrary()
 }
 
+export function removeChat(id: string): void {
+  updateState((s) => {
+    s.chats = s.chats.filter((c) => c.agentSessionId !== id)
+  })
+  emitLibrary()
+}
+
 export function getChat(id?: string): ChatRecord | undefined {
   return id ? state().chats.find((c) => c.agentSessionId === id) : undefined
 }

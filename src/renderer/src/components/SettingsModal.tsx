@@ -814,6 +814,15 @@ function Archived() {
                 >
                   Open
                 </button>
+                <button
+                  className="btn sm danger"
+                  onClick={async () => {
+                    const r = await api.dialog.confirm(`Delete "${c.name}"?`, 'This removes it from Claude Deck and can’t be undone. The conversation file itself stays on disk.', ['Delete', 'Cancel'])
+                    if (r === 0) await attempt(() => api.library.removeChat(c.agentSessionId), 'Chat deleted')
+                  }}
+                >
+                  Delete
+                </button>
               </div>
             </div>
           ))}
