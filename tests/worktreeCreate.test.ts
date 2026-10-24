@@ -30,7 +30,16 @@ beforeAll(() => {
   repo = path.join(tmp, 'repo')
   fs.mkdirSync(path.join(repo, 'node_modules', 'left-pad'), { recursive: true })
   fs.writeFileSync(path.join(repo, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1\n')
-  fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n')
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n.env\nsecrets/\nCLAUDE.local.md\nbuild/\n')
+  // Ignored files a worktree should get: listed in .worktreeinclude, or always (local Claude notes).
+  fs.writeFileSync(path.join(repo, '.worktreeinclude'), '.env\nsecrets/\n')
+  fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=1\n')
+  fs.mkdirSync(path.join(repo, 'secrets'))
+  fs.writeFileSync(path.join(repo, 'secrets', 'key.txt'), 'k\n')
+  fs.writeFileSync(path.join(repo, 'CLAUDE.local.md'), 'notes\n')
+  // …and one it shouldn't.
+  fs.mkdirSync(path.join(repo, 'build'))
+  fs.writeFileSync(path.join(repo, 'build', 'out.js'), 'x\n')
   fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
   g(repo, 'init', '-q', '-b', 'master')
   g(repo, 'config', 'core.autocrlf', 'false')
@@ -60,6 +69,11 @@ describe('a chat worktree', () => {
     expect(fs.readFileSync(path.join(link, 'left-pad', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
     // …but the link isn't a change git would commit.
     expect(g(w.path, 'status', '--porcelain')).toBe('')
+    // Included ignored files were copied in; other ignored files weren't.
+    expect(fs.readFileSync(path.join(w.path, '.env'), 'utf8')).toBe('TOKEN=1\n')
+    expect(fs.readFileSync(path.join(w.path, 'secrets', 'key.txt'), 'utf8')).toBe('k\n')
+    expect(fs.readFileSync(path.join(w.path, 'CLAUDE.local.md'), 'utf8')).toBe('notes\n')
+    expect(fs.existsSync(path.join(w.path, 'build'))).toBe(false)
 
     // Deleting the worktree never reaches through the link into the repo's packages.
     await deleteWorktree(w.id)

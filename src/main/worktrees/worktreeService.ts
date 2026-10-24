@@ -26,16 +26,35 @@ async function captureChanges(cwd: string): Promise<string | undefined> {
   return r.stdout.trim() || undefined
 }
 
+/** Ignored files that are always worth bringing into a worktree (local Claude settings). */
+const ALWAYS_COPY = ['CLAUDE.local.md', '.claude/settings.local.json']
+
+/**
+ * A .worktreeinclude pattern (gitignore style) as git pathspecs that find the same files, so git
+ * only searches for them instead of listing every ignored file (node_modules alone can be tens of
+ * thousands, taking seconds). Results are still checked against the exact pattern afterwards.
+ */
+function includePathspecs(pattern: string): string[] {
+  const p = pattern.replace(/\\/g, '/').replace(/\/$/, '/**')
+  if (p.startsWith('/')) return [`:(glob)${p.slice(1)}`]
+  return p.includes('/') && !p.startsWith('**/') ? [`:(glob)${p}`, `:(glob)**/${p}`] : [`:(glob)${p}`, `:(glob)**/${p.replace(/^\*\*\//, '')}`]
+}
+
 async function copyIncluded(repoRoot: string, dest: string): Promise<number> {
   const incFile = path.join(repoRoot, '.worktreeinclude')
   const patterns: RegExp[] = []
+  const lines: string[] = []
   if (fs.existsSync(incFile)) {
     for (const line of fs.readFileSync(incFile, 'utf8').split(/\r?\n/)) {
       const l = line.trim()
-      if (l && !l.startsWith('#')) patterns.push(globToRegExp(l))
+      if (l && !l.startsWith('#')) {
+        patterns.push(globToRegExp(l))
+        lines.push(l)
+      }
     }
   }
-  const r = await git(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'])
+  const pathspecs = [...new Set([...ALWAYS_COPY, ...lines].flatMap(includePathspecs))]
+  const r = await git(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...pathspecs])
   const ignored = r.stdout.split('\0').filter(Boolean)
   let copied = 0
   for (const rel of ignored) {

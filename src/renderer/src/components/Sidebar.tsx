@@ -1,8 +1,10 @@
 import { providerOf } from '@shared/agent'
 import { useEffect, useMemo, useState } from 'react'
-import type { ChatRecord, Project, TranscriptSummary } from '@shared/types'
-import { api } from '../api'
-import { askText, attempt, focusSessionTab, get, openProjectHome, openSession, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
+import type { ChatRecord, GitInfo, Project, TranscriptSummary, WorktreeRecord } from '@shared/types'
+import { api, bridge } from '../api'
+import { runCommand } from '../commands'
+import { cacheGet } from '../viewCache'
+import { askText, attempt, focusSessionTab, get, openProjectHome, openSession, QUICK, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
@@ -14,7 +16,7 @@ import { ReviewsView } from './Reviews'
 import { openMenu, Seg, shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
 
 const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
-  { id: 'projects', icon: 'folder', title: 'Projects & chats' },
+  { id: 'projects', icon: 'message', title: 'Chats: this project’s chats by branch (on Home, every project)' },
   { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)' },
   { id: 'repo', icon: 'branch', title: 'Repository — changes, commits, branches' },
   { id: 'actions', icon: 'play', title: 'Actions — the project’s package.json scripts and running processes' },
@@ -92,8 +94,252 @@ export function Sidebar({ open }: { open: boolean }) {
   )
 }
 
-// ------------------------------------------------------------------ projects
+// ------------------------------------------------------------------ chats
+/** A project's context menu (all-projects list and the per-project chats view). */
+function projectMenu(e: React.MouseEvent, p: Project): void {
+  return
+  openMenu(e, [
+    { label: 'New chat', icon: 'plus', onClick: () => openSession('agent', { cwd: p.folders[0] }) },
+    { label: 'New chat in worktree', icon: 'branch', onClick: () => openSession('agent', { cwd: p.folders[0], worktree: {} }) },
+    { label: 'New permanent worktree…', icon: 'layers', onClick: () => askText('Worktree name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createPermanent(p.folders[0], n), 'Permanent worktree created')) },
+    { label: 'Launch a team here…', icon: 'users', onClick: () => set({ fleetOpen: { cwd: p.folders[0] } }) },
+    { label: 'Run a routine…', icon: 'wand', onClick: () => runRoutine(undefined, p.folders[0]) },
+    { label: 'Manage repository', icon: 'branch', onClick: () => set({ repoRoot: p.folders[0], sidebarOpen: true, sidebarView: 'repo' }) },
+    { separator: true },
+    { label: p.pinned ? 'Unpin project' : 'Pin project', icon: 'pin', onClick: () => api.library.updateProject(p.id, { pinned: !p.pinned }) },
+    { label: 'Rename…', icon: 'edit', onClick: () => askText('Project name', p.name).then<unknown>((n) => n && api.library.updateProject(p.id, { name: n })) },
+    {
+      label: 'Project instructions…',
+      icon: 'note',
+      onClick: () =>
+        askText('Instructions applied to every chat in this project', p.instructions ?? '', { multiline: true }).then<unknown>((n) => n !== null && api.library.updateProject(p.id, { instructions: n }))
+    },
+    { label: 'Environment & actions…', icon: 'play', onClick: () => set({ settingsOpen: `env:${p.folders[0]}` }) },
+    {
+      label: 'Add folder…',
+      icon: 'folder-open',
+      onClick: async () => {
+        for (const d of await api.dialog.openFolder()) await api.library.addFolderToProject(p.id, d)
+      }
+    },
+    ...p.folders.slice(1).map((f) => ({ label: `Make primary: ${f.split(/[\\/]/).pop()}`, icon: 'star', onClick: () => api.library.makePrimary(p.id, f) })),
+    { label: 'Reveal in Explorer', icon: 'folder-open', onClick: () => api.shell.openPath(p.folders[0]) },
+    { separator: true },
+    { label: 'Archive all chats', icon: 'archive', onClick: () => api.library.archiveProjectChats(p.id) },
+    { label: 'Remove project', icon: 'trash', danger: true, onClick: () => api.library.removeProject(p.id) }
+  ])
+}
+
+/**
+ * The first sidebar tab follows the workspace: inside a project, only that project's chats, by
+ * branch; in Quick chats, those; on Home, every project.
+ */
 function ProjectsView() {
+  const group = useStore((s) => s.activeGroup)
+  const project = useStore((s) => s.library.projects.find((p) => p.id === s.activeGroup))
+  if (project) return <ProjectChatsView key={project.id} project={project} />
+  if (group === QUICK) return <QuickChatsView />
+  return <AllProjectsView />
+}
+
+const useLiveByChat = () => {
+  const sessions = useStore((s) => s.sessions)
+  return useMemo(() => {
+    const m = new Map<string, (typeof sessions)[string]>()
+    for (const s of Object.values(sessions)) if (s.agentSessionId && s.status !== 'exited') m.set(s.agentSessionId, s)
+    return m
+  }, [sessions])
+}
+
+/** One project's chats, grouped by the branch they work on (the folder's checked-out branch first). */
+function ProjectChatsView({ project: p }: { project: Project }) {
+  const lib = useStore((s) => s.library)
+  const root = p.folders[0]
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<{ agentSessionId: string; snippet: string }[] | null>(null)
+  const [folded, setFolded] = useState<Record<string, boolean>>({})
+  const [checkedOut, setCheckedOut] = useState<string | undefined>(() => cacheGet<GitInfo>(`homecard:${root}`)?.branch)
+  const liveByChat = useLiveByChat()
+  useNow()
+  // The folder's branch, kept current as branches switch and merges land.
+  useEffect(() => {
+    const load = (): void => void api.git.info(root).then((g) => setCheckedOut(g.branch), () => undefined)
+    load()
+    const off = bridge.on('branches:changed', load)
+    window.addEventListener('focus', load)
+    return () => {
+      off()
+      window.removeEventListener('focus', load)
+    }
+  }, [root])
+
+  const ql = q.toLowerCase()
+  const match = (c: ChatRecord): boolean => !ql || c.name.toLowerCase().includes(ql) || (c.branch ?? '').toLowerCase().includes(ql) || (c.lastPrompt ?? '').toLowerCase().includes(ql)
+  const mine = lib.chats.filter((c) => c.projectId === p.id && !c.archived && !c.hidden)
+  const shown = mine.filter(match)
+  const pinned = shown.filter((c) => c.pinned)
+  // A worktree chat belongs to the branch it merges into; others to the branch they ran on.
+  const branchOf = (c: ChatRecord): string => {
+    const w = c.worktreeId ? lib.worktrees.find((x) => x.id === c.worktreeId) : undefined
+    return w?.target ?? w?.branch ?? c.branch ?? 'No branch'
+  }
+  const groups = new Map<string, ChatRecord[]>()
+  for (const c of shown.filter((x) => !x.pinned).sort((x, y) => y.updatedAt - x.updatedAt)) groups.set(branchOf(c), [...(groups.get(branchOf(c)) ?? []), c])
+  const ordered = [...groups.entries()].sort(([x, cx], [y, cy]) => Number(y === checkedOut) - Number(x === checkedOut) || cy[0].updatedAt - cx[0].updatedAt)
+  const wts = lib.worktrees.filter((w) => w.projectId === p.id && (w.permanent || w.deleted))
+
+  const runSearch = async (): Promise<void> => {
+    if (q.trim().length < 2) return setResults(null)
+    const ids = new Set(mine.map((c) => c.agentSessionId))
+    setResults((await api.library.search(q.trim())).filter((r) => ids.has(r.agentSessionId)))
+  }
+
+  return (
+    <>
+      <div className="sidebar-head">
+        <span className="title">Chats</span>
+        <button className="icon-btn sm" title={`New chat in ${p.name}`} onClick={() => openSession('agent', { cwd: root })}>
+          <Icon name="plus" size={15} />
+        </button>
+        <button className="icon-btn sm" title="Project options" onClick={(e) => projectMenu(e, p)}>
+          <Icon name="more" size={15} />
+        </button>
+      </div>
+      <div className="col" style={{ padding: '0 10px 6px', gap: 4 }}>
+        <div className="muted ellipsis" style={{ fontSize: 11.5 }} title={p.folders.join('\n')}>
+          {p.name}
+          {checkedOut ? ` · on ${checkedOut}` : ''}
+        </div>
+        <input
+          className="input"
+          placeholder={`Search ${p.name}'s chats… (Enter: full text)`}
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value)
+            if (!e.target.value) setResults(null)
+          }}
+          onKeyDown={(e) => e.key === 'Enter' && void runSearch()}
+        />
+      </div>
+      <div className="sidebar-body">
+        {results && (
+          <>
+            <div className="section-label">Full-text results</div>
+            {!results.length && <div className="empty-note">No matches in this project.</div>}
+            {results.map((r) => {
+              const c = lib.chats.find((x) => x.agentSessionId === r.agentSessionId)
+              return (
+                <div key={r.agentSessionId} className="list-item" onClick={() => resumeChat(r.agentSessionId)}>
+                  <Icon name="search" size={14} style={{ color: 'var(--muted)' }} />
+                  <div className="grow">
+                    <div className="ellipsis">{c?.name ?? r.agentSessionId.slice(0, 8)}</div>
+                    <div className="sub ellipsis">{r.snippet}</div>
+                  </div>
+                </div>
+              )
+            })}
+          </>
+        )}
+        {pinned.length > 0 && (
+          <>
+            <div className="section-label">
+              <Icon name="pin" size={11} /> Pinned
+            </div>
+            {pinned.map((c) => (
+              <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />
+            ))}
+          </>
+        )}
+        {!mine.length && (
+          <div className="empty-note">
+            No chats in {p.name} yet.{' '}
+            <button className="btn sm" onClick={() => openSession('agent', { cwd: root })}>
+              Start one
+            </button>
+          </div>
+        )}
+        {mine.length > 0 && !shown.length && <div className="empty-note">No chats match.</div>}
+        {ordered.map(([branch, chats]) => (
+          <div key={branch}>
+            <div
+              className="section-label branch-label"
+              onClick={() => setFolded((f) => ({ ...f, [branch]: !f[branch] }))}
+              title={branch === checkedOut ? 'The branch your folder has checked out' : undefined}
+            >
+              <Icon name={folded[branch] ? 'chevron-right' : 'chevron-down'} size={11} />
+              <Icon name="branch" size={11} />
+              <span className="ellipsis">{branch}</span>
+              {branch === checkedOut && <span className="badge accent">checked out</span>}
+              <span className="grow" />
+              <span className="sub">{chats.length}</span>
+            </div>
+            {!folded[branch] &&
+              chats.slice(0, 40).map((c) => <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />)}
+          </div>
+        ))}
+        {wts.length > 0 && (
+          <>
+            <div className="section-label">Worktrees</div>
+            {wts.map((w) => (
+              <WorktreeRow key={w.id} w={w} />
+            ))}
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
+/** Chats that aren't in any project. */
+function QuickChatsView() {
+  const all = useStore((s) => s.library.chats)
+  const chats = all.filter((c) => c.quick && !c.archived && !c.hidden).sort((x, y) => y.updatedAt - x.updatedAt)
+  const liveByChat = useLiveByChat()
+  useNow()
+  return (
+    <>
+      <div className="sidebar-head">
+        <span className="title">Quick chats</span>
+        <button className="icon-btn sm" title="New quick chat" onClick={() => runCommand('quickChat')}>
+          <Icon name="plus" size={15} />
+        </button>
+      </div>
+      <div className="sidebar-body">
+        {!chats.length && <div className="empty-note">No quick chats yet.</div>}
+        {chats.slice(0, 60).map((c) => (
+          <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />
+        ))}
+      </div>
+    </>
+  )
+}
+
+/** A permanent worktree or a deleted one's snapshot. */
+function WorktreeRow({ w }: { w: WorktreeRecord }) {
+  return (
+    <div
+      className="list-item chat-item"
+      title={w.path}
+      onClick={() => (w.deleted ? attempt(() => api.worktree.restore(w.id), 'Worktree restored') : openSession('agent', { cwd: w.path }))}
+      onContextMenu={(e) =>
+        openMenu(e, [
+          { label: w.deleted ? 'Restore snapshot' : 'New chat here', icon: w.deleted ? 'undo' : 'plus', onClick: () => (w.deleted ? attempt(() => api.worktree.restore(w.id)) : openSession('agent', { cwd: w.path })) },
+          { label: 'Create branch here…', icon: 'branch', disabled: !!w.deleted, onClick: () => askText('Branch name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createBranch(w.id, n), 'Branch created')) },
+          { label: 'Reveal folder', icon: 'folder-open', disabled: !!w.deleted, onClick: () => api.shell.openPath(w.path) },
+          { separator: true },
+          { label: w.deleted ? 'Forget' : 'Delete (keeps a snapshot)', icon: 'trash', danger: true, onClick: () => (w.deleted ? api.worktree.forget(w.id) : attempt(() => api.worktree.delete(w.id))) }
+        ])
+      }
+    >
+      <Icon name="branch" size={13} style={{ color: 'var(--muted)' }} />
+      <span className="grow ellipsis">{w.branch ?? w.path.split(/[\\/]/).pop()}</span>
+      <span className="badge">{w.deleted ? 'snapshot' : w.permanent ? 'permanent' : 'worktree'}</span>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ all projects (Home)
+function AllProjectsView() {
   const lib = useStore((s) => s.library)
   const sessions = useStore((s) => s.sessions)
   const home = useStore((s) => s.homedir)
@@ -131,37 +377,6 @@ function ProjectsView() {
     setResults(await api.library.search(q.trim()))
   }
 
-  const projectMenu = (e: React.MouseEvent, p: Project): void =>
-    openMenu(e, [
-      { label: 'New chat', icon: 'plus', onClick: () => openSession('agent', { cwd: p.folders[0] }) },
-      { label: 'New chat in worktree', icon: 'branch', onClick: () => openSession('agent', { cwd: p.folders[0], worktree: {} }) },
-      { label: 'New permanent worktree…', icon: 'layers', onClick: () => askText('Worktree name', 'feature').then<unknown>((n) => n && attempt(() => api.worktree.createPermanent(p.folders[0], n), 'Permanent worktree created')) },
-      { label: 'Launch a team here…', icon: 'users', onClick: () => set({ fleetOpen: { cwd: p.folders[0] } }) },
-      { label: 'Run a routine…', icon: 'wand', onClick: () => runRoutine(undefined, p.folders[0]) },
-      { label: 'Manage repository', icon: 'branch', onClick: () => set({ repoRoot: p.folders[0], sidebarOpen: true, sidebarView: 'repo' }) },
-      { separator: true },
-      { label: p.pinned ? 'Unpin project' : 'Pin project', icon: 'pin', onClick: () => api.library.updateProject(p.id, { pinned: !p.pinned }) },
-      { label: 'Rename…', icon: 'edit', onClick: () => askText('Project name', p.name).then<unknown>((n) => n && api.library.updateProject(p.id, { name: n })) },
-      {
-        label: 'Project instructions…',
-        icon: 'note',
-        onClick: () =>
-          askText('Instructions applied to every chat in this project', p.instructions ?? '', { multiline: true }).then<unknown>((n) => n !== null && api.library.updateProject(p.id, { instructions: n }))
-      },
-      { label: 'Environment & actions…', icon: 'play', onClick: () => set({ settingsOpen: `env:${p.folders[0]}` }) },
-      {
-        label: 'Add folder…',
-        icon: 'folder-open',
-        onClick: async () => {
-          for (const d of await api.dialog.openFolder()) await api.library.addFolderToProject(p.id, d)
-        }
-      },
-      ...p.folders.slice(1).map((f) => ({ label: `Make primary: ${f.split(/[\\/]/).pop()}`, icon: 'star', onClick: () => api.library.makePrimary(p.id, f) })),
-      { label: 'Reveal in Explorer', icon: 'folder-open', onClick: () => api.shell.openPath(p.folders[0]) },
-      { separator: true },
-      { label: 'Archive all chats', icon: 'archive', onClick: () => api.library.archiveProjectChats(p.id) },
-      { label: 'Remove project', icon: 'trash', danger: true, onClick: () => api.library.removeProject(p.id) }
-    ])
 
   return (
     <>

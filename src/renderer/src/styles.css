@@ -534,6 +534,18 @@ label.check {
   color: var(--muted);
   padding: 12px 8px 4px;
 }
+/* A branch's chats in a project's Chats view: branch names keep their case. */
+.section-label.branch-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: var(--cursor);
+  min-width: 0;
+}
+.section-label.branch-label .badge {
+  font-weight: 500;
+}
 .list-item {
   display: flex;
   align-items: center;
