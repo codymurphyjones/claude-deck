@@ -1,7 +1,7 @@
 {
   "name": "claude-deck",
   "productName": "Claude Deck",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "A desktop command center for Claude Code terminals",
   "main": "./out/main/index.js",
   "author": "magerx1794",
