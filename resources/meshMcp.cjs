@@ -201,7 +201,7 @@ const TOOLS = [
   {
     name: 'run_process',
     description:
-      "Start (or restart, if it's already running) one of the project's package.json scripts as a Claude Deck background process, e.g. the dev server or tests, the same as the user's Actions panel. Waits a few seconds and returns the status and output so far. Long-running scripts keep running; check them later with read_process.",
+      "Start (or restart, if it's already running) one of the project's package.json scripts as a Claude Deck background process, e.g. the dev server or tests, the same as the user's Actions panel. Waits a few seconds and returns the status and output so far. Long-running scripts keep running; check them later with read_process. The user approves each run.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -223,7 +223,7 @@ const TOOLS = [
   {
     name: 'open_browser',
     description:
-      "Open a URL in Claude Deck's built-in browser pane (beside the chat, so the user sees it too) and read the result: the page's visible text, its console messages, and/or a screenshot file you can then read. Use to check a dev server page loads, look for console errors, or verify a UI change. Omit url to read the page that's already open.",
+      "Open a URL in Claude Deck's built-in browser pane (beside the chat, so the user sees it too) and read the result: the page's visible text, its console messages, and/or a screenshot file you can then read. Use to check a dev server page loads, look for console errors, or verify a UI change. Omit url to read the page that's already open. Only http(s) URLs; the user approves each use.",
     inputSchema: {
       type: 'object',
       properties: {

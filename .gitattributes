@@ -1,0 +1,9 @@
+# Line endings: stored exactly as committed. The repo already holds a mix (older files CRLF,
+# newer ones LF); `* text=auto` or an `eol=` rule would renormalize half the tree in one commit.
+# `-text` turns off EOL conversion for everyone, whatever their core.autocrlf, so a file keeps
+# the endings it has. Prettier (`endOfLine: auto`) and .editorconfig (no end_of_line) follow suit.
+* -text
+
+*.png binary
+*.ico binary
+*.icns binary

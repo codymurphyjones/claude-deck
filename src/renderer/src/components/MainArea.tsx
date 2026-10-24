@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { providerOf } from '@shared/agent'
 import type { EnvironmentConfig } from '@shared/types'
 import { api, type LiveSession } from '../api'
@@ -9,6 +9,7 @@ import {
   attempt,
   closeSession,
   focusTab,
+  HOME,
   openSession,
   resumeChat,
   set,
@@ -25,17 +26,26 @@ import { Icon } from './Icon'
 import { ChatView } from '../chat/ChatView'
 import { openFind } from '../find'
 import { UpdateBanner } from './Updates'
-import { FileEditor } from './FileEditor'
+import { mergeChat } from '../branchActions'
+import { HomeView } from './HomeView'
+import { ProjectHome } from './ProjectHome'
+import { SubTabs } from './SubTabs'
 import { openMenuAt, shortPath, STATUS_LABEL, timeAgo } from './ui'
+
+// The code editor (CodeMirror + language packs) loads when an editor tab first shows.
+const EditorWorkspace = lazy(() => import('./FileEditor').then((m) => ({ default: m.EditorWorkspace })))
 
 export function MainArea() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
+  const activeGroup = useStore((s) => s.activeGroup)
   const auth = useAuth()
   const provider = useStore((s) => s.settings.defaultProvider)
   const saved = useStore((s) => s.savedTabs)
   const restoreMode = useStore((s) => s.settings.restoreSessions)
   const popout = useStore((s) => s.popoutSessionId)
+  const held = useStore((s) => s.heldMerges)
+  const home = useStore((s) => s.homedir)
   return (
     <div className="main">
       {auth.checked && !auth.loggedIn && !popout && (
@@ -60,7 +70,26 @@ export function MainArea() {
         </div>
       )}
       {!popout && <UpdateBanner />}
-      {saved.length > 0 && restoreMode === 'ask' && !popout && !tabs.length && (
+      {/* A chat's merge waiting to update a folder with uncommitted changes. */}
+      {!popout &&
+        held.map((h) => (
+          <div key={h.worktreeId} className="banner">
+            <Icon name="fork" />
+            <div className="grow">
+              <b>{h.target}</b> has new commits from {h.chat}, ready to bring into {shortPath(h.checkout, home)}.{' '}
+              <span className="muted">
+                That folder has uncommitted changes in {h.files.length} file{h.files.length === 1 ? '' : 's'}; updating keeps them (they're set aside and re-applied).
+              </span>
+            </div>
+            <button className="btn primary sm" onClick={() => void mergeChat(h.worktreeId, { stashLocal: true })}>
+              Update now
+            </button>
+            <button className="btn sm ghost" onClick={() => set((st) => ({ heldMerges: st.heldMerges.filter((x) => x.worktreeId !== h.worktreeId) }))}>
+              Later
+            </button>
+          </div>
+        ))}
+      {saved.length > 0 && restoreMode === 'ask' && !popout && !tabs.some((t) => t.sessionIds.length) && (
         <div className="banner">
           <Icon name="history" />
           <div className="grow">
@@ -74,18 +103,35 @@ export function MainArea() {
           </button>
         </div>
       )}
+      {/* The active workspace's Overview, chats and editor. */}
+      {!popout && activeGroup !== HOME && <SubTabs />}
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+        {/* Every sub-tab stays mounted (terminals, editors keep their state); only one shows. */}
         {tabs.map((t) => (
-          <TabPage key={t.id} tab={t} active={t.id === activeTabId} />
+          <TabPage key={t.id} tab={t} active={t.id === activeTabId && (!!popout || activeGroup !== HOME)} />
         ))}
-        {!tabs.length && <EmptyState />}
+        {!popout && activeGroup === HOME && <HomeView />}
+        {!popout && activeGroup !== HOME && !tabs.some((t) => t.group === activeGroup) && <EmptyState />}
       </div>
-      {!popout && <FileEditor />}
     </div>
   )
 }
 
 function TabPage({ tab, active }: { tab: Tab; active: boolean }) {
+  if (tab.editor)
+    return (
+      <div className={`tab-page ${active ? '' : 'hidden'}`}>
+        <Suspense fallback={<div className="empty-note">Loading editor…</div>}>
+          <EditorWorkspace active={active} tabId={tab.id} group={tab.group} root={tab.root} />
+        </Suspense>
+      </div>
+    )
+  if (tab.projectId)
+    return (
+      <div className={`tab-page ${active ? '' : 'hidden'}`}>
+        <ProjectHome projectId={tab.projectId} active={active} />
+      </div>
+    )
   const n = tab.sessionIds.length
   const cols = n === 1 ? '1fr' : n === 2 ? '1fr 1fr' : n === 3 ? '1fr 1fr 1fr' : '1fr 1fr'
   const rows = n === 4 ? '1fr 1fr' : '1fr'

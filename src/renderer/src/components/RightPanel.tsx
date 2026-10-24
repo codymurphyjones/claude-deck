@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type LiveSession } from '../api'
 import { activeSession, askText, focusSessionTab, set, toast, useStore, type RightPanel as Panel } from '../store'
+import { browserUrl } from '@shared/agentTools'
 import { registerBrowser } from '../browserControl'
 import { FilesPanel } from './FilesPanel'
 import { Icon } from './Icon'
@@ -67,6 +68,7 @@ export function RightPanel({ panel }: { panel: Exclude<Panel, null> }) {
 type WebviewEl = HTMLElement & {
   src: string
   getURL: () => string
+  loadURL: (url: string) => Promise<void>
   goBack: () => void
   goForward: () => void
   reload: () => void
@@ -89,13 +91,18 @@ const PICKER = `(() => new Promise((resolve) => {
 }))()`
 
 function BrowserPane({ session }: { session?: LiveSession }) {
-  const [url, setUrl] = useState(() => localStorageGet('deck:browserUrl') ?? 'http://localhost:3000')
-  const [input, setInput] = useState(url)
+  // The webview's `src` is only its first page; later pages load with loadURL(), which (unlike
+  // re-setting `src`) also reloads when asked for the page that's already showing.
+  const [initialUrl] = useState(() => localStorageGet('deck:browserUrl') ?? 'http://localhost:3000')
+  const [input, setInput] = useState(initialUrl)
   const [picking, setPicking] = useState(false)
   const ref = useRef<WebviewEl | null>(null)
+  /** Resolves once the webview can take loadURL() (after its first dom-ready). */
+  const ready = useRef<Promise<void> | null>(null)
   useEffect(() => {
     const wv = ref.current
     if (!wv) return
+    ready.current = new Promise((resolve) => wv.addEventListener('dom-ready', () => resolve(), { once: true }))
     const onNav = (): void => {
       setInput(wv.getURL())
       localStorageSet('deck:browserUrl', wv.getURL())
@@ -107,11 +114,15 @@ function BrowserPane({ session }: { session?: LiveSession }) {
       wv.removeEventListener('did-navigate-in-page', onNav)
     }
   }, [])
-  const go = (u: string): string => {
-    const full = /^[a-z]+:\/\//i.test(u) ? u : /^localhost|^\d+\.\d+|^\[/.test(u) ? `http://${u}` : `https://${u}`
-    setUrl(full)
+  /** Load typed input (scheme-less hosts get http/https); resolves when it has loaded or failed. */
+  const go = async (u: string): Promise<void> => {
+    const wv = ref.current
+    if (!wv) return
+    const full = browserUrl(u)
     setInput(full)
-    return full
+    await ready.current
+    // Rejects on load failures (and ERR_ABORTED when a redirect supersedes it); the page shows them.
+    await wv.loadURL(full).catch(() => undefined)
   }
 
   // Console output since the last navigation, and a handle for the agent's open_browser tool.
@@ -133,21 +144,7 @@ function BrowserPane({ session }: { session?: LiveSession }) {
     wv.addEventListener('did-start-navigation', onStart)
     const off = registerBrowser({
       url: () => wv.getURL(),
-      navigate: (u) =>
-        new Promise<void>((resolve) => {
-          const done = (): void => {
-            clearTimeout(t)
-            wv.removeEventListener('did-stop-loading', done)
-            wv.removeEventListener('did-fail-load', done)
-            resolve()
-          }
-          const t = setTimeout(done, 20_000)
-          wv.addEventListener('did-stop-loading', done)
-          wv.addEventListener('did-fail-load', done)
-          const full = go(u)
-          // Same URL: setting src again wouldn't reload.
-          if (full === wv.getURL()) wv.reload()
-        }),
+      navigate: (u) => Promise.race([go(u), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]),
       text: async () => String(await wv.executeJavaScript(`document.title + '\\n\\n' + (document.body ? document.body.innerText : '')`).catch((e) => `Could not read the page: ${e}`)),
       console: () => consoleLog.current,
       screenshot: async () => {
@@ -199,18 +196,18 @@ function BrowserPane({ session }: { session?: LiveSession }) {
         <button className="icon-btn sm" onClick={() => ref.current?.reload()}>
           <Icon name="refresh" size={14} />
         </button>
-        <input className="input" style={{ height: 26 }} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go(input)} />
+        <input className="input" style={{ height: 26 }} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void go(input)} />
         <button className={`icon-btn sm ${picking ? 'on' : ''}`} title="Comment on an element (sends selector + screenshot to Claude)" onClick={comment}>
           <Icon name="crosshair" size={14} />
         </button>
         <button className="icon-btn sm" title="Send a screenshot to Claude" onClick={screenshot}>
           <Icon name="image" size={14} />
         </button>
-        <button className="icon-btn sm" title="Open in your browser" onClick={() => api.shell.openExternal(url)}>
+        <button className="icon-btn sm" title="Open in your browser" onClick={() => api.shell.openExternal(ref.current?.getURL() || browserUrl(input))}>
           <Icon name="external" size={14} />
         </button>
       </div>
-      <webview ref={ref as never} src={url} style={{ flex: 1, background: '#fff' }} partition="persist:deck-preview" />
+      <webview ref={ref as never} src={initialUrl} style={{ flex: 1, background: '#fff' }} partition="persist:deck-preview" />
     </div>
   )
 }
@@ -233,7 +230,7 @@ function localStorageSet(k: string, v: string): void {
 // ------------------------------------------------------------------ timeline
 function TimelinePanel() {
   const events = useStore((s) => s.timeline)
-  const [filter, setFilter] = useState<'all' | 'prompts' | 'edits' | 'mesh' | 'attention'>('all')
+  const [filter, setFilter] = useState<'all' | 'prompts' | 'edits' | 'agent' | 'mesh' | 'attention'>('all')
   const list = [...events]
     .reverse()
     .filter((e) =>
@@ -243,12 +240,14 @@ function TimelinePanel() {
           ? e.type === 'prompt' || e.type === 'stop'
           : filter === 'edits'
             ? e.type === 'edit' || e.type === 'tool'
+            : filter === 'agent'
+              ? e.type === 'agent'
             : filter === 'mesh'
               ? e.type === 'mesh'
               : e.type === 'permission'
     )
     .slice(0, 400)
-  const icon: Record<string, string> = { prompt: 'message', tool: 'terminal', edit: 'edit', permission: 'hand', stop: 'check', mesh: 'users', start: 'play', exit: 'stop' }
+  const icon: Record<string, string> = { prompt: 'message', tool: 'terminal', edit: 'edit', permission: 'hand', stop: 'check', mesh: 'users', start: 'play', exit: 'stop', agent: 'sparkles' }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: 8, borderBottom: '1px solid var(--border)' }}>
@@ -259,6 +258,7 @@ function TimelinePanel() {
             ['all', 'All'],
             ['prompts', 'Turns'],
             ['edits', 'Edits'],
+            ['agent', 'AI actions'],
             ['mesh', 'Team'],
             ['attention', 'Attention']
           ]}

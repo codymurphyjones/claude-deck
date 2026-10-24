@@ -14,7 +14,7 @@ export function updateSleepBlocker(anyWorking: boolean): void {
   }
 }
 
-function mainWindow(): BrowserWindow | undefined {
+export function mainWindow(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && (w as BrowserWindow & { deckMain?: boolean }).deckMain)
 }
 

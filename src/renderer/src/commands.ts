@@ -8,11 +8,16 @@ import {
   askText,
   attempt,
   closeSession,
+  currentProjectId,
+  currentProjectRoot,
+  cycleGroup,
   cyclePane,
   cycleTab,
   detachPane,
   focusTab,
   get,
+  goHome,
+  openProjectHome,
   openSession,
   reopenClosed,
   set,
@@ -105,8 +110,11 @@ export function buildCommands(): Command[] {
     { id: 'setRoleFree', title: 'Clear role', group: 'Collaboration', icon: 'x', when: hasAgent, run: withActive((id) => api.session.setRole(id, 'free')) },
     { id: 'closeTab', title: 'Close session', group: 'Sessions', icon: 'x', run: withActive((id) => closeSession(id)) },
     { id: 'reopenClosed', title: 'Reopen closed session', group: 'Sessions', icon: 'undo', run: reopenClosed },
-    { id: 'nextTab', title: 'Next tab', group: 'Navigation', run: () => cycleTab(1) },
-    { id: 'prevTab', title: 'Previous tab', group: 'Navigation', run: () => cycleTab(-1) },
+    { id: 'nextTab', title: 'Next tab in this project', group: 'Navigation', run: () => cycleTab(1) },
+    { id: 'prevTab', title: 'Previous tab in this project', group: 'Navigation', run: () => cycleTab(-1) },
+    { id: 'goHome', title: 'Home (all projects)', group: 'Navigation', icon: 'home', run: goHome },
+    { id: 'nextWorkspace', title: 'Next project tab', group: 'Navigation', run: () => cycleGroup(1) },
+    { id: 'prevWorkspace', title: 'Previous project tab', group: 'Navigation', run: () => cycleGroup(-1) },
     { id: 'focusNextPane', title: 'Focus next pane', group: 'Navigation', run: () => cyclePane(1) },
     { id: 'focusPrevPane', title: 'Focus previous pane', group: 'Navigation', run: () => cyclePane(-1) },
     {
@@ -125,16 +133,16 @@ export function buildCommands(): Command[] {
     { id: 'toggleSidebar', title: 'Toggle sidebar', group: 'Layout', icon: 'sidebar', run: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })) },
     { id: 'toggleActivity', title: 'Activity', group: 'Layout', icon: 'bell', run: () => showSidebar('activity') },
     { id: 'scheduled', title: 'Scheduled tasks', group: 'Automation', icon: 'clock', run: () => showSidebar('scheduled') },
-    { id: 'jobs', title: 'Repo jobs', group: 'Automation', icon: 'layers', run: () => openJobsFor(activeSession()?.root) },
+    { id: 'jobs', title: 'Repo jobs', group: 'Automation', icon: 'layers', run: () => openJobsFor(currentProjectRoot()) },
     {
       id: 'newJob',
       title: 'New repo job…',
       group: 'Automation',
       icon: 'layers',
-      when: hasAgent,
+      when: () => !!currentProjectRoot(),
       run: () => {
-        const s = activeSession()
-        if (s) set({ jobEdit: { root: s.root, draft: newJob() } })
+        const root = currentProjectRoot()
+        if (root) set({ jobEdit: { root, draft: newJob() } })
       }
     },
     { id: 'designJob', title: 'Design a repo job with Claude…', group: 'Automation', icon: 'sparkles', when: hasAgent, run: () => void designInChat(activeSession()!.root) },
@@ -148,11 +156,11 @@ export function buildCommands(): Command[] {
       group: 'Automation',
       icon: 'play',
       run: () => {
-        const pid = activeSession()?.projectId ?? get().library.projects[0]?.id
+        const pid = currentProjectId() ?? get().library.projects[0]?.id
         set({ sidebarOpen: true, sidebarView: 'projects', actionsFocus: pid })
       }
     },
-    { id: 'newAutomation', title: 'New scheduled task…', group: 'Automation', icon: 'clock', run: () => set({ automationEdit: { cwd: activeSession()?.cwd } }) },
+    { id: 'newAutomation', title: 'New scheduled task…', group: 'Automation', icon: 'clock', run: () => set({ automationEdit: { cwd: activeSession()?.cwd ?? currentProjectRoot() } }) },
     {
       id: 'scheduleInChat',
       title: 'Schedule a follow-up in this chat…',
@@ -170,11 +178,22 @@ export function buildCommands(): Command[] {
       group: 'Git',
       icon: 'branch',
       run: () => {
-        const root = activeSession()?.root
-        set({ sidebarOpen: true, sidebarView: 'repo', ...(root ? { repoRoot: root } : {}) })
+        // The view follows the selected tab (a chat or a project home), so no explicit repo is needed.
+        set({ sidebarOpen: true, sidebarView: 'repo' })
       }
     },
-    { id: 'reviews', title: 'Pull request reviews', group: 'Git', icon: 'pr', run: () => showSidebar('reviews') },
+    {
+      id: 'projectHome',
+      title: 'Project home',
+      group: 'Layout',
+      icon: 'folder',
+      when: () => !!currentProjectId(),
+      run: () => {
+        const pid = currentProjectId()
+        if (pid) openProjectHome(pid)
+      }
+    },
+    { id: 'reviews', title: 'Pull requests', group: 'Git', icon: 'pr', run: () => showSidebar('reviews') },
     { id: 'toggleReview', title: 'Review changes (diff)', group: 'Git', icon: 'branch', run: () => setRight('review') },
     { id: 'toggleFiles', title: 'Files touched by Claude', group: 'Layout', icon: 'file', run: () => setRight('files') },
     { id: 'toggleBrowser', title: 'Browser preview', group: 'Layout', icon: 'globe', run: () => setRight('browser') },

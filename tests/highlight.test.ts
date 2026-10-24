@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { languageForPath, languageFromShebang, normalizeLang } from '@shared/languages'
 import { extractSymbols } from '@shared/symbols'
-import { highlight, highlightDiffLines, highlightLines, langForFile, splitHtmlLines } from '../src/renderer/src/highlight'
+import { highlight, highlightDiffLines, highlightLines, langForFile, loadAllLanguages, splitHtmlLines } from '../src/renderer/src/highlight'
+
+// The full language set loads on demand in the app; load it up front here.
+beforeAll(() => loadAllLanguages())
 
 describe('language detection', () => {
   it('maps extensions, special file names and shebangs', () => {

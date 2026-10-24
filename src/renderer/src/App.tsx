@@ -14,13 +14,11 @@ import { RoutineRunDialog } from './components/Routines'
 import { RepoDiffDialog } from './components/RepoManager'
 import { ProcessAlerts, ProcessLogDialog } from './components/Actions'
 import { MenuHost, PromptDialog, Toasts } from './components/ui'
-import { FileEditor } from './components/FileEditor'
 
 export function App() {
   const popout = useStore((s) => s.popoutSessionId)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const right = useStore((s) => s.rightPanel)
-  const rightWidth = useStore((s) => s.rightWidth)
   return (
     <div className="app">
       <TitleBar />
@@ -28,11 +26,6 @@ export function App() {
         {!popout && <Sidebar open={sidebarOpen} />}
         <MainArea />
         {right && <RightPanel panel={right} />}
-        {!popout && (
-          <div className="fe-left" style={{ right: right ? rightWidth : 0 }}>
-            <FileEditor locked />
-          </div>
-        )}
       </div>
       {!popout && <DropOverlay />}
       <CommandPalette />

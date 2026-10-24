@@ -28,8 +28,13 @@ export interface LaunchOptions {
   continueLast?: boolean
   /** With resumeId: fork into a new session id. */
   fork?: boolean
-  /** Create a fresh managed worktree for this session. */
-  worktree?: { baseRef?: string; permanent?: boolean; carryChanges?: boolean }
+  /**
+   * Create a fresh managed worktree for this session. With `target` (a local branch), the chat works
+   * on its own sub-branch off it and merges back into it ("Merge into <target>").
+   */
+  worktree?: { baseRef?: string; permanent?: boolean; carryChanges?: boolean; target?: string }
+  /** Work in the folder itself even when chats get their own worktrees by default. */
+  inPlace?: boolean
   addDirs?: string[]
   appendSystemPrompt?: string
   initialPrompt?: string
@@ -130,6 +135,8 @@ export interface WorktreeRecord {
   projectId?: string
   baseRef: string
   branch?: string
+  /** The branch this worktree's branch merges into (a chat's sub-branch is made off it). */
+  target?: string
   permanent: boolean
   createdAt: number
   lastUsed: number
@@ -137,6 +144,44 @@ export interface WorktreeRecord {
   snapshot?: string
   snapshotHead?: string
   deleted?: boolean
+}
+
+/** Where a worktree chat stands relative to the branch it merges into. */
+export interface ChatBranchStatus {
+  branch: string
+  target: string
+  /** The chat's commits not yet in the target. */
+  ahead: number
+  /** Target commits the chat doesn't have yet (brought in when merging). */
+  behind: number
+  /** Uncommitted files in the chat's worktree. */
+  dirty: number
+  /** A merge in the worktree is waiting on conflict resolution. */
+  conflicts: string[]
+  /** The folder that has the target checked out (the user's, usually), if any. */
+  targetCheckout?: string
+}
+
+/** What "Merge into <target>" did. */
+export type ChatMergeResult =
+  | { status: 'merged'; target: string; commits: number; updated?: string; pushed?: boolean; pushError?: string; stashConflict?: boolean }
+  | { status: 'nothing'; target: string }
+  | { status: 'uncommitted'; files: string[] }
+  | { status: 'conflicts'; target: string; files: string[] }
+  | { status: 'held'; target: string; checkout: string; files: string[] }
+  | { status: 'error'; message: string }
+
+/** A local branch compared with its copy on the remote (before switching to it). */
+export interface BranchVsRemote {
+  remote?: string
+  /** Local commits the remote doesn't have. */
+  ahead: number
+  /** Remote commits the local branch doesn't have. */
+  behind: number
+  /** The remote has no such branch. */
+  missing?: boolean
+  /** Couldn't fetch; the counts compare against the last fetch. */
+  offline?: boolean
 }
 
 export interface ThemeColors {
@@ -233,9 +278,29 @@ export interface Settings {
   defaultProvider: ProviderId
   providers: Record<ProviderId, ProviderSettings>
   shell: string
-  worktrees: { root: string; keep: number; autoDelete: boolean; branchPrefix: string; cleanupMerged: boolean; deleteRemoteMerged: boolean }
+  worktrees: {
+    root: string
+    keep: number
+    autoDelete: boolean
+    branchPrefix: string
+    cleanupMerged: boolean
+    deleteRemoteMerged: boolean
+    /** New chats in a Git repo get their own worktree and sub-branch off the selected branch. */
+    perChat: boolean
+    /** Link the repo's node_modules into new worktrees (a junction/symlink) so scripts and tests run there. */
+    linkNodeModules: boolean
+  }
   /** `commitPrefix` (e.g. "CJ | ") is put in front of every commit message the app makes. */
   git: { commitPrefix: string }
+  /** What agents may do without asking (Settings → AI permissions). Applies to chats started from then on. */
+  agentPermissions: {
+    /** Per app tool: 'auto' runs without asking, 'confirm' asks each time. Unset = the tool's default tier. */
+    appTools: Partial<Record<string, 'auto' | 'confirm'>>
+    /** Claude permission rules (e.g. "Bash(git push *)") that always prompt, even in auto mode. */
+    alwaysAsk: string[]
+    /** Launch Claude chats so Bypass permissions can be switched on mid-session. */
+    allowBypassSwitch: boolean
+  }
   mesh: {
     enabled: boolean
     claimMode: 'ask' | 'deny' | 'off'
@@ -390,7 +455,8 @@ export interface TimelineEvent {
   ts: number
   sessionId: string
   sessionName: string
-  type: 'prompt' | 'tool' | 'edit' | 'permission' | 'stop' | 'mesh' | 'start' | 'exit'
+  /** `agent`: an agent used an app tool (opened a file, ran a script, loaded a page…). */
+  type: 'prompt' | 'tool' | 'edit' | 'permission' | 'stop' | 'mesh' | 'start' | 'exit' | 'agent'
   text: string
   group?: string
 }

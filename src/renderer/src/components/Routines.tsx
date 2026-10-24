@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { buildRoutineChatPrompt, buildStepPrompt, newJob, stepsToRun, type JobRunOptions } from '@shared/jobs'
+import { buildRoutineChatPrompt, buildStepPrompt, newJob, routineRunName, stepsToRun, type JobRunOptions } from '@shared/jobs'
 import { api } from '../api'
 import { attempt, currentProjectRoot, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
@@ -126,6 +126,7 @@ export function RoutineRunDialog() {
   const req = useStore((s) => s.routineRunFor)
   const routines = useRoutines(!!req)
   const roots = useRoots()
+  const projects = useStore((s) => s.library.projects)
   const home = useStore((s) => s.homedir)
   const [slug, setSlug] = useState('')
   const [cwd, setCwd] = useState('')
@@ -169,9 +170,10 @@ export function RoutineRunDialog() {
       if (ok) close()
       return
     }
+    const project = projects.find((p) => p.folders.some((f) => f.toLowerCase() === cwd.toLowerCase()))?.name ?? cwd.split(/[\\/]/).filter(Boolean).pop()
     const s = await openSession('agent', {
         cwd,
-        name: job.name,
+        name: routineRunName(job.name, project),
         provider: opts.provider ?? d.provider,
         initialPrompt: buildRoutineChatPrompt(job, extra),
         model: opts.model ?? d.model,

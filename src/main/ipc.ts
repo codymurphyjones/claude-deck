@@ -9,7 +9,7 @@ import type { Scheduler } from './automations/scheduler'
 import { ROUTINES_DIR, type JobService } from './jobs/jobService'
 import type { ProcessService } from './processes/processService'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
-import { getTimeline, settings, state, updateSettings, updateState } from './context'
+import { getTimeline, settings, state, toast, updateSettings, updateState } from './context'
 import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
 import * as gh from './github/ghService'
@@ -24,10 +24,14 @@ import type { SessionService } from './sessions/sessionService'
 import { insights, listTranscripts, searchTranscripts } from './transcripts/transcriptService'
 import { resolveAgentReply } from './appTools'
 import { openInExternalEditor } from './externalEditor'
+import { tsHandlers } from './lsp/tsHost'
 import { run, shortId } from './util'
 import * as wt from './worktrees/worktreeService'
+import * as branchSync from './worktrees/branchSync'
 import type { WindowManager } from './windows'
 import * as updater from './updater'
+import { diagLogDir, diagLogFile, logDiag, recentDiag } from './diagnostics'
+import type { DiagLevel } from '@shared/diagnostics'
 import type { ReleaseInfo } from '@shared/types'
 
 type Handler = (e: IpcMainInvokeEvent, ...args: never[]) => unknown
@@ -199,6 +203,25 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     },
     'fs.writeFile': (_e, p: string, content: string) => fs.promises.writeFile(p, content, 'utf8'),
     'fs.listFiles': (_e, root: string) => listProjectFiles(root),
+    // Find in files for the editor: git grep over tracked and untracked (not ignored) text files.
+    'fs.grep': async (_e, root: string, query: string, opts: { regex?: boolean; caseSensitive?: boolean; wholeWord?: boolean } = {}) => {
+      if (!query) return { results: [], truncated: false }
+      // Paths come back relative to `root` (the editor's project folder, which may be inside a repo).
+      const args = ['grep', '-n', '-I', '--no-color', '--untracked', opts.regex ? '-E' : '-F']
+      if (!opts.caseSensitive) args.push('-i')
+      if (opts.wholeWord) args.push('-w')
+      args.push('-e', query)
+      const r = await run('git', args, { cwd: root, timeout: 20_000 })
+      // git grep exits 1 for "no matches"; anything else is an error (bad regex, not a repo…).
+      if (r.code > 1) throw new Error(r.stderr.trim() || 'Search failed')
+      const MAX = 2000
+      const lines = r.stdout.split('\n').filter(Boolean)
+      const results = lines.slice(0, MAX).flatMap((l) => {
+        const m = /^(.*?):(\d+):(.*)$/.exec(l)
+        return m ? [{ path: m[1], line: +m[2], text: m[3].length > 300 ? m[3].slice(0, 300) + '…' : m[3] }] : []
+      })
+      return { results, truncated: lines.length > MAX }
+    },
     'fs.saveTempImage': async (_e, dataUrl: string) => {
       const m = /^data:image\/(\w+);base64,(.*)$/.exec(dataUrl)
       if (!m) throw new Error('Not an image')
@@ -206,6 +229,14 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       await fs.promises.writeFile(file, Buffer.from(m[2], 'base64'))
       return file
     },
+    // A text file in the app's temp folder (e.g. the editor's unsaved version, for Claude to merge).
+    'fs.saveTempText': async (_e, name: string, content: string) => {
+      const file = path.join(runtime.tempDir, `${Date.now()}-${path.basename(name).replace(/[^\w.-]+/g, '_')}`)
+      await fs.promises.writeFile(file, content, 'utf8')
+      return file
+    },
+    // ---- editor TypeScript language service (ts.*; runs in a utility process) ----
+    ...tsHandlers(),
     'clipboard.readImage': async () => {
       for (const item of await clipboard.read()) {
         const type = item.types.find((t) => t.startsWith('image/'))
@@ -246,7 +277,12 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     },
     'shell.openPath': (_e, p: string) => shell.openPath(p),
     'shell.showItem': (_e, p: string) => shell.showItemInFolder(p),
-    'shell.openInEditor': (_e, p: string, line?: number) => openInExternalEditor(p, line),
+    // Failures are shown here, so the many callers (file links, Review, Files…) needn't each handle them.
+    'shell.openInEditor': (_e, p: string, line?: number) =>
+      openInExternalEditor(p, line).catch((e: Error) => {
+        logDiag('error', 'ipc:shell.openInEditor', e)
+        toast(e.message, 'error')
+      }),
 
     // ---- auth ----
     'auth.refresh': (_e, p?: ProviderId) => (p ? auth.refresh(p) : auth.refreshAll()),
@@ -299,6 +335,11 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'git.branches': (_e, cwd: string) => git.branches(cwd),
     'git.commits': (_e, cwd: string) => git.recentCommits(cwd),
     'git.createPr': (_e, cwd: string, opts: { title?: string; body?: string; draft?: boolean; base?: string }) => git.createPr(cwd, opts),
+    // A file's committed (HEAD) version, for the editor's Edit Diff. null: not in HEAD (new/untracked, or no repo).
+    'git.fileAtHead': async (_e, file: string) => {
+      const r = await run('git', ['show', `HEAD:./${path.basename(file)}`], { cwd: path.dirname(file), timeout: 15_000 })
+      return r.code === 0 ? r.stdout : null
+    },
     'git.generateCommitMessage': async (_e, cwd: string) => {
       const diff = await git.rawDiffForMessage(cwd)
       if (!diff.trim()) throw new Error('No changes to describe')
@@ -320,6 +361,11 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     },
     'worktree.restore': (_e, id: string) => wt.restoreWorktree(id),
     'worktree.createBranch': (_e, id: string, name: string, exact?: boolean) => wt.createBranchHere(id, name, exact),
+    // Chats on their own worktree branches (see worktrees/branchSync.ts).
+    'branches.status': (_e, worktreeId: string) => branchSync.chatBranchStatus(worktreeId),
+    'branches.merge': (_e, worktreeId: string, opts?: { stashLocal?: boolean; push?: boolean }) => branchSync.mergeIntoTarget(worktreeId, opts),
+    'branches.vsRemote': (_e, cwd: string, branch: string) => git.toplevel(cwd).then((root) => branchSync.branchVsRemote(root ?? cwd, branch)),
+    'branches.push': (_e, cwd: string, branch: string) => git.toplevel(cwd).then((root) => branchSync.pushBranch(root ?? cwd, branch)),
     'worktree.createPermanent': (_e, cwd: string, name?: string) => wt.createWorktree({ repoCwd: cwd, permanent: true, name }),
     'worktree.forget': (_e, id: string) => {
       updateState((s) => (s.worktrees = s.worktrees.filter((w) => w.id !== id)))
@@ -369,6 +415,15 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'processes.close': (_e, id: string) => processes.close(id),
 
     // ---- mesh ----
+    // The mode a Claude chat starts in when Claude Deck doesn't pass one: the user's own Claude setting.
+    'agent.claudeDefaultMode': async () => {
+      try {
+        const j = JSON.parse(await fs.promises.readFile(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'))
+        return typeof j?.permissions?.defaultMode === 'string' ? j.permissions.defaultMode : null
+      } catch {
+        return null
+      }
+    },
     // The UI's answer to an agent app tool (see appTools.ts).
     'agent.reply': (_e, reqId: string, result: unknown) => resolveAgentReply(reqId, result),
     'mesh.groups': () => sessions.mesh.allGroups(),
@@ -445,13 +500,29 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       return file
     },
     'window.registerExplorerMenu': (_e, on: boolean) => windows.registerExplorerMenu(on),
-    'image.fromPath': (_e, p: string) => nativeImage.createFromPath(p).toDataURL()
+    'image.fromPath': (_e, p: string) => nativeImage.createFromPath(p).toDataURL(),
+
+    // ---- diagnostics ----
+    'diag.log': (_e, level: DiagLevel, source: string, message: string, stack?: string) => void logDiag(level, source, message, stack),
+    'diag.recent': () => recentDiag(),
+    'diag.logFile': () => diagLogFile(),
+    'diag.openFolder': async () => {
+      await fs.promises.mkdir(diagLogDir(), { recursive: true })
+      return shell.openPath(diagLogDir())
+    }
   }
 
+  // Every renderer call funnels through here, so this is the one place a failing handler gets logged
+  // (many call sites fire-and-forget). The error is still rethrown for the caller to handle.
   ipcMain.handle('deck:call', async (e, method: string, args: unknown[]) => {
-    const fn = h[method]
-    if (!fn) throw new Error(`Unknown method ${method}`)
-    return (fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(e, ...args)
+    try {
+      const fn = h[method]
+      if (!fn) throw new Error(`Unknown method ${method}`)
+      return await (fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(e, ...args)
+    } catch (err) {
+      logDiag('error', `ipc:${method}`, err)
+      throw err
+    }
   })
 
   // Hot paths: fire-and-forget, no promise round-trip.

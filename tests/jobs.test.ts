@@ -3,6 +3,7 @@ import {
   buildRetryPrompt,
   buildRoutineChatPrompt,
   buildStepPrompt,
+  routineRunName,
   extractJson,
   jobAssistPrompt,
   jobRunBranchName,
@@ -147,5 +148,15 @@ describe('routines', () => {
     expect(jobAssistPrompt('refactor UI', undefined, { routine: true })).toContain('repo-agnostic')
     expect(jobAssistPrompt('refactor UI')).not.toContain('repo-agnostic')
     expect(routineDesignBrief()).not.toContain('repo_jobs/')
+  })
+})
+
+describe('routineRunName', () => {
+  it('puts the project first', () => {
+    expect(routineRunName('Fix lint', 'claude_ui')).toBe('claude_ui - Fix lint')
+  })
+  it('falls back to the routine name without a project', () => {
+    expect(routineRunName('Fix lint', undefined)).toBe('Fix lint')
+    expect(routineRunName('Fix lint', '  ')).toBe('Fix lint')
   })
 })

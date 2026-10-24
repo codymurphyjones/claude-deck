@@ -203,13 +203,15 @@ export function cleanCommitMessage(raw: string): string {
 
 /**
  * Put the user's commit prefix (e.g. "CJ | ") in front of a message, separated by a space even if
- * the setting has none; a message that already starts with it is left as is. An empty prefix or
+ * the setting has none; a message that already starts with it (as a whole word) is left as is. An empty prefix or
  * message is returned untouched (an empty amend message means "keep the last one").
  */
 export function applyCommitPrefix(message: string, prefix: string | undefined): string {
   const p = (prefix ?? '').trim()
   if (!p || !message.trim()) return message
   const m = message.replace(/^\s+/, '')
-  if (m.startsWith(p)) return m
+  // Already prefixed, unless the prefix only starts a longer word ("WIP" vs "WIPE stale cache").
+  const next = m.charAt(p.length)
+  if (m.startsWith(p) && (!next || !/\w/.test(next) || !/\w$/.test(p))) return m
   return `${p} ${m}`
 }

@@ -2,21 +2,23 @@ import { useState } from 'react'
 import { api } from '../api'
 import { runCommand } from '../commands'
 import { shortcutMap, prettyCombo } from '../shortcuts'
-import { closeSession, focusTab, get, mergeTabInto, moveTab, openSession, set, signIn, useAuth, useStore, type Tab } from '../store'
+import { closeGroup, goHome, HOME, moveGroup, openGroup, openSession, QUICK, set, signIn, useAuth, useStore } from '../store'
 import { Icon } from './Icon'
+import { SubTabs } from './SubTabs'
 import { openMenu, openMenuAt, STATUS_LABEL } from './ui'
 
-function tabStatus(t: Tab, sessions: ReturnType<typeof useStore.getState>['sessions']) {
-  const list = t.sessionIds.map((id) => sessions[id]).filter(Boolean)
-  const order = ['needs-input', 'waiting-auth', 'working', 'starting', 'blocked', 'idle', 'exited']
-  const status = list.map((s) => s.status).sort((a, b) => order.indexOf(a) - order.indexOf(b))[0] ?? 'exited'
-  return { list, status, unread: list.some((s) => s.unread), pending: list.reduce((n, s) => n + (s.pendingMessages || 0), 0) }
-}
+// Title bar: Home, then one tab per open workspace (a project, or Quick chats). A workspace's chats,
+// Overview and editor are its sub-tabs (SubTabs, under the title bar). A popout window shows its
+// single chat's tab here instead.
+
+const ORDER = ['needs-input', 'waiting-auth', 'working', 'starting', 'blocked', 'idle', 'exited']
 
 export function TitleBar() {
+  const groups = useStore((s) => s.groups)
+  const activeGroup = useStore((s) => s.activeGroup)
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
   const sessions = useStore((s) => s.sessions)
+  const projects = useStore((s) => s.library.projects)
   const auth = useAuth()
   const popout = useStore((s) => s.popoutSessionId)
   const settings = useStore((s) => s.settings)
@@ -36,111 +38,95 @@ export function TitleBar() {
       { label: 'Run a cloud task…', icon: 'cloud', onClick: () => runCommand('cloud') }
     ])
 
-  const tabMenu = (e: React.MouseEvent, t: Tab): void => {
-    const s = sessions[t.activePane]
-    openMenu(e, [
-      { label: 'Rename…', icon: 'edit', onClick: () => (focusTab(t.id), runCommand('renameSession')) },
-      { label: 'Split with new session', icon: 'split', onClick: () => s && openSession('agent', { cwd: s.cwd }, { mode: 'split', splitOf: s.id }) },
-      { label: 'Pop out', icon: 'popout', onClick: () => api.window.popOut(t.activePane) },
-      { label: 'Fork chat', icon: 'fork', disabled: s?.kind !== 'agent', onClick: () => (focusTab(t.id), runCommand('forkChat')) },
-      { label: 'Restart', icon: 'refresh', onClick: () => (focusTab(t.id), runCommand('restartSession')) },
-      { label: 'Reveal folder', icon: 'folder-open', onClick: () => s && api.shell.openPath(s.cwd) },
-      { separator: true },
-      { label: 'Close tab', icon: 'x', danger: true, onClick: () => t.sessionIds.forEach((id) => closeSession(id)) },
-      { label: 'Close other tabs', icon: 'x', danger: true, onClick: () => get().tabs.filter((x) => x.id !== t.id).forEach((x) => x.sessionIds.forEach((id) => closeSession(id))) }
-    ])
-  }
+  if (popout)
+    return (
+      <div className="titlebar">
+        <SubTabs inTitleBar />
+        <div className="drag" />
+      </div>
+    )
 
   return (
     <div className="titlebar">
-      {!popout && (
-        <button className="brand icon-btn" style={{ width: 'auto', padding: '0 8px' }} onClick={(e) => newMenu(e.currentTarget)} title="Claude Deck">
-          <span className="brand-mark">
-            <Icon name="sparkles" size={12} stroke={2.4} />
-          </span>
-          <span>Deck</span>
-        </button>
-      )}
+      <button className={`icon-btn home-btn ${activeGroup === HOME ? 'on' : ''}`} title="Home: all projects" onClick={goHome}>
+        <Icon name="home" size={16} />
+      </button>
       <div className="tabs" onDragOver={(e) => e.preventDefault()}>
-        {tabs.map((t, i) => {
-          const { list, status, unread, pending } = tabStatus(t, sessions)
-          const first = list[0]
-          if (!first) return null
-          const title = list.length > 1 ? list.map((s) => s.name).join(' · ') : first.name
-          const stripe = list.find((s) => s.meshColor && Object.values(sessions).filter((x) => x.meshGroup === s.meshGroup && x.status !== 'exited').length > 1)?.meshColor
+        {groups.map((g, i) => {
+          const p = projects.find((x) => x.id === g)
+          const mine = tabs.filter((t) => t.group === g)
+          const chats = mine.flatMap((t) => t.sessionIds.map((id) => sessions[id]).filter(Boolean)).filter((s) => s.kind !== 'shell')
+          const status = chats.map((s) => s.status).sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b))[0]
+          const unread = chats.some((s) => s.unread)
+          const pending = chats.reduce((n, s) => n + (s.pendingMessages || 0), 0)
+          const name = g === QUICK ? 'Quick chats' : (p?.name ?? 'Project')
+          const close = (): void => void closeGroup(g)
           return (
             <div
-              key={t.id}
-              className={`tab ${t.id === activeTabId ? 'active' : ''} ${unread ? 'unread' : ''} ${dropBefore === t.id ? 'drop-before' : ''}`}
+              key={g}
+              className={`tab group-tab ${g === activeGroup ? 'active' : ''} ${unread ? 'unread' : ''} ${dropBefore === g ? 'drop-before' : ''}`}
               draggable
               onDragStart={(e) => {
-                e.dataTransfer.setData('application/x-deck-tab', t.id)
+                e.dataTransfer.setData('application/x-deck-group', g)
                 e.dataTransfer.effectAllowed = 'move'
               }}
               onDragOver={(e) => {
-                if (e.dataTransfer.types.includes('application/x-deck-tab')) {
+                if (e.dataTransfer.types.includes('application/x-deck-group')) {
                   e.preventDefault()
-                  setDropBefore(t.id)
+                  setDropBefore(g)
                 }
               }}
               onDragLeave={() => setDropBefore(null)}
               onDrop={(e) => {
-                const from = e.dataTransfer.getData('application/x-deck-tab')
+                const from = e.dataTransfer.getData('application/x-deck-group')
                 setDropBefore(null)
-                if (from && from !== t.id) moveTab(from, i)
+                if (from && from !== g) moveGroup(from, i)
               }}
               onMouseDown={(e) => {
                 if (e.button === 1) {
                   e.preventDefault()
-                  t.sessionIds.forEach((id) => closeSession(id))
-                } else if (e.button === 0) focusTab(t.id)
+                  close()
+                } else if (e.button === 0) openGroup(g)
               }}
-              onContextMenu={(e) => tabMenu(e, t)}
-              title={`${title}\n${first.cwd}\n${STATUS_LABEL[status]}`}
+              onContextMenu={(e) =>
+                openMenu(e, [
+                  { label: p ? `New chat in ${p.name}` : 'New session…', icon: 'plus', onClick: () => (p ? void openSession('agent', { cwd: p.folders[0] }) : set({ newSession: {} })) },
+                  ...(p ? [{ label: 'Reveal folder', icon: 'folder-open', onClick: () => api.shell.openPath(p.folders[0]) }] : []),
+                  { separator: true },
+                  { label: chats.length ? `Close ${name} (${chats.length} chat${chats.length === 1 ? '' : 's'})` : `Close ${name}`, icon: 'x', danger: true, onClick: close }
+                ])
+              }
+              title={`${name}${p ? `\n${p.folders.join('\n')}` : ''}\n${chats.length} chat${chats.length === 1 ? '' : 's'}${status ? ` · ${STATUS_LABEL[status] ?? status}` : ''}`}
             >
-              <span className={`dot ${status}`} />
-              {first.kind === 'login' && <Icon name="login" size={13} />}
-              {first.kind === 'command' && <Icon name="cloud" size={13} />}
-              {list.length > 1 && <Icon name="split" size={13} />}
-              <span className="title">{title}</span>
+              {status ? <span className={`dot ${status}`} /> : <Icon name={g === QUICK ? 'zap' : 'folder'} size={13} style={{ color: 'var(--accent)' }} />}
+              <span className="title">{name}</span>
+              {chats.length > 1 && <span className="group-count">{chats.length}</span>}
               {pending > 0 && <span className="count" title="Unread peer messages">{pending}</span>}
               <button
                 className="icon-btn sm close"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation()
-                  t.sessionIds.forEach((id) => closeSession(id))
+                  close()
                 }}
                 title="Close"
               >
                 <Icon name="x" size={13} />
               </button>
-              {stripe && <span className="stripe" style={{ background: stripe }} />}
             </div>
           )
         })}
       </div>
-      {!popout && (
-        <button className="icon-btn" title={`New session (${prettyCombo(sc.newSession)})`} onClick={() => set({ newSession: {} })} onContextMenu={(e) => newMenu(e.currentTarget)}>
-          <Icon name="plus" />
-        </button>
-      )}
+      <button className="icon-btn" title={`New session (${prettyCombo(sc.newSession)})`} onClick={() => set({ newSession: {} })} onContextMenu={(e) => newMenu(e.currentTarget)}>
+        <Icon name="plus" />
+      </button>
       <div className="drag" onDoubleClick={() => set({ newSession: {} })} />
-      {tabs.length > 0 && !popout && (
-        <button
-          className="icon-btn"
-          title="Drop a tab here to merge it into the active tab as a split"
-          onDragOver={(e) => e.dataTransfer.types.includes('application/x-deck-tab') && e.preventDefault()}
-          onDrop={(e) => {
-            const from = e.dataTransfer.getData('application/x-deck-tab')
-            const into = get().activeTabId
-            if (from && into) mergeTabInto(from, into)
-          }}
-          onClick={() => runCommand('splitRight')}
-        >
-          <Icon name="split" />
-        </button>
-      )}
+      <button className="brand icon-btn" style={{ width: 'auto', padding: '0 8px' }} onClick={(e) => newMenu(e.currentTarget)} title="Claude Deck: new session, quick chat, open folder…">
+        <span className="brand-mark">
+          <Icon name="sparkles" size={12} stroke={2.4} />
+        </span>
+        <span>Deck</span>
+      </button>
       <button className="icon-btn" title={`Command palette (${prettyCombo(sc.palette)})`} onClick={() => set({ palette: 'all' })}>
         <Icon name="search" />
       </button>

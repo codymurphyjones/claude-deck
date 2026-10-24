@@ -56,7 +56,7 @@ export function ReviewsView() {
   return (
     <>
       <div className="sidebar-head">
-        <span className="title">Code review</span>
+        <span className="title">Pull requests</span>
         <button className={`icon-btn sm ${refreshing ? 'spinning' : ''}`} title={refreshing ? 'Refreshing…' : 'Refresh'} onClick={load}>
           <Icon name="refresh" size={14} />
         </button>

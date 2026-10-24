@@ -1,3 +1,4 @@
+import { RECOMMENDED_ALWAYS_ASK } from './agentTools'
 import type { Settings } from './types'
 
 export const DEFAULT_SHORTCUTS: Record<string, string> = {
@@ -9,6 +10,9 @@ export const DEFAULT_SHORTCUTS: Record<string, string> = {
   reopenClosed: 'Ctrl+Shift+T',
   nextTab: 'Ctrl+Tab',
   prevTab: 'Ctrl+Shift+Tab',
+  goHome: 'Ctrl+Alt+H',
+  nextWorkspace: 'Ctrl+PageDown',
+  prevWorkspace: 'Ctrl+PageUp',
   settings: 'Ctrl+,',
   toggleSidebar: 'Ctrl+B',
   toggleShell: 'Ctrl+`',
@@ -61,8 +65,9 @@ export const DEFAULT_SETTINGS: Settings = {
     codex: { path: '', defaultModel: '', defaultEffort: '', defaultPermissionMode: '' }
   },
   shell: '',
-  worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true },
+  worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true, perChat: true, linkNodeModules: true },
   git: { commitPrefix: '' },
+  agentPermissions: { appTools: {}, alwaysAsk: [...RECOMMENDED_ALWAYS_ASK], allowBypassSwitch: true },
   mesh: {
     enabled: true,
     claimMode: 'ask',

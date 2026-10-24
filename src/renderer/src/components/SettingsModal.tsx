@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PROVIDER_IDS, PROVIDERS, type ProviderId, type ProviderSettings } from '@shared/agent'
+import { APP_TOOL_INFO, APP_TOOL_TIERS, appToolTier, RECOMMENDED_ALWAYS_ASK, type AppToolName } from '@shared/agentTools'
 import { DEFAULT_SHORTCUTS } from '@shared/defaults'
+import { formatDiagEntry, type DiagEntry } from '@shared/diagnostics'
 import type { EnvAction, EnvironmentConfig, Insights, PromptTemplate, SessionTemplate, Settings, ThemeDef } from '@shared/types'
 import { api } from '../api'
 import { commands } from '../commands'
@@ -16,6 +18,7 @@ const NAV: [string, string, string][] = [
   ['general', 'General', 'settings'],
   ['appearance', 'Appearance', 'palette'],
   ['chat', 'Chat', 'message'],
+  ['permissions', 'AI permissions', 'shield'],
   ['shortcuts', 'Keyboard shortcuts', 'keyboard'],
   ['notifications', 'Notifications', 'bell'],
   ['account', 'Account', 'user'],
@@ -27,6 +30,7 @@ const NAV: [string, string, string][] = [
   ['archived', 'Archived chats', 'archive'],
   ['profile', 'Profile & insights', 'activity'],
   ['updates', 'Updates & versions', 'download'],
+  ['diagnostics', 'Diagnostics', 'activity'],
   ['about', 'About', 'sparkles']
 ]
 
@@ -66,6 +70,7 @@ export function SettingsModal() {
           {section === 'general' && <General s={settings} update={update} />}
           {section === 'appearance' && <Appearance s={settings} update={update} />}
           {section === 'chat' && <ChatSection s={settings} update={update} />}
+          {section === 'permissions' && <AiPermissions s={settings} update={update} />}
           {section === 'shortcuts' && <Shortcuts s={settings} update={update} />}
           {section === 'notifications' && <Notifications s={settings} update={update} />}
           {section === 'account' && <Account />}
@@ -78,6 +83,7 @@ export function SettingsModal() {
           {section === 'profile' && <Profile />}
           {section === 'about' && <About />}
           {section === 'updates' && <UpdatesSection s={settings} update={update} />}
+          {section === 'diagnostics' && <Diagnostics />}
         </div>
       </div>
     </Modal>
@@ -290,6 +296,112 @@ function Appearance({ s, update }: P) {
       <Row label="Code & terminal font size" desc="Also Ctrl + / Ctrl − / Ctrl 0.">
         <input className="input" type="number" min={8} max={32} style={{ width: 80 }} value={s.codeFontSize} onChange={(e) => update({ codeFontSize: +e.target.value })} />
       </Row>
+    </>
+  )
+}
+
+const MODE_HELP: Record<string, string> = {
+  auto: 'Auto: a classifier approves routine actions without asking and blocks risky ones. You are only asked for rules on the list below.',
+  manual: 'Ask for everything: Claude asks before every action that isn’t read-only.',
+  acceptEdits: 'Accept edits: file edits go through; commands and other actions ask first.',
+  plan: 'Plan: read-only until you approve a plan.',
+  bypassPermissions: 'Bypass: nothing asks, not even the list below.',
+  dontAsk: 'Don’t ask: anything that would prompt is denied instead.'
+}
+
+/** What agents may do without asking: the starting mode, checkpoints that always ask, and the app tools. */
+function AiPermissions({ s, update }: P) {
+  const ap = s.agentPermissions
+  const set2 = (patch: Partial<Settings['agentPermissions']>): void => update({ agentPermissions: { ...ap, ...patch } })
+  const prov = s.providers.claude
+  const [globalMode, setGlobalMode] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    void api.agent.claudeDefaultMode().then(setGlobalMode, () => setGlobalMode(null))
+  }, [])
+  const effective = prov.defaultPermissionMode || globalMode || 'manual'
+  const [askText, setAskText] = useState(ap.alwaysAsk.join('\n'))
+  const saveAsk = (text: string): void => set2({ alwaysAsk: text.split('\n').map((l) => l.trim()).filter(Boolean) })
+  const tools = Object.keys(APP_TOOL_TIERS) as AppToolName[]
+  return (
+    <>
+      <h3>How Claude chats start</h3>
+      <Row
+        label="Permission mode"
+        desc={
+          <>
+            {prov.defaultPermissionMode ? null : (
+              <>
+                “Default” uses your own Claude setting (<code>~/.claude/settings.json</code>), which is <b>{globalMode === undefined ? '…' : (globalMode ?? 'not set: ask for everything')}</b>.{' '}
+              </>
+            )}
+            {MODE_HELP[effective] ?? ''}
+          </>
+        }
+      >
+        <select className="select" value={prov.defaultPermissionMode} onChange={(e) => update({ providers: { ...s.providers, claude: { ...prov, defaultPermissionMode: e.target.value } } })}>
+          {PROVIDERS.claude.permissionModes.map(([v, l]) => (
+            <option key={v} value={v}>
+              {v ? l : `Default (${globalMode ?? 'your Claude setting'})`}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Allow switching to Bypass mid-session" desc="Lets you pick Bypass permissions from a chat’s mode menu while it runs. Off: Bypass is only available for chats started in it. Doesn’t change how Auto behaves.">
+        <Switch on={ap.allowBypassSwitch} onChange={(allowBypassSwitch) => set2({ allowBypassSwitch })} />
+      </Row>
+
+      <h3>Always ask before</h3>
+      <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+        Claude stops and asks you before anything matching these rules, in every mode except Bypass, <b>including Auto</b>. One Claude permission rule per line, e.g. <code>Bash(git push *)</code>, <code>Bash(rm -rf *)</code>, <code>Write(src/**)</code>. A <code>Bash(…)</code> rule also covers the same command run through PowerShell (Claude uses either on Windows). Applies to Claude chats.
+      </div>
+      <textarea className="textarea mono" rows={9} value={askText} onChange={(e) => setAskText(e.target.value)} onBlur={() => saveAsk(askText)} spellCheck={false} />
+      <div className="row" style={{ gap: 6 }}>
+        <button
+          className="btn sm"
+          onClick={() => {
+            const t = RECOMMENDED_ALWAYS_ASK.join('\n')
+            setAskText(t)
+            saveAsk(t)
+          }}
+        >
+          Reset to recommended
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {ap.alwaysAsk.length} rule{ap.alwaysAsk.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <h3>Claude Deck tools</h3>
+      <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+        Tools that let an agent act on this app. Everything they do is logged in the Timeline (right panel → Timeline → AI actions).
+      </div>
+      {tools.map((t) => {
+        const tier = appToolTier(t, ap.appTools)
+        return (
+          <Row
+            key={t}
+            label={APP_TOOL_INFO[t]}
+            desc={
+              <>
+                <code>{t}</code>
+                {APP_TOOL_TIERS[t] === tier ? ' · default' : ''}
+              </>
+            }
+          >
+            <Seg
+              value={tier}
+              onChange={(v) => set2({ appTools: { ...ap.appTools, [t]: v === APP_TOOL_TIERS[t] ? undefined : v } })}
+              options={[
+                ['auto', 'Without asking'],
+                ['confirm', 'Ask each time']
+              ]}
+            />
+          </Row>
+        )
+      })}
+      <div className="muted" style={{ fontSize: 12 }}>
+        Changes apply to chats started or restarted from now on.
+      </div>
     </>
   )
 }
@@ -543,6 +655,15 @@ function Worktrees({ s, update }: P) {
         <input className="input mono" style={{ width: 160 }} value={g.commitPrefix} placeholder="none" onChange={(e) => update({ git: { ...g, commitPrefix: e.target.value } })} />
       </Row>
       <h3>Worktrees</h3>
+      <Row
+        label="Each chat works in its own worktree"
+        desc="New chats in a Git repo get their own copy (in Claude Deck's data folder) on a branch of their own, off the branch you pick (by default, the one your folder has checked out). Merge into <branch> brings the work back: your folder updates right away if it's on that branch (or after you confirm, if it has uncommitted changes); other branches are updated and pushed from Claude Deck. Turn off to have chats edit your folder directly; you can also choose per chat in New session."
+      >
+        <Switch on={w.perChat} onChange={(perChat) => update({ worktrees: { ...w, perChat } })} />
+      </Row>
+      <Row label="Share installed packages with worktrees" desc="Links the repo's node_modules folders into each new worktree, so scripts and tests run there without reinstalling.">
+        <Switch on={w.linkNodeModules} onChange={(linkNodeModules) => update({ worktrees: { ...w, linkNodeModules } })} />
+      </Row>
       <Row label="Worktree folder" desc="Where managed worktrees are created. Empty = Claude Deck's data folder.">
         <div className="row">
           <input className="input mono" value={w.root} placeholder="default" onChange={(e) => update({ worktrees: { ...w, root: e.target.value } })} />
@@ -905,6 +1026,53 @@ function Profile() {
           </div>
         </>
       )}
+    </>
+  )
+}
+
+function Diagnostics() {
+  const [entries, setEntries] = useState<DiagEntry[]>([])
+  const [file, setFile] = useState('')
+  const refresh = (): void => {
+    void attempt(async () => setEntries((await api.diag.recent()).reverse()))
+  }
+  useEffect(() => {
+    refresh()
+    void api.diag.logFile().then(setFile, () => undefined)
+  }, [])
+  const errors = entries.filter((e) => e.level === 'error').length
+  return (
+    <>
+      <Row label="Log file" desc={`Failed actions and uncaught errors, kept across restarts. ${entries.length} recent entries, ${errors} errors.`}>
+        <span className="mono" style={{ fontSize: 12 }}>
+          {file}
+        </span>
+      </Row>
+      <div className="row">
+        <button className="btn" onClick={refresh}>
+          Refresh
+        </button>
+        <button className="btn" onClick={() => attempt(() => api.clipboard.writeText(entries.map(formatDiagEntry).join('\n')), 'Copied')}>
+          Copy all
+        </button>
+        <button className="btn" onClick={() => attempt(() => api.diag.openFolder())}>
+          Open log folder
+        </button>
+      </div>
+      {!entries.length && <div className="empty-note">Nothing logged yet.</div>}
+      <div data-testid="diag-entries" style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {entries.map((e, i) => (
+          <div
+            key={i}
+            data-level={e.level}
+            className="mono"
+            title={e.stack}
+            style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', border: '1px solid var(--border)', ...(e.level === 'error' ? { borderColor: 'var(--danger)', color: 'var(--danger)' } : { color: e.level === 'warn' ? 'var(--warning)' : 'var(--muted)' }) }}
+          >
+            {new Date(e.at).toLocaleString()} [{e.source}] {e.message}
+          </div>
+        ))}
+      </div>
     </>
   )
 }

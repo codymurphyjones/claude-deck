@@ -3,6 +3,9 @@ import type {
   AuthStatus,
   Automation,
   AutomationRun,
+  BranchVsRemote,
+  ChatBranchStatus,
+  ChatMergeResult,
   BoardItem,
   ChatRecord,
   CommitInfo,
@@ -33,6 +36,7 @@ import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import type { BranchInfo, CommitAction, CurrentPr, RemoteInfo, RepoStatus, StashAction, StashInfo, TagInfo } from '@shared/repo'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import type { LoadResult } from '@shared/progressive'
+import type { DiagEntry, DiagLevel } from '@shared/diagnostics'
 
 interface Bridge {
   call: (method: string, ...args: unknown[]) => Promise<unknown>
@@ -117,7 +121,20 @@ export const api = {
     readFile: c<{ binary: boolean; size: number; content: string }, [string]>('fs.readFile'),
     writeFile: c<void, [string, string]>('fs.writeFile'),
     listFiles: c<string[], [string]>('fs.listFiles'),
-    saveTempImage: c<string, [string]>('fs.saveTempImage')
+    grep: c<{ results: { path: string; line: number; text: string }[]; truncated: boolean }, [string, string, { regex?: boolean; caseSensitive?: boolean; wholeWord?: boolean }?]>('fs.grep'),
+    saveTempImage: c<string, [string]>('fs.saveTempImage'),
+    saveTempText: c<string, [string, string]>('fs.saveTempText')
+  },
+  // Editor TypeScript language service (src/main/lsp). Offsets are into the text last sent with update.
+  ts: {
+    status: c<{ available: boolean; version?: string; bundled?: boolean }, [string?]>('ts.status'),
+    update: c<{ available: boolean }, [string, string, string?]>('ts.update'),
+    close: c<void, [string]>('ts.close'),
+    diagnostics: c<import('@shared/tsLang').TsDiagnostic[] | null, [string]>('ts.diagnostics'),
+    quickInfo: c<import('@shared/tsLang').TsQuickInfo | null, [string, number]>('ts.quickInfo'),
+    definition: c<import('@shared/tsLang').TsLocation[] | null, [string, number]>('ts.definition'),
+    completions: c<{ items: import('@shared/tsLang').TsCompletion[]; isMember: boolean } | null, [string, number, string?]>('ts.completions'),
+    completionDetails: c<import('@shared/tsLang').TsCompletionDetails | null, [string, number, string, string?, unknown?]>('ts.completionDetails')
   },
   clipboard: {
     readImage: c<string | undefined>('clipboard.readImage'),
@@ -170,7 +187,8 @@ export const api = {
     branches: c<string[], [string]>('git.branches'),
     commits: c<CommitInfo[], [string]>('git.commits'),
     createPr: c<string, [string, { title?: string; body?: string; draft?: boolean; base?: string }]>('git.createPr'),
-    generateCommitMessage: c<string, [string]>('git.generateCommitMessage')
+    generateCommitMessage: c<string, [string]>('git.generateCommitMessage'),
+    fileAtHead: c<string | null, [string]>('git.fileAtHead')
   },
   /** Progressive loads: batches arrive on `load:batch`; use loadProgressive() in ./progressive. */
   load: {
@@ -182,6 +200,12 @@ export const api = {
     createBranch: c<string, [string, string, boolean?]>('worktree.createBranch'),
     createPermanent: c<WorktreeRecord, [string, string?]>('worktree.createPermanent'),
     forget: c<void, [string]>('worktree.forget')
+  },
+  branches: {
+    status: c<ChatBranchStatus, [string]>('branches.status'),
+    merge: c<ChatMergeResult, [string, { stashLocal?: boolean; push?: boolean }?]>('branches.merge'),
+    vsRemote: c<BranchVsRemote, [string, string]>('branches.vsRemote'),
+    push: c<void, [string, string]>('branches.push')
   },
   env: {
     load: c<EnvironmentConfig, [string]>('env.load'),
@@ -225,7 +249,8 @@ export const api = {
     close: c<void, [string]>('processes.close')
   },
   agent: {
-    reply: c<void, [string, unknown]>('agent.reply')
+    reply: c<void, [string, unknown]>('agent.reply'),
+    claudeDefaultMode: c<string | null>('agent.claudeDefaultMode')
   },
   mesh: {
     groups: c<MeshGroupState[]>('mesh.groups'),
@@ -302,6 +327,12 @@ export const api = {
     releases: c<ReleaseInfo[]>('update.releases'),
     installVersion: c<void, [ReleaseInfo]>('update.installVersion'),
     releaseHold: c<void>('update.releaseHold')
+  },
+  diag: {
+    log: c<void, [DiagLevel, string, string, string?]>('diag.log'),
+    recent: c<DiagEntry[]>('diag.recent'),
+    logFile: c<string>('diag.logFile'),
+    openFolder: c<string>('diag.openFolder')
   },
   focusSession: c<void, [string]>('session.focus'),
   quit: c<void>('app.quit')

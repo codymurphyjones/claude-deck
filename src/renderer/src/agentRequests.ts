@@ -1,6 +1,7 @@
+import { isAgentDiffView, type AgentDiffView, type AppToolName } from '@shared/agentTools'
 import { api, bridge, errMsg } from './api'
 import { browserControl } from './browserControl'
-import { focusSessionTab, get, set, type AgentNote, type RightPanel } from './store'
+import { focusSessionTab, get, set, toast, type AgentNote, type RightPanel } from './store'
 
 // The UI half of the agent's app tools (src/main/appTools.ts): the main process forwards a tool call
 // here, and the text returned is what the agent sees.
@@ -8,11 +9,11 @@ import { focusSessionTab, get, set, type AgentNote, type RightPanel } from './st
 interface AgentRequest {
   reqId: string
   sessionId: string
-  tool: string
+  tool: AppToolName
   args: Record<string, unknown>
 }
 
-const VIEW_LABEL: Record<string, string> = { unstaged: 'Unstaged', staged: 'Staged', lastTurn: 'Last turn', branch: 'Branch' }
+const VIEW_LABEL: Record<AgentDiffView, string> = { unstaged: 'Unstaged', staged: 'Staged', lastTurn: 'Last turn', branch: 'Branch' }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 export function initAgentRequests(): void {
@@ -27,45 +28,58 @@ export function initAgentRequests(): void {
   })
 }
 
+type Reveal = { blocked: string } | { shown: boolean }
+
 /**
  * Show the session's tab with a right panel open. Refused while the user is in the Review file
- * editor, which locks tab and panel switches until they close it.
+ * editor, which locks tab and panel switches until they close it. An agent in a background tab
+ * doesn't pull the user away from the tab they're working in (unless `force`, for tools that can't
+ * work otherwise): `shown: false`, and the result waits for them in that chat.
  */
-function reveal(sessionId: string, panel: Exclude<RightPanel, null>): string | undefined {
+function reveal(sessionId: string, panel: Exclude<RightPanel, null>, force = false): Reveal {
   const s = get()
-  if (s.editorFile && s.editorFile.locked) return 'The user is editing a file from the Review pane; the app can\'t switch views until they close the editor. Ask them to, then try again.'
-  if (s.tabs.some((t) => t.sessionIds.includes(sessionId))) focusSessionTab(sessionId)
+  const tab = s.tabs.find((t) => t.sessionIds.includes(sessionId))
+  const inActiveTab = !!tab && tab.id === s.activeTabId
+  if (!inActiveTab && !force && document.hasFocus()) return { shown: false }
+  if (tab && !inActiveTab) focusSessionTab(sessionId)
   set({ rightPanel: panel })
-  return undefined
+  return { shown: true }
 }
+
+const sessionName = (id: string): string => get().sessions[id]?.name ?? 'A chat'
+const LATER = " The user is working in another tab, so it's waiting for them in this chat's Review pane."
+const diffView = (v: unknown, def?: AgentDiffView): AgentDiffView | undefined => (typeof v === 'string' && isAgentDiffView(v) ? v : def)
 
 async function handle({ sessionId, tool, args }: AgentRequest): Promise<string> {
   switch (tool) {
     case 'show_diff': {
-      const blocked = reveal(sessionId, 'review')
-      if (blocked) return blocked
-      const view = args.view as string | undefined
+      const r = reveal(sessionId, 'review')
+      if ('blocked' in r) return r.blocked
+      const view = diffView(args.view)
       const path = args.path as string | undefined
       set({ reviewFocus: { sessionId, view, path, at: Date.now() } })
-      return `Showing ${path ?? 'the changes'} in the Review pane${view ? ` (${VIEW_LABEL[view]} view)` : ''}.`
+      if (!r.shown) toast(`${sessionName(sessionId)} wants to show you ${path ?? 'its changes'}; open its tab to see them`)
+      return `${r.shown ? 'Showing' : 'Queued'} ${path ?? 'the changes'} in the Review pane${view ? ` (${VIEW_LABEL[view]} view)` : ''}.${r.shown ? '' : LATER}`
     }
 
     case 'request_review': {
-      const blocked = reveal(sessionId, 'review')
-      if (blocked) return blocked
+      const r = reveal(sessionId, 'review')
+      if ('blocked' in r) return r.blocked
       const notes = args.notes as AgentNote[]
-      const view = args.view as string
+      const view = diffView(args.view, 'unstaged')!
       set((s) => ({
         agentNotes: { ...s.agentNotes, [sessionId]: { notes, summary: args.summary as string | undefined, at: Date.now() } },
         reviewFocus: { sessionId, view, path: notes[0]?.path, at: Date.now() }
       }))
       const files = new Set(notes.map((n) => n.path)).size
-      return `Showing your ${notes.length} note(s) on ${files} file(s) next to the diff in the Review pane (${VIEW_LABEL[view] ?? view} view). Notes on lines that aren't part of the diff are listed at the top of the pane.`
+      if (!r.shown) toast(`${sessionName(sessionId)} left ${notes.length} review note(s); open its tab to see them`)
+      return `${r.shown ? 'Showing' : 'Saved'} your ${notes.length} note(s) on ${files} file(s) next to the diff in the Review pane (${VIEW_LABEL[view]} view). Notes on lines that aren't part of the diff are listed at the top of the pane.${r.shown ? '' : LATER}`
     }
 
     case 'open_browser': {
-      const blocked = reveal(sessionId, 'browser')
-      if (blocked) return blocked
+      // The pane has to be visible to load and read a page.
+      const r = reveal(sessionId, 'browser', true)
+      if ('blocked' in r) return r.blocked
       // The pane mounts on the next render; wait for its handle.
       let ctl = browserControl()
       for (let i = 0; !ctl && i < 50; i++) {
@@ -91,6 +105,13 @@ async function handle({ sessionId, tool, args }: AgentRequest): Promise<string> 
       set({ routineRunFor: { slug: String(args.slug), cwd: String(args.cwd), context: args.context as string | undefined } })
       return `Opened the run dialog for routine "${String(args.name)}" on ${String(args.cwd)}${args.context ? ', with your context filled in' : ''}. The user reviews the options and starts it; it doesn't run until they do.`
     }
+
+    // Handled in the main process; never forwarded here.
+    case 'open_file':
+    case 'read_process':
+    case 'run_process':
+    case 'notify':
+      break
   }
   return `Unknown tool ${tool}`
 }

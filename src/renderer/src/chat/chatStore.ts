@@ -73,4 +73,33 @@ export function dropChat(id: string): void {
 }
 
 // ---- composer drafts survive tab switches ----
-export const useDrafts = create<Record<string, { text: string; images: { mediaType: string; data: string; name: string }[] }>>(() => ({}))
+export type Draft = { text: string; images: { mediaType: string; data: string; name: string }[] }
+export const useDrafts = create<Record<string, Draft>>(() => ({}))
+/**
+ * Messages set aside with the composer's lock button until put back. Keyed by conversation id
+ * (stable when a chat is resumed after a restart) and saved, so they survive closing the app.
+ */
+const LOCKED_KEY = 'deck.lockedMessages'
+function loadLocked(): Record<string, Draft | undefined> {
+  try {
+    return JSON.parse(localStorage.getItem(LOCKED_KEY) ?? '{}')
+  } catch {
+    return {}
+  }
+}
+export const useLocked = create<Record<string, Draft | undefined>>(loadLocked)
+useLocked.subscribe((all) => {
+  const kept = Object.fromEntries(Object.entries(all).filter(([, d]) => d))
+  try {
+    localStorage.setItem(LOCKED_KEY, JSON.stringify(kept))
+  } catch {
+    // Most likely too large (pasted images): keep the text, drop the images from what's saved.
+    try {
+      localStorage.setItem(LOCKED_KEY, JSON.stringify(Object.fromEntries(Object.entries(kept).map(([k, d]) => [k, { text: d!.text, images: [] }]))))
+    } catch {
+      /* storage unavailable: still locked for this session */
+    }
+  }
+})
+/** The key a chat's locked message is stored under: its conversation, so it outlives the session. */
+export const lockKey = (s: { id: string; agentSessionId?: string }): string => s.agentSessionId || s.id

@@ -1,6 +1,7 @@
 import type { MeshRole, SessionInfo } from '@shared/types'
 import { settings } from '../context'
 import { getProject } from '../library'
+import { getWorktree } from '../worktrees/worktreeService'
 import { helperRuntime, runtime } from '../runtime'
 
 const ROLE_BRIEFS: Record<MeshRole, string> = {
@@ -64,10 +65,25 @@ export function sessionBrief(s: SessionInfo): string {
     cfg.chat.uiAwareness ? rendererBrief(cfg.chat.renderingGuidance) : '',
     cfg.mesh.enabled ? meshBrief(s.role) : '',
     project?.instructions ? `Project instructions (from Claude Deck):\n${project.instructions}` : '',
+    worktreeBrief(s),
     s.launch.appendSystemPrompt ?? ''
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+/**
+ * A chat in its own worktree, working toward a branch: where it is, and that bringing the work into
+ * the target is the user's step ("Merge into"), so the agent commits rather than merging or switching.
+ */
+function worktreeBrief(s: SessionInfo): string {
+  const w = s.worktreeId ? getWorktree(s.worktreeId) : undefined
+  if (!w?.branch || !w.target) return ''
+  return [
+    `You are working in your own git worktree (${w.path}) on branch ${w.branch}, made from ${w.target}. The user's own folder and other chats are separate, so your edits don't disturb them.`,
+    `When a piece of work is done, commit it on ${w.branch} with a clear message. The user brings it into ${w.target} with Claude Deck's "Merge into ${w.target}", which also takes in ${w.target}'s newer commits first. Don't switch branches, and don't merge into or push ${w.target} yourself.`,
+    'If asked to resolve conflicts from merging the target into your branch, resolve them here, then `git add` the files and `git commit --no-edit`.'
+  ].join(' ')
 }
 
 /** Extra folders the agent may access (launch dirs + the project's other folders). */

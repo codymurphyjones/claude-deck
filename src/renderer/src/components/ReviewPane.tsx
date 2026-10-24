@@ -3,14 +3,18 @@ import { numberHunkLines } from '@shared/diff'
 import { isOpenPr, refNameError, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
-import { askText, attempt, set, toast, useStore, type AgentNote } from '../store'
+import { askText, attempt, openInEditor, set, toast, useStore, type AgentNote } from '../store'
 import { Icon } from './Icon'
+import { ChatBranchBar } from './ChatBranchBar'
 import { Seg, useExclusive } from './ui'
 import { useFind } from './FindBar'
 import { loadProgressive, type ProgressiveLoad } from '../progressive'
 import { highlightDiffLines, langForFile } from '../highlight'
 import { LazyCtx, scrollParent, useLazyObserver, useLazyShown } from '../lazyMount'
 import { cacheGet, cacheSet } from '../viewCache'
+
+/** Agent note paths are repo-relative, or absolute (forward slashes) for files outside the repo. */
+const isAbsPath = (p: string): boolean => /^([a-z]:)?\//i.test(p)
 
 /** Files with more diff lines than this are shown without highlighting. */
 const HIGHLIGHT_MAX_LINES = 6000
@@ -43,7 +47,6 @@ export function DiffList({
   onToggleViewed,
   root,
   busy,
-  onEdit,
   agentNotes
 }: {
   files: DiffFile[]
@@ -59,8 +62,6 @@ export function DiffList({
   viewed?: string[]
   onToggleViewed?: (path: string) => void
   root?: string
-  /** Show an Edit button per file (opens the in-app editor). */
-  onEdit?: (path: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -91,41 +92,41 @@ export function DiffList({
                 <b style={{ color, width: 12, fontFamily: 'var(--code-font)', fontSize: 12 }}>{ch}</b>
                 <span
                   className="fname grow ellipsis"
-                  title={root ? `${path} — click to open in editor` : path}
+                  title={root && f.status !== 'deleted' ? `${path} (click to open in the editor tab)` : path}
                   onClick={(e) => {
-                    if (!root) return
+                    if (!root || f.status === 'deleted') return
                     e.stopPropagation()
-                    void api.shell.openInEditor(`${root}/${path}`)
+                    openInEditor(`${root}/${path}`)
                   }}
-                  style={root ? { cursor: 'var(--cursor)' } : undefined}
+                  style={root && f.status !== 'deleted' ? { cursor: 'var(--cursor)' } : undefined}
                 >
                   {f.status === 'renamed' ? `${f.oldPath} → ${f.newPath}` : path}
                 </span>
                 <span style={{ color: 'var(--success)', fontSize: 11.5 }}>+{f.additions}</span>
                 <span style={{ color: 'var(--danger)', fontSize: 11.5 }}>-{f.deletions}</span>
-                {onEdit && f.status !== 'deleted' && !f.binary && (
-                  <button
-                    className="icon-btn sm"
-                    title="Edit this file"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onEdit(path)
-                    }}
-                  >
-                    <Icon name="edit" size={13} />
-                  </button>
-                )}
-                {root && f.status !== 'deleted' && (
-                  <button
-                    className="icon-btn sm"
-                    title="Open in editor"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void api.shell.openInEditor(`${root}/${path}`)
-                    }}
-                  >
-                    <Icon name="code" size={13} />
-                  </button>
+                {root && f.status !== 'deleted' && !f.binary && (
+                  <>
+                    <button
+                      className="icon-btn sm"
+                      title="Edit diff: only this file's changes, in the editor tab"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openInEditor(`${root}/${path}`, { diff: true })
+                      }}
+                    >
+                      <Icon name="split" size={13} />
+                    </button>
+                    <button
+                      className="icon-btn sm"
+                      title="Open in the editor tab"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openInEditor(`${root}/${path}`)
+                      }}
+                    >
+                      <Icon name="code" size={13} />
+                    </button>
+                  </>
                 )}
                 {onToggleViewed && (
                   <label className="check" style={{ fontSize: 11.5 }} onClick={(e) => e.stopPropagation()}>
@@ -337,7 +338,6 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const reqRef = useRef(0)
   const loadRef = useRef<ProgressiveLoad | undefined>(undefined)
   const [acting, exclusive] = useExclusive()
-  const editing = useStore((s) => !!s.editorFile && !!s.editorFile.locked)
 
   useEffect(() => () => loadRef.current?.cancel(), [])
 
@@ -417,7 +417,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
       const r = await pl.done
       if (req !== reqRef.current) return
       if (!r.records) setFiles([])
-      cacheSet(cacheKey, { files: all, info: gi })
+      cacheSet(cacheKey, { files: all, info: gi }, all.reduce((k, f) => k + f.hunks.reduce((m, h) => m + h.lines.length, 0), 1))
       if (view === 'commit' && !commits.length) setCommits(await api.git.commits(repo))
     } catch (e) {
       if (req === reqRef.current) {
@@ -599,7 +599,9 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const totalDel = files?.reduce((n, f) => n + f.deletions, 0) ?? 0
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div data-testid="review-pane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* A chat in its own worktree: its branch, what it merges into, and Merge. */}
+      {session.worktreeId && repo === session.root && <ChatBranchBar worktreeId={session.worktreeId} />}
       <div className="col" style={{ padding: '8px 10px', gap: 6, borderBottom: '1px solid var(--border)' }}>
         <div className="row" style={{ gap: 6 }}>
           {repos.length > 1 ? (
@@ -631,7 +633,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         </div>
         <Seg
           value={view}
-          onChange={(v) => (editing ? toast('Close the file editor before switching tabs', 'error') : setView(v))}
+          onChange={setView}
           options={[
             ['unstaged', 'Unstaged'],
             ['staged', 'Staged'],
@@ -702,7 +704,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
                   key={i}
                   className="agent-review-item"
                   title={off ? 'Not part of this diff: opens the file at that line' : 'Show in the diff'}
-                  onClick={() => (off ? set({ editorFile: { path: `${repo}/${n.path}`, line: n.line, at: Date.now() } }) : scrollToFile(n.path))}
+                  onClick={() => (off ? openInEditor(isAbsPath(n.path) ? n.path : `${repo}/${n.path}`, { line: n.line }) : scrollToFile(n.path))}
                 >
                   <span className="mono ellipsis">
                     {n.path.split('/').pop()}:{n.line}
@@ -724,8 +726,6 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
             onComment={(c) => setComments((cs) => [...cs, c])}
             root={repo}
             agentNotes={agentReview?.notes}
-            // An editor already open over the content area is re-targeted rather than remounted, so its unsaved edits survive.
-            onEdit={(p) => set((s) => ({ editorFile: { path: `${repo}/${p}`, locked: s.editorFile ? s.editorFile.locked : true } }))}
           />
         )}
       </div>

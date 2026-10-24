@@ -1,7 +1,11 @@
 import { Marked, type Tokens } from 'marked'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { normalizeLang } from '@shared/languages'
 import { inferFenceLang, tagFences } from '../src/renderer/src/chat/fenceLang'
+import { loadAllLanguages } from '../src/renderer/src/highlight'
+
+// The full highlight.js language set loads on demand in the app; load it up front here.
+beforeAll(() => loadAllLanguages())
 
 const LUA = 'local t = {}\nfor i = 1, 10 do\n  t[i] = i * 2\nend\nprint(#t)'
 

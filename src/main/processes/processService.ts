@@ -15,6 +15,8 @@ export class ProcessService {
   private procs = new Map<string, ProcessInfo>()
   private stopping = new Set<string>()
   private scans = new Map<string, ScriptPackage[]>()
+  /** Callbacks waiting for a run to finish (waitForExit). */
+  private exitWaiters = new Map<string, Set<() => void>>()
 
   constructor(private pty: PtyService) {
     pty.on('exit', (id: string, code: number) => this.onExit(id, code))
@@ -96,11 +98,34 @@ export class ProcessService {
       notify('process', undefined, `${p.command} failed${where}`, `Exit code ${code}: ${truncate(p.reason, 200)}`)
     }
     this.emit()
+    this.wakeExitWaiters(id)
+  }
+
+  /** Resolves once the run is no longer running, or after `ms`, whichever comes first. */
+  waitForExit(id: string, ms: number): Promise<void> {
+    if (this.procs.get(id)?.status !== 'running' || ms <= 0) return Promise.resolve()
+    return new Promise((resolve) => {
+      const waiters = this.exitWaiters.get(id) ?? new Set()
+      this.exitWaiters.set(id, waiters)
+      const done = (): void => {
+        clearTimeout(t)
+        waiters.delete(done)
+        if (!waiters.size) this.exitWaiters.delete(id)
+        resolve()
+      }
+      const t = setTimeout(done, ms)
+      waiters.add(done)
+    })
+  }
+
+  private wakeExitWaiters(id: string): void {
+    for (const w of [...(this.exitWaiters.get(id) ?? [])]) w()
   }
 
   private forget(id: string, emit = true): void {
     this.procs.delete(id)
     this.pty.dispose(id)
+    this.wakeExitWaiters(id)
     if (emit) this.emit()
   }
 

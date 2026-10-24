@@ -7,6 +7,7 @@ import { Icon } from './Icon'
 import { useRoots } from './Jobs'
 import { DiffList } from './ReviewPane'
 import { cacheGet, cacheSet } from '../viewCache'
+import { switchBranchSafely } from '../branchActions'
 import { Modal, openMenu, openMenuAt, shortPath, useExclusive } from './ui'
 
 // Repo manager: stage and commit, branches, history, stashes, tags, remotes and the
@@ -50,15 +51,13 @@ const EMPTY: RepoData = { branches: [], commits: [], stashes: [], tags: [], remo
 function useRepo(root?: string) {
   // The last result for this repo shows at once (e.g. after switching tabs) while it reloads.
   const [data, setDataRaw] = useState<RepoData>(() => (root && cacheGet<RepoData>(`repo:${root}`)) || EMPTY)
-  const setData = useCallback(
-    (next: RepoData | ((d: RepoData) => RepoData)) =>
-      setDataRaw((d) => {
-        const v = typeof next === 'function' ? next(d) : next
-        if (root && v !== EMPTY) cacheSet(`repo:${root}`, v)
-        return v
-      }),
-    [root]
-  )
+  const setData = setDataRaw
+  // Remember each result for the repo it belongs to. `dataRoot` moves with the data (set where a root
+  // switch replaces it, below), so the old repo's data is never stored under the new root.
+  const dataRoot = useRef(root)
+  useEffect(() => {
+    if (root && dataRoot.current === root && data !== EMPTY) cacheSet(`repo:${root}`, data, 1 + data.commits.length + data.branches.length)
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [limit, setLimit] = useState(40)
@@ -97,6 +96,7 @@ function useRepo(root?: string) {
   }, [root, limit, setData])
 
   useEffect(() => {
+    dataRoot.current = root
     setDataRaw((root && cacheGet<RepoData>(`repo:${root}`)) || EMPTY)
     void load()
   }, [load])
@@ -179,6 +179,13 @@ export function RepoView() {
     return r
   }
   const diff = (src: DiffRequest): void => set({ repoDiff: { ...src, cwd: root! } as RepoDiffSource })
+  /** Switch the folder to a local branch, checking it against origin first (branchActions). */
+  const switchTo = async (name: string): Promise<void> => {
+    setBusy('checkout')
+    await switchBranchSafely(root!, name, () => api.repo.checkout(root!, name))
+    setBusy('')
+    await load()
+  }
 
   if (!root)
     return (
@@ -227,7 +234,7 @@ export function RepoView() {
             { label: 'Delete remote branch', icon: 'trash', danger: true, onClick: () => void deleteBranch(b) }
           ]
         : [
-            { label: 'Check out', icon: 'branch', disabled: b.current, onClick: () => run('checkout', () => api.repo.checkout(root, b.name), `Switched to ${b.name}`) },
+            { label: 'Check out', icon: 'branch', disabled: b.current, onClick: () => void switchTo(b.name) },
             { label: 'New branch from here…', icon: 'plus', onClick: () => void newBranch(b.name) },
             ...(cur && !b.current
               ? [
@@ -336,7 +343,7 @@ export function RepoView() {
       key={b.name}
       className={`list-item ${b.current ? 'active' : ''} ${b.remote ? 'repo-remote-branch' : ''}`}
       style={{ alignItems: 'flex-start' }}
-      onDoubleClick={() => !b.current && run('checkout', () => api.repo.checkout(root, b.name, b.remote), `Switched to ${b.name}`)}
+      onDoubleClick={() => !b.current && (b.remote ? run('checkout', () => api.repo.checkout(root, b.name, true), `Switched to ${b.name}`) : void switchTo(b.name))}
       onClick={(e) => branchMenu(e, b)}
       onContextMenu={(e) => branchMenu(e, b)}
       title="Click for actions · double-click to check out"
@@ -424,7 +431,7 @@ export function RepoView() {
                   title="Switch branch"
                   onClick={(e) =>
                     openMenuAt(e.currentTarget, [
-                      ...local.filter((b) => !b.current).slice(0, 15).map((b) => ({ label: b.name, icon: 'branch', hint: b.date, onClick: () => run('checkout', () => api.repo.checkout(root, b.name), `Switched to ${b.name}`) })),
+                      ...local.filter((b) => !b.current).slice(0, 15).map((b) => ({ label: b.name, icon: 'branch', hint: b.date, onClick: () => void switchTo(b.name) })),
                       { separator: true },
                       { label: 'New branch…', icon: 'plus', onClick: () => void newBranch() }
                     ])

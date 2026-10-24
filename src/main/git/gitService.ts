@@ -31,6 +31,34 @@ export async function headSha(cwd: string): Promise<string | undefined> {
   return r.code === 0 ? r.stdout.trim() : undefined
 }
 
+/** aheadOfDefault results by repo + HEAD + base; short-lived so a fetch that moves the base shows up. */
+const aheadCache = new Map<string, { n: number; at: number }>()
+const AHEAD_TTL_MS = 60_000
+
+/**
+ * Commits on HEAD that aren't on the default branch (its remote copy, else the local one): what a
+ * push of an upstream-less branch would publish. info() runs on every Review refresh, so the
+ * `rev-list` spawns are cached per HEAD.
+ */
+async function aheadOfDefault(root: string, defaultBranch: string, head: string | undefined): Promise<number> {
+  const key = `${root}|${head ?? ''}|${defaultBranch}`
+  const hit = aheadCache.get(key)
+  if (head && hit && Date.now() - hit.at < AHEAD_TTL_MS) return hit.n
+  let n = 0
+  for (const base of [`origin/${defaultBranch}`, defaultBranch]) {
+    const r = await git(root, ['rev-list', '--count', `${base}..HEAD`])
+    if (r.code === 0) {
+      n = +r.stdout.trim() || 0
+      break
+    }
+  }
+  if (head) {
+    if (aheadCache.size > 200) aheadCache.clear()
+    aheadCache.set(key, { n, at: Date.now() })
+  }
+  return n
+}
+
 export async function info(cwd: string): Promise<GitInfo> {
   const root = await toplevel(cwd)
   if (!root) return { isRepo: false }
@@ -41,6 +69,7 @@ export async function info(cwd: string): Promise<GitInfo> {
     git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
   ])
   let upstream: string | undefined
+  let oid: string | undefined
   let ahead = 0
   let behind = 0
   let dirty = 0
@@ -50,7 +79,8 @@ export async function info(cwd: string): Promise<GitInfo> {
     if (/^[12u] /.test(line)) tracked++
     // "1 XY …" / "2 XY …": X is the index (staged) side, "." when unchanged.
     if (/^[12] [^.]/.test(line)) staged++
-    if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
+    if (line.startsWith('# branch.oid ')) oid = line.slice(13).trim()
+    else if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
     else if (line.startsWith('# branch.ab ')) {
       const m = /\+(\d+) -(\d+)/.exec(line)
       if (m) {
@@ -66,15 +96,7 @@ export async function info(cwd: string): Promise<GitInfo> {
   }
   // Nothing tracked upstream (a new branch, or a worktree's detached HEAD): count the commits that
   // aren't on the default branch yet, i.e. what a push would publish.
-  if (!upstream && defaultBranch && branch !== defaultBranch) {
-    for (const base of [`origin/${defaultBranch}`, defaultBranch]) {
-      const r = await git(root, ['rev-list', '--count', `${base}..HEAD`])
-      if (r.code === 0) {
-        ahead = +r.stdout.trim() || 0
-        break
-      }
-    }
-  }
+  if (!upstream && defaultBranch && branch !== defaultBranch) ahead = await aheadOfDefault(root, defaultBranch, oid)
   return {
     isRepo: true,
     root,
@@ -323,6 +345,10 @@ export async function createPr(cwd: string, opts: { title?: string; body?: strin
 
 export async function rawDiffForMessage(cwd: string): Promise<string> {
   const root = (await toplevel(cwd)) ?? cwd
+  // Concluding a merge / cherry-pick / revert: the staged diff alone (everything the other side
+  // brought in) says nothing about what was merged or how conflicts were resolved.
+  const op = await inProgressOperation(root)
+  if (op) return (await operationContext(root, op)).slice(0, 60_000)
   const staged = await git(root, ['diff', '--cached', '--no-color', '--stat', '-p'])
   if (staged.stdout.trim()) return staged.stdout.slice(0, 60_000)
   const all = await git(root, ['diff', '--no-color', '--stat', '-p'])
@@ -341,6 +367,71 @@ export async function rawDiffForMessage(cwd: string): Promise<string> {
     out += `\nNew file: ${f}\n${body}`
   }
   return out.slice(0, 60_000)
+}
+
+type InProgress = { kind: 'merge' | 'cherry-pick' | 'revert'; head: string }
+
+/** A merge, cherry-pick or revert waiting to be committed (its *_HEAD ref exists). */
+async function inProgressOperation(root: string): Promise<InProgress | undefined> {
+  for (const [kind, head] of [['merge', 'MERGE_HEAD'], ['cherry-pick', 'CHERRY_PICK_HEAD'], ['revert', 'REVERT_HEAD']] as const) {
+    if ((await git(root, ['rev-parse', '-q', '--verify', head])).code === 0) return { kind, head }
+  }
+  return undefined
+}
+
+/**
+ * What a commit message for a merge (cherry-pick, revert) needs: git's prepared message (names the
+ * branch, lists the files that conflicted), the commits coming in, the overall change, and for each
+ * conflicted file how it was resolved, shown as the final version against each side.
+ */
+async function operationContext(root: string, op: InProgress): Promise<string> {
+  const gitPath = (await git(root, ['rev-parse', '--git-path', 'MERGE_MSG'])).stdout.trim()
+  let prepared = ''
+  try {
+    prepared = await fs.promises.readFile(path.resolve(root, gitPath), 'utf8')
+  } catch {
+    /* no prepared message */
+  }
+  const subject = prepared.split('\n').find((l) => l.trim() && !l.startsWith('#'))?.trim() ?? ''
+  // git lists the conflicted files in MERGE_MSG as "# Conflicts:" followed by "#\t<path>" lines.
+  const conflicted = new Set<string>()
+  let inConflicts = false
+  for (const l of prepared.split('\n')) {
+    if (/^#\s*Conflicts:/.test(l)) inConflicts = true
+    else if (inConflicts && /^#\t/.test(l)) conflicted.add(l.replace(/^#\t/, '').trim())
+    else if (inConflicts && l.trim() && l.trim() !== '#') inConflicts = false
+  }
+  for (const f of (await git(root, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean)) conflicted.add(f)
+
+  const incoming =
+    op.kind === 'merge'
+      ? (await git(root, ['log', '--no-merges', '--format=- %h %s (%an)', '-n', '40', `HEAD..${op.head}`])).stdout.trim()
+      : (await git(root, ['log', '-1', '--format=- %h %s (%an)', op.head])).stdout.trim()
+  const stat = (await git(root, ['diff', '--cached', '--no-color', '--stat'])).stdout.trim()
+
+  const parts = [
+    `This commit concludes a ${op.kind} in progress.`,
+    subject ? `git's prepared subject: ${subject}` : '',
+    incoming ? `${op.kind === 'merge' ? 'Commits coming in' : `Commit being ${op.kind === 'revert' ? 'reverted' : 'cherry-picked'}`}:\n${incoming}` : '',
+    conflicted.size ? `Files that had conflicts, resolved by the user: ${[...conflicted].join(', ')}` : 'There were no conflicts.',
+    op.kind === 'merge'
+      ? 'Write it as a merge commit: keep a subject like the prepared one (you may make it more specific), then a short body saying what the merged branch brings in (from the commit list) and, for each conflicted file, how the conflict was resolved (from the resolution diffs below). Do not describe the incoming changes line by line.'
+      : `Write the message for this ${op.kind}: keep git's prepared subject unless it is unclear, and mention how any conflicts were resolved.`,
+    `== Staged changes (summary) ==\n${stat || '(none)'}`
+  ]
+  // How each conflict ended up: the final (staged) version against our side and against theirs.
+  let budget = 40_000
+  for (const f of conflicted) {
+    if (budget <= 0) break
+    for (const [label, ref] of [['ours (HEAD)', 'HEAD'], [`theirs (${op.head})`, op.head]] as const) {
+      const d = (await git(root, ['diff', '--no-color', '-U2', '--cached', ref, '--', f])).stdout.trim()
+      if (!d) continue
+      const cut = d.slice(0, Math.min(8_000, budget))
+      budget -= cut.length
+      parts.push(`== ${f}: resolved version vs ${label} ==\n${cut}${cut.length < d.length ? '\n… (truncated)' : ''}`)
+    }
+  }
+  return parts.filter(Boolean).join('\n\n')
 }
 
 export { git as rawGit, mustGit }

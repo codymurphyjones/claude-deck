@@ -6,6 +6,7 @@ import { api } from '../api'
 import { Icon } from '../components/Icon'
 import { highlight, langFromPath } from './mdRender'
 import { highlightDiffLines } from '../highlight'
+import { useRenderVersion } from '../lazyRender'
 import { Markdown, resolvePath } from './Markdown'
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch'])
@@ -153,6 +154,8 @@ export const ToolCard = memo(function ToolCard({
   useEffect(() => {
     if (pending) setOpen(true)
   }, [pending])
+  // Re-resolve the file's language once the full highlight.js language set loads.
+  useRenderVersion()
 
   if (t.name === 'AskUserQuestion') return <QuestionCard item={t} sessionId={sessionId} />
   if (t.name === 'ExitPlanMode') return <PlanCard item={t} sessionId={sessionId} cwd={cwd} dark={dark} />

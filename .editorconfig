@@ -1,0 +1,13 @@
+# Matches the existing code (and .prettierrc.json). end_of_line is deliberately unset: files keep
+# their current CRLF/LF endings (see .gitattributes), so editing one never rewrites every line.
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false

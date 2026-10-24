@@ -13,6 +13,7 @@ import {
   normalizeJob,
   parseStepReport,
   resolveRunOptions,
+  routineRunName,
   slugify,
   stepPivots,
   stepsToRun,
@@ -24,6 +25,7 @@ import {
 } from '@shared/jobs'
 import { broadcast, settings } from '../context'
 import { currentBranch, mustGit, rawGit as git, toplevel } from '../git/gitService'
+import { findProjectForFolder } from '../library'
 import { notify } from '../notify/notifyService'
 import { runtime } from '../runtime'
 import { plainEnv } from '../sessions/launch'
@@ -306,7 +308,8 @@ export class JobService {
       id: 'j' + shortId(),
       root,
       slug: job.slug,
-      jobName: job.name,
+      // Routines run against any repo, so their runs carry the project's name too.
+      jobName: source === 'routine' ? routineRunName(job.name, findProjectForFolder(root)?.name ?? path.basename(root)) : job.name,
       ...(source === 'routine' ? { source } : {}),
       trigger,
       options,

@@ -4,14 +4,15 @@ import * as os from 'os'
 import * as path from 'path'
 import { randomBytes } from 'crypto'
 import { ensureDir, which } from './util'
+import { profileTag } from './profile'
 
 /** Process-wide runtime facts: where things live and how to launch helpers. */
 export const runtime = {
   token: randomBytes(16).toString('hex'),
   pipe:
     process.platform === 'win32'
-      ? `\\\\.\\pipe\\claude-deck-${process.pid}`
-      : path.join(os.tmpdir(), `claude-deck-${process.pid}.sock`),
+      ? `\\\\.\\pipe\\claude-deck${profileTag}-${process.pid}`
+      : path.join(os.tmpdir(), `claude-deck${profileTag}-${process.pid}.sock`),
   get userData(): string {
     return app.getPath('userData')
   },
@@ -19,7 +20,7 @@ export const runtime = {
     return ensureDir(path.join(app.getPath('userData'), 'sessions'))
   },
   get tempDir(): string {
-    return ensureDir(path.join(os.tmpdir(), 'claude-deck'))
+    return ensureDir(path.join(os.tmpdir(), `claude-deck${profileTag}`))
   },
   get scratchDir(): string {
     return ensureDir(path.join(app.getPath('userData'), 'quick-chats'))

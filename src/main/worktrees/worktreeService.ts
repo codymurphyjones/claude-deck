@@ -57,6 +57,79 @@ async function copyIncluded(repoRoot: string, dest: string): Promise<number> {
   return copied
 }
 
+/**
+ * Make the repo's installed packages available in a worktree without reinstalling: each
+ * node_modules folder (at the root and up to two levels down, e.g. packages/x/node_modules) is
+ * linked in (a junction on Windows). The links are added to the repo's info/exclude, because git
+ * doesn't treat a link as the ignored `node_modules/` folder and `git add -A` would commit it.
+ */
+async function linkNodeModules(repoRoot: string, dest: string): Promise<void> {
+  const found: string[] = []
+  const walk = (rel: string, depth: number): void => {
+    let ents: fs.Dirent[] = []
+    try {
+      ents = fs.readdirSync(path.join(repoRoot, rel), { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of ents) {
+      if (!e.isDirectory() || e.name === '.git') continue
+      const r = rel ? `${rel}/${e.name}` : e.name
+      if (e.name === 'node_modules') found.push(r)
+      else if (depth < 2 && !e.name.startsWith('.')) walk(r, depth + 1)
+    }
+  }
+  walk('', 0)
+  if (!found.length) return
+  const linked: string[] = []
+  for (const r of found) {
+    const link = path.join(dest, r)
+    if (fs.existsSync(link) || !fs.existsSync(path.dirname(link))) continue
+    try {
+      fs.symlinkSync(path.join(repoRoot, r), link, process.platform === 'win32' ? 'junction' : 'dir')
+      linked.push(r)
+    } catch {
+      /* not fatal: the chat can still install packages itself */
+    }
+  }
+  if (!linked.length) return
+  const common = (await git(repoRoot, ['rev-parse', '--git-common-dir'])).stdout.trim()
+  const exclude = path.join(path.resolve(repoRoot, common), 'info', 'exclude')
+  try {
+    const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : ''
+    const add = linked.map((r) => `/${r}`).filter((l) => !cur.split(/\r?\n/).includes(l))
+    if (add.length) {
+      fs.mkdirSync(path.dirname(exclude), { recursive: true })
+      fs.appendFileSync(exclude, `${cur && !cur.endsWith('\n') ? '\n' : ''}# Claude Deck: node_modules links in worktrees\n${add.join('\n')}\n`)
+    }
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Remove node_modules links from a worktree first, so deleting it can never reach through them into the repo's packages. */
+function unlinkNodeModules(dir: string): void {
+  const walk = (d: string, depth: number): void => {
+    let ents: fs.Dirent[] = []
+    try {
+      ents = fs.readdirSync(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of ents) {
+      const p = path.join(d, e.name)
+      if (e.name === 'node_modules') {
+        try {
+          if (fs.lstatSync(p).isSymbolicLink()) fs.unlinkSync(p)
+        } catch {
+          /* leave it */
+        }
+      } else if (e.isDirectory() && depth < 2 && e.name !== '.git' && !e.name.startsWith('.')) walk(p, depth + 1)
+    }
+  }
+  walk(dir, 0)
+}
+
 export async function createWorktree(opts: {
   repoCwd: string
   baseRef?: string
@@ -64,30 +137,40 @@ export async function createWorktree(opts: {
   carryChanges?: boolean
   name?: string
   reuse?: WorktreeRecord
+  /** Work toward this local branch: the worktree gets its own sub-branch off it. */
+  target?: string
 }): Promise<WorktreeRecord> {
   const repoRoot = await toplevel(opts.repoCwd)
   if (!repoRoot) throw new Error('Worktrees need a Git repository. This folder is not under version control.')
   const id = opts.reuse?.id ?? shortId()
   const dir = opts.reuse?.path ?? path.join(worktreeRoot(), `${path.basename(repoRoot)}-${opts.name ? opts.name.replace(/[^\w.-]+/g, '-') + '-' : ''}${id}`)
   const carried = opts.carryChanges ? await captureChanges(repoRoot) : undefined
-  const base = opts.baseRef || 'HEAD'
+  const base = opts.target || opts.baseRef || 'HEAD'
   // Re-creating a worktree that has a branch: check that branch out (pulled) rather than detaching.
   const onBranch = opts.reuse?.branch && !carried ? await addOnBranch({ ...opts.reuse, path: dir, snapshot: undefined }) : false
-  if (!onBranch) await mustGit(repoRoot, ['worktree', 'add', '--detach', dir, base])
+  // A chat working toward a branch gets its own sub-branch off it, merged back with "Merge into".
+  let chatBranch: string | undefined
+  if (!onBranch && opts.target) {
+    chatBranch = `${settings().worktrees.branchPrefix}${opts.target.replace(/[^\w./-]+/g, '-')}-${id}`
+    await mustGit(repoRoot, ['worktree', 'add', '-b', chatBranch, dir, opts.target])
+  } else if (!onBranch) await mustGit(repoRoot, ['worktree', 'add', '--detach', dir, base])
   if (carried) {
     const r = await git(dir, ['stash', 'apply', carried])
     if (r.code === 0) await git(dir, ['reset', '-q'])
     else toast('Could not carry local changes into the worktree: ' + r.stderr.trim(), 'error')
   }
   const copied = await copyIncluded(repoRoot, dir)
+  if (settings().worktrees.linkNodeModules) await linkNodeModules(repoRoot, dir)
   const rec: WorktreeRecord = {
     id,
     path: dir,
     repoRoot,
     projectId: findProjectForFolder(repoRoot)?.id,
-    baseRef: base === 'HEAD' ? (await headSha(repoRoot)) ?? 'HEAD' : base,
+    // On a branch, the worktree's own HEAD is where its changes start from.
+    baseRef: onBranch || chatBranch ? ((await headSha(dir)) ?? base) : base === 'HEAD' ? ((await headSha(repoRoot)) ?? 'HEAD') : base,
     permanent: !!opts.permanent,
-    branch: onBranch ? opts.reuse?.branch : undefined,
+    branch: chatBranch ?? (onBranch ? opts.reuse?.branch : undefined),
+    target: opts.target ?? opts.reuse?.target,
     createdAt: opts.reuse?.createdAt ?? Date.now(),
     lastUsed: Date.now(),
     chatId: opts.reuse?.chatId
@@ -119,6 +202,7 @@ export async function deleteWorktree(id: string): Promise<void> {
     head = await headSha(w.path)
     snap = (await captureChanges(w.path)) ?? head
     if (snap) await git(w.repoRoot, ['update-ref', `refs/claude-deck/snapshots/${w.id}`, snap])
+    unlinkNodeModules(w.path)
   }
   await git(w.repoRoot, ['worktree', 'remove', '--force', w.path])
   if (fs.existsSync(w.path)) {
@@ -136,25 +220,40 @@ const refExists = async (cwd: string, ref: string): Promise<boolean> => (await g
 
 /**
  * Re-create a worktree on its branch, brought up to date with the remote ("pull it down"), instead
- * of a detached snapshot. Returns false (nothing changed) if that isn't possible, e.g. the branch is
- * checked out in another worktree; the caller then falls back to the detached snapshot.
+ * of a detached snapshot. Returns false (nothing created) if that isn't possible, e.g. the branch is
+ * checked out in another worktree; the caller then falls back to the detached snapshot. Every
+ * fallback or partial result is reported, so the user knows why they got what they got.
  */
 async function addOnBranch(w: WorktreeRecord): Promise<boolean> {
   const b = w.branch
   if (!b) return false
-  await git(w.repoRoot, ['fetch', '--quiet', 'origin', b], undefined, 60_000)
+  // Short: this blocks the restore. Offline, the branch is restored as of the last fetch.
+  const f = await git(w.repoRoot, ['fetch', '--quiet', 'origin', b], undefined, 15_000)
   const remote = (await refExists(w.repoRoot, `refs/remotes/origin/${b}`)) ? `origin/${b}` : undefined
   const local = await refExists(w.repoRoot, `refs/heads/${b}`)
-  if (!local && !remote) return false
+  if (!local && !remote) {
+    toast(`Branch ${b} no longer exists locally or on origin; restored the worktree from its snapshot instead.`, 'info')
+    return false
+  }
+  if (f.code !== 0 && remote) toast(`Couldn't fetch ${b} from origin (${f.stderr.trim() || 'timed out'}); restored it as of the last fetch.`, 'info')
   const r = local ? await git(w.repoRoot, ['worktree', 'add', w.path, b]) : await git(w.repoRoot, ['worktree', 'add', '--track', '-b', b, w.path, remote!])
-  if (r.code !== 0) return false
+  if (r.code !== 0) {
+    toast(`Couldn't check out ${b} (${r.stderr.trim()}); restored the worktree as a detached snapshot instead.`, 'info')
+    return false
+  }
   // Take the remote's newer commits; a diverged branch is left alone for the user to reconcile.
   if (local && remote && (await git(w.path, ['merge', '--ff-only', '--quiet', remote])).code !== 0) toast(`${b} has diverged from ${remote}; pull or rebase it in the worktree.`, 'info')
   // Uncommitted work captured when the worktree was cleaned up.
   if (w.snapshot && w.snapshot !== w.snapshotHead) {
     const a = await git(w.path, ['stash', 'apply', w.snapshot])
     if (a.code === 0) await git(w.path, ['reset', '-q'])
-    else toast(`Restored ${b}, but re-applying uncommitted changes failed (they're in refs/claude-deck/snapshots/${w.id}): ${a.stderr.trim()}`, 'error')
+    else {
+      // Don't leave a half-applied, conflicted tree. The worktree is brand new, so going back to the
+      // branch tip loses nothing; the changes stay in the snapshot ref.
+      await git(w.path, ['reset', '--hard', '-q', 'HEAD'])
+      await git(w.path, ['clean', '-fdq'])
+      toast(`Restored ${b}, but its uncommitted changes conflict with the branch now, so they weren't applied. They're kept in refs/claude-deck/snapshots/${w.id} (git stash apply ${w.snapshot.slice(0, 10)}).`, 'error')
+    }
   }
   return true
 }
@@ -170,6 +269,7 @@ export async function restoreWorktree(id: string): Promise<WorktreeRecord> {
     if (w.snapshot && w.snapshotHead && w.snapshot !== w.snapshotHead) await git(w.path, ['reset', '-q', w.snapshotHead])
   }
   await copyIncluded(w.repoRoot, w.path)
+  if (settings().worktrees.linkNodeModules) await linkNodeModules(w.repoRoot, w.path)
   touchWorktree(id, { deleted: false })
   return getWorktree(id)!
 }

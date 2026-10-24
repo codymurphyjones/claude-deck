@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { autoAllowedTools, confirmTools, expandShellRules } from '@shared/agentTools'
 import type { SessionInfo } from '@shared/types'
 import { settings } from '../../context'
 import { helperRuntime, runtime } from '../../runtime'
@@ -27,7 +28,14 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
       SessionEnd: hook(5)
     }
   }
-  if (cfg.mesh.enabled) sessionSettings.permissions = { allow: ['mcp__deck-mesh'] }
+  // App tools on the auto tier are pre-allowed. Ask rules prompt even in auto mode (where anything
+  // not allowed would otherwise go to the classifier and run silently): the user's "always ask"
+  // list (git push, rm -rf…) and the app tools that ask each time (run_process, open_browser…).
+  const ap = cfg.agentPermissions
+  const mcp = (t: string): string => `mcp__deck-mesh__${t}`
+  const allow = cfg.mesh.enabled ? autoAllowedTools(ap.appTools).map(mcp) : []
+  const ask = [...expandShellRules(ap.alwaysAsk), ...(cfg.mesh.enabled ? confirmTools(ap.appTools).map(mcp) : [])]
+  if (allow.length || ask.length) sessionSettings.permissions = { ...(allow.length ? { allow } : {}), ...(ask.length ? { ask } : {}) }
   const settingsFile = path.join(dir, 'settings.json')
   fs.writeFileSync(settingsFile, JSON.stringify(sessionSettings, null, 2))
 
@@ -48,8 +56,8 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
   const mode = L.permissionMode || prov.defaultPermissionMode
   if (mode) args.push('--permission-mode', mode)
   // Without this the CLI refuses a later switch to bypassPermissions (error "bypass_not_launched").
-  // It only makes bypass selectable; the session still starts in `mode`.
-  args.push('--allow-dangerously-skip-permissions')
+  // It only makes bypass selectable; the session still starts in `mode`, and auto mode is unaffected.
+  if (cfg.agentPermissions.allowBypassSwitch || mode === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions')
   args.push('--settings', settingsFile)
 
   if (cfg.mesh.enabled) {

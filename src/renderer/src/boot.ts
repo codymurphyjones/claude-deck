@@ -3,7 +3,7 @@ import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
 import { comboIndex, eventCombo } from './shortcuts'
-import { addSessionToTabs, focusSessionTab, get, loadJobs, loadRoutines, openFolders, openSession, removeSessionFromTabs, set, toast, type Tab } from './store'
+import { addSessionToTabs, focusSessionTab, get, groupOf, HOME, loadJobs, loadRoutines, openFolders, openInEditor, openSession, QUICK, removeSessionFromTabs, set, toast, type Tab } from './store'
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
@@ -20,6 +20,9 @@ function applyLook(): void {
   void api.window.setTitleBarOverlay(s.settings.translucentSidebar ? '#00000000' : theme.ui.panel, theme.ui.muted)
   combos = comboIndex(s.settings)
 }
+
+/** Combos the editor tab (FileEditor.tsx) handles itself; app shortcuts on these yield to it there. */
+const EDITOR_KEYS = new Set(['Ctrl+S', 'Ctrl+Shift+S', 'Ctrl+O', 'Ctrl+N', 'Ctrl+W', 'Ctrl+P', 'Ctrl+Shift+F', 'Ctrl+B', 'Ctrl+G', 'Ctrl+H', 'Ctrl+F', 'Ctrl+/', 'Ctrl+Shift+O', 'Ctrl+Shift+D', 'Ctrl+=', 'Ctrl++', 'Ctrl+-', 'Ctrl+0', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+A', 'Ctrl+C', 'Ctrl+V', 'Ctrl+X', 'Alt+Z', 'F7', 'Shift+F7'])
 
 /** App-level shortcuts. Runs in the capture phase so terminals never see them. */
 function handleKey(e: KeyboardEvent): boolean {
@@ -40,8 +43,9 @@ function handleKey(e: KeyboardEvent): boolean {
   if (!cmd) return false
   // Let plain typing shortcuts work inside text fields.
   const t = e.target as HTMLElement | null
-  // The full-screen file editor owns its own shortcuts (save, open, find, zoom…).
-  if (t?.closest?.('.file-editor')) return false
+  // The editor tab owns the shortcuts it uses (save, close file, find, quick open, zoom…); app-wide
+  // navigation (switching tabs, new chat, palette…) still works from it.
+  if (t?.closest?.('.file-editor') && EDITOR_KEYS.has(combo)) return false
   // A focused CodeMirror view keeps its own find (Ctrl+F).
   if (cmd === 'find' && t?.closest?.('.cm-editor')) return false
   const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && !t.closest('.xterm')
@@ -62,12 +66,24 @@ export async function boot(): Promise<void> {
   const mesh: Record<string, MeshGroupState> = {}
   for (const g of d.mesh) mesh[g.key] = g
 
+  // Sessions that survived a window reload, each in its workspace (a project, with its Overview
+  // first, or Quick chats).
   let tabs: Tab[] = []
-  if (popout) tabs = [{ id: 'popout', sessionIds: [popout], activePane: popout }]
-  else
-    tabs = d.sessions
-      .filter((s) => s.kind !== 'shell' && (s.hostWindow === d.windowId || !d.sessions.length))
-      .map((s) => ({ id: 't' + s.id.slice(0, 6), sessionIds: [s.id], activePane: s.id }))
+  const groups: string[] = []
+  if (popout) {
+    const g = groupOf({ library: d.library }, sessions[popout])
+    tabs = [{ id: 'popout', group: g, sessionIds: [popout], activePane: popout }]
+    groups.push(g)
+  } else
+    for (const s of d.sessions.filter((x) => x.kind !== 'shell' && x.hostWindow === d.windowId)) {
+      const g = groupOf({ library: d.library }, s)
+      if (!groups.includes(g)) {
+        groups.push(g)
+        if (g !== QUICK) tabs.push({ id: 'o' + g.slice(0, 8), group: g, sessionIds: [], activePane: '', projectId: g })
+      }
+      tabs.push({ id: 't' + s.id.slice(0, 6), group: g, sessionIds: [s.id], activePane: s.id })
+    }
+  const first = tabs.find((t) => t.sessionIds.length)
 
   set({
     ready: true,
@@ -81,7 +97,10 @@ export async function boot(): Promise<void> {
     auths: d.auth,
     sessions,
     tabs,
-    activeTabId: tabs[0]?.id,
+    groups,
+    activeTabId: first?.id,
+    activeGroup: first?.group ?? HOME,
+    groupActive: first ? { [first.group]: first.id } : {},
     library: d.library,
     automations: d.automations,
     jobRuns: d.jobRuns,
@@ -186,9 +205,9 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   })
   // Agents' other app tools (show_diff, request_review, open_browser, run_routine).
   if (!isPopout) initAgentRequests()
-  // An agent's open_file tool. `at` makes asking again for the same file re-jump to the line.
+  // An agent's open_file tool: show the file in the editor tab.
   bridge.on('app:openFile', (ev: { path: string; line?: number }) => {
-    if (!isPopout) set((s) => ({ editorFile: { path: ev.path, line: ev.line, at: Date.now(), locked: s.editorFile ? s.editorFile.locked : undefined } }))
+    if (!isPopout) openInEditor(ev.path, { line: ev.line })
   })
   bridge.on('session:fileTouched', (ev: { id: string; path: string }) => {
     if (get().settings.autoOpenFiles && !isPopout) set({ fileToOpen: { path: ev.path, sessionId: ev.id }, rightPanel: 'files' })

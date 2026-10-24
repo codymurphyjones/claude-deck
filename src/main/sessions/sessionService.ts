@@ -12,7 +12,7 @@ import { currentBranch, snapshot, toplevel } from '../git/gitService'
 import { emitLibrary, ensureProject, findProjectForFolder, getChat, updateChat, upsertChat } from '../library'
 import { openInExternalEditor } from '../externalEditor'
 import { MeshService } from '../mesh/meshService'
-import { dismissNotification, focusSession, notify, updateSleepBlocker } from '../notify/notifyService'
+import { dismissNotification, focusSession, mainWindow, notify, updateSleepBlocker } from '../notify/notifyService'
 import type { PtyService } from '../pty/ptyService'
 import { defaultShell, runtime } from '../runtime'
 import { findTranscript, loadConversation, ownerOf, prepareResume, sessionUsage } from '../transcripts/transcriptService'
@@ -155,6 +155,14 @@ export class SessionService extends EventEmitter {
     let setup: string | undefined
     let worktreeId: string | undefined
     let projectFolder = cwd
+    // New chats in a Git repo work in their own worktree, on a sub-branch off the branch the folder
+    // has checked out (the user's "selected" branch), and merge back with "Merge into <branch>".
+    // Not for resumed, side or quick chats, chats already in a worktree, or when asked to work in place.
+    if (kind === 'agent' && !L.inPlace && !L.quick && !L.resumeId && !L.sideOf && !findWorktreeByPath(cwd) && (L.worktree || settings().worktrees.perChat)) {
+      const repoRoot = await toplevel(cwd)
+      const target = repoRoot && !L.worktree?.baseRef ? await currentBranch(repoRoot) : undefined
+      if (repoRoot) L.worktree = { ...L.worktree, ...(target && !L.worktree?.target ? { target } : {}) }
+    }
     if (kind === 'agent' && L.worktree) {
       const wt = await createWorktree({ repoCwd: cwd, ...L.worktree })
       projectFolder = findProjectForFolder(cwd)?.folders[0] ?? wt.repoRoot
@@ -382,7 +390,13 @@ export class SessionService extends EventEmitter {
     try {
       await c.setPermissionMode(mode)
     } catch (e) {
-      c.notice(`Could not switch permission mode: ${(e as Error).message}`, 'error')
+      const msg = (e as Error).message
+      c.notice(
+        /not launched with --dangerously-skip-permissions|bypass_not_launched/i.test(msg)
+          ? 'Bypass permissions is off for this chat. Turn on "Allow switching to Bypass" in Settings → AI permissions, then restart the chat.'
+          : `Could not switch permission mode: ${msg}`,
+        'error'
+      )
       return
     }
     const s = this.sessions.get(id)
@@ -514,14 +528,22 @@ export class SessionService extends EventEmitter {
     }
     if (!st.isFile()) return `${p} is a folder, not a file.`
     const line = Number(a.line) > 0 ? Math.floor(Number(a.line)) : undefined
+    const at = line ? ` at line ${line}` : ''
     if (a.where === 'external') {
-      await openInExternalEditor(p, line)
-      return `Opened ${p}${line ? ` at line ${line}` : ''} in the user's external editor.`
+      try {
+        const how = await openInExternalEditor(p, line)
+        if (how === 'editor') return `Opened ${p}${at} in the user's external editor.`
+        if (how === 'folder') return `${p} is a runnable file type, so it wasn't opened; it's shown selected in its folder instead.`
+        return `No VS Code or Cursor found; opened ${p} with the user's default app for that file type.`
+      } catch (e) {
+        return `Could not open ${p} externally: ${(e as Error).message}`
+      }
     }
-    const wc = webContents.fromId(s.hostWindow)
-    if (wc && !wc.isDestroyed()) wc.send('app:openFile', { path: p, line })
-    else broadcast('app:openFile', { path: p, line })
-    return `Opened ${p}${line ? ` at line ${line}` : ''} in Claude Deck's editor for the user.`
+    // The editor overlay lives in the main window (a popped-out session's window only has its chat).
+    const host = mainWindow()
+    if (!host) return 'No Claude Deck window is open.'
+    host.webContents.send('app:openFile', { path: p, line })
+    return `Opened ${p}${at} in Claude Deck's editor for the user.`
   }
 
   async readTerminal(id: string, lines: number): Promise<string> {

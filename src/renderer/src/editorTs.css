@@ -1,0 +1,91 @@
+/* TypeScript support in the editor (editorTs.ts) and its Problems list (FileEditor.tsx). */
+.cm-ts-info {
+  max-width: min(640px, 70vw);
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+}
+.cm-ts-sig {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--code-font);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+}
+.cm-ts-doc {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  color: var(--text);
+}
+.cm-ts-sig + .cm-ts-doc {
+  margin-top: 0;
+}
+
+.fe-problems {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: 32%;
+  min-height: 90px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.fe-problems-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.fe-problems-list {
+  flex: 1;
+  overflow-y: auto;
+}
+.fe-problem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 12px;
+  cursor: var(--cursor);
+}
+.fe-problem:hover {
+  background: var(--hover, color-mix(in srgb, var(--text) 6%, transparent));
+}
+.fe-problem .msg {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fe-problem .where {
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: var(--code-font);
+  font-size: 11px;
+}
+.fe-sev {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  font-weight: 700;
+}
+.fe-sev.error {
+  color: var(--danger);
+}
+.fe-sev.warning {
+  color: var(--warning);
+}
+.fe-sev.info,
+.fe-sev.hint {
+  color: var(--accent);
+}
+.fe-status-problems .err {
+  color: var(--danger);
+}
+.fe-status-problems .warn {
+  color: var(--warning);
+}

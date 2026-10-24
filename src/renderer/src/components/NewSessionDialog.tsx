@@ -17,6 +17,7 @@ export function NewSessionDialog() {
   const templates = useStore((s) => s.settings.sessionTemplates)
   const home = useStore((s) => s.homedir)
   const defaultProvider = useStore((s) => s.settings.defaultProvider)
+  const perChat = useStore((s) => s.settings.worktrees.perChat)
   const [provider, setProvider] = useState<ProviderId>(defaultProvider)
   const [cwd, setCwd] = useState('')
   const [where, setWhere] = useState<'local' | 'worktree'>('local')
@@ -39,7 +40,8 @@ export function NewSessionDialog() {
     if (!pre) return
     const s = activeSession()
     setCwd(pre.cwd ?? s?.root ?? lib.recentFolders[0] ?? home)
-    setWhere(pre.worktree ? 'worktree' : 'local')
+    // Chats get their own worktree by default (Settings → Git & worktrees), merging back into the branch.
+    setWhere(pre.worktree || perChat ? 'worktree' : 'local')
     setTemplateId(pre.templateId ?? '')
     setName('')
     setPrompt('')
@@ -56,8 +58,10 @@ export function NewSessionDialog() {
       if (!live) return
       setGit(g)
       setBaseRef('')
-      if (g.isRepo) void api.git.branches(cwd).then((b) => live && setBranches(b))
-      else setWhere('local')
+      if (g.isRepo) {
+        void api.git.branches(cwd).then((b) => live && setBranches(b))
+        if (perChat || pre.worktree) setWhere('worktree')
+      } else setWhere('local')
     })
     return () => {
       live = false
@@ -101,7 +105,9 @@ export function NewSessionDialog() {
       remoteControl: (provider === 'claude' && remote) || undefined,
       templateId: templateId || undefined,
       quick: pre.quick,
-      worktree: where === 'worktree' ? { baseRef: baseRef || undefined, carryChanges: carry, permanent } : undefined
+      // The chat works on its own sub-branch off this branch and merges back into it.
+      worktree: where === 'worktree' ? { target: baseRef || git?.branch || undefined, baseRef: !(baseRef || git?.branch) ? 'HEAD' : undefined, carryChanges: carry, permanent } : undefined,
+      inPlace: where === 'local' || undefined
     }
     close()
     const s = activeSession()
@@ -172,14 +178,18 @@ export function NewSessionDialog() {
         {where === 'worktree' && (
           <div className="card col" style={{ boxShadow: 'none', padding: 12, gap: 10 }}>
             <label className="field">
-              Start from branch
+              Work on branch
               <select className="select" value={baseRef} onChange={(e) => setBaseRef(e.target.value)}>
-                <option value="">Current HEAD{git?.branch ? ` (${git.branch})` : ''}</option>
+                <option value="">{git?.branch ? `${git.branch} (checked out)` : 'Current HEAD (detached)'}</option>
                 {branches.map((b) => (
                   <option key={b}>{b}</option>
                 ))}
               </select>
             </label>
+            <div className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>
+              The chat works in its own copy on a branch of its own, then <b>Merge into {baseRef || git?.branch || 'the branch'}</b> brings its work back.{' '}
+              {!baseRef || baseRef === git?.branch ? 'This is the branch your folder has checked out, so your folder updates when you merge.' : 'Your folder isn’t on this branch, so it’s updated and pushed from Claude Deck’s copy.'}
+            </div>
             <div className="row">
               <Switch on={carry} onChange={setCarry} />
               <span>Bring my uncommitted changes along</span>

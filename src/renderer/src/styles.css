@@ -463,19 +463,6 @@ label.check {
   min-height: 0;
   position: relative;
 }
-/* Host for the editor opened from Review: covers the sidebar and content area, not the right panel. */
-.fe-left {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 40;
-  pointer-events: none;
-}
-.fe-left > .file-editor {
-  pointer-events: auto;
-  border-right: 1px solid var(--border);
-}
 
 /* ---------------- sidebar ---------------- */
 .rail {
@@ -600,6 +587,14 @@ label.check {
 .project-head:hover {
   background: var(--hover);
 }
+.project-head.active {
+  background: var(--accent-soft);
+}
+.project-head .project-chevron {
+  width: 18px;
+  height: 18px;
+  margin: -2px -4px -2px -2px;
+}
 .project-head .actions {
   display: none;
 }
@@ -672,6 +667,222 @@ label.check {
 .tab-page.hidden {
   visibility: hidden;
   pointer-events: none;
+}
+
+/* ---------------- project home tab ---------------- */
+.project-home {
+  flex: 1;
+  overflow: auto;
+  padding: 22px 28px 40px;
+}
+.ph-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 1200px;
+}
+.ph-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ph-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+.ph-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 16px 0 18px;
+}
+.ph-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+  max-width: 1200px;
+  align-items: start;
+}
+.ph-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.ph-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.ph-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  min-height: 40px;
+}
+/* A worktree chat's branch → target, with Merge (ChatBranchBar). */
+.chat-branch-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  font-size: 12px;
+}
+.chat-branch-bar .mono {
+  font-size: 11.5px;
+  min-width: 0;
+}
+.chat-branch-bar.compact {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.ph-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
+}
+.ph-card-body .empty-note {
+  padding: 12px 8px;
+}
+.ph-sub-label {
+  padding: 8px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tab.project-tab .title {
+  font-weight: 600;
+}
+
+/* ---------------- workspaces: Home, title-bar workspace tabs, sub-tabs ---------------- */
+.icon-btn.home-btn.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.tab.group-tab .title {
+  font-weight: 600;
+}
+.group-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+/* The active workspace's Overview / chats / editor strip, under the title bar. */
+.subtabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 34px;
+  flex: none;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.subtabs::-webkit-scrollbar {
+  display: none;
+}
+.subtabs .tab {
+  min-width: 90px;
+  font-size: 12.5px;
+}
+.subtabs > .icon-btn {
+  align-self: center;
+}
+.home-view {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 22px 28px 40px;
+}
+.home-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1200px;
+  margin-bottom: 16px;
+}
+.home-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  max-width: 1200px;
+  margin-bottom: 18px;
+}
+.home-grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.home-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  cursor: var(--cursor);
+  transition: border-color 0.12s, transform 0.1s;
+}
+.home-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.home-card.open {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.home-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.home-card-git {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.home-chats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
 }
 .pane {
   display: flex;
@@ -1848,14 +2059,14 @@ html.buddy-page body {
 }
 
 /* ---------------- full-screen file editor ---------------- */
+/* The editor tab (FileEditor.tsx): menu bar, then explorer/search | open files + code | outline. */
 .file-editor {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
+  flex: 1;
+  min-height: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  animation: fadeIn 0.12s;
 }
 .fe-bar {
   display: flex;
@@ -1915,8 +2126,209 @@ html.buddy-page body {
   flex-direction: column;
   gap: 6px;
   padding: 8px 6px;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+.fe-activity {
+  width: 40px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
   border-right: 1px solid var(--border);
   background: var(--panel);
+}
+.fe-activity .icon-btn.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fe-side {
+  width: 260px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 0;
+}
+.fe-side-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 4px 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.input.fe-side-input {
+  margin: 0 6px 6px;
+  width: calc(100% - 12px);
+  height: 26px;
+}
+.fe-side-body {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+.fe-node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding-right: 8px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: var(--cursor);
+}
+.fe-node:hover {
+  background: var(--hover);
+}
+.fe-node.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.fe-node .sub {
+  margin-left: 4px;
+  min-width: 0;
+}
+.fe-node .badge {
+  margin-left: auto;
+}
+.fe-hit .mono {
+  font-size: 11.5px;
+}
+.fe-search-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 6px;
+}
+.fe-search-row .input {
+  flex: 1;
+  height: 26px;
+  min-width: 0;
+}
+.fe-opt {
+  height: 24px;
+  min-width: 24px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font: 600 11px var(--code-font);
+  cursor: var(--cursor);
+}
+.fe-opt.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.fe-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fe-tabs {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  scrollbar-width: thin;
+}
+.fe-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 0 4px 0 12px;
+  height: 32px;
+  border-right: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: var(--cursor);
+  flex: none;
+}
+.fe-tab.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.fe-tab-close {
+  width: 20px;
+  height: 20px;
+}
+.fe-tab-close.dirty .fe-dirty {
+  margin: 0;
+}
+.fe-tab-close.dirty:hover .fe-dirty {
+  color: var(--danger);
+}
+.fe-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.fe-crumbs span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.fe-crumbs .cur {
+  color: var(--text);
+}
+.fe-crumbs .sym {
+  color: var(--accent);
+}
+.fe-diff-note {
+  margin-left: auto;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.fe-editor-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+.fe-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.fe-welcome h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.fe-welcome-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 260px;
+}
+.fe-welcome-actions .btn {
+  justify-content: flex-start;
+}
+.fe-welcome-actions kbd {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.fe-status-diff {
+  color: var(--accent);
 }
 .fe-symbols .input {
   height: 28px;

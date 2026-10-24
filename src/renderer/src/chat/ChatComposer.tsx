@@ -6,7 +6,7 @@ import { Icon } from '../components/Icon'
 import { providerOf } from '@shared/agent'
 import { openMenuAt, fuzzyScore } from '../components/ui'
 import { set, toast, useStore } from '../store'
-import { useChat, useDrafts } from './chatStore'
+import { lockKey, useChat, useDrafts, useLocked } from './chatStore'
 
 const MODE_LABEL: Record<string, string> = {
   default: 'Ask before edits',
@@ -43,6 +43,30 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
   const histIdx = useRef(-1)
   const busy = !!meta?.busy
   const setDraft = (patch: Partial<typeof draft>): void => useDrafts.setState({ [s.id]: { ...draft, ...patch } })
+
+  // The lock button sets the current message aside (clearing the box) and puts it back later.
+  const key = lockKey(s)
+  const locked = useLocked((l) => l[key])
+  // A chat's conversation id can arrive after it starts: carry a message locked before then over.
+  useEffect(() => {
+    const all = useLocked.getState()
+    if (key !== s.id && all[s.id] && !all[key]) useLocked.setState({ [key]: all[s.id], [s.id]: undefined })
+  }, [key])
+  const toggleLock = async (): Promise<void> => {
+    const cur = useDrafts.getState()[s.id] ?? { text: '', images: [] }
+    const hasText = !!cur.text.trim() || cur.images.length > 0
+    if (!locked) {
+      if (!hasText) return void toast('Type a message first; the lock sets it aside until you click it again', 'info')
+      useLocked.setState({ [key]: cur })
+      useDrafts.setState({ [s.id]: { text: '', images: [] } })
+    } else {
+      if (hasText && (await api.dialog.confirm('Clear the text box to put your locked message back?', 'What you typed since locking will be replaced.', ['Clear and restore', 'Cancel'])) !== 0) return
+      useDrafts.setState({ [s.id]: locked })
+      useLocked.setState({ [key]: undefined })
+    }
+    requestAnimationFrame(() => ta.current?.focus())
+  }
+  const lockedPreview = locked ? (locked.text.trim().replace(/\s+/g, ' ').slice(0, 80) || `${locked.images.length} image(s)`) + (locked.text.length > 80 ? '…' : '') : ''
 
   // Commands like "Composer" or prompt templates focus/prefill this composer.
   useEffect(() => {
@@ -194,6 +218,13 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
   return (
     <div className="composer-wrap">
       <div className={`composer ${busy ? 'busy' : ''}`} onDragOver={(e) => e.preventDefault()}>
+        <button
+          className={`icon-btn sm composer-lock ${locked ? 'on' : ''}`}
+          title={locked ? `Locked message: "${lockedPreview}". Click to put it back in the box.` : 'Lock: set this message aside (clears the box) until you click again'}
+          onClick={() => void toggleLock()}
+        >
+          <Icon name={locked ? 'lock' : 'unlock'} size={13} />
+        </button>
         {draft.images.length > 0 && (
           <div className="composer-attachments">
             {draft.images.map((im, i) => (

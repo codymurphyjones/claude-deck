@@ -2,18 +2,33 @@ import { Lexer, Marked, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { highlight, langForFile } from '../highlight'
 import { tagFences } from './fenceLang'
-import katex from 'katex'
-import 'katex/dist/katex.min.css'
+import { bumpRenderVersion } from '../lazyRender'
 
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-// Highlighting lives in ../highlight (full highlight.js, every language); re-exported for chat code.
+// Highlighting lives in ../highlight (common languages at startup, the rest on demand); re-exported for chat code.
 export { highlight }
 
 /** highlight.js language for a file path ('plaintext' when unknown). */
 export const langFromPath = (p: string): string => langForFile(p)
 
 const FILE_REF = /^((?:[A-Za-z]:)?[\w.\-@~/\\]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:[-:]\d+)?)?$/
+
+// KaTeX (~500 KB) loads the first time a message contains math; until then math shows as its
+// source, and the version bump re-renders it typeset.
+let katex: typeof import('katex').default | undefined
+let katexLoading: Promise<void> | undefined
+function loadKatex(): void {
+  katexLoading ??= Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(
+    ([m]) => {
+      katex = m.default
+      bumpRenderVersion()
+    },
+    () => {
+      katexLoading = undefined
+    }
+  )
+}
 
 const CALLOUTS: Record<string, string> = { NOTE: 'note', TIP: 'tip', IMPORTANT: 'important', WARNING: 'warning', CAUTION: 'caution' }
 
@@ -30,6 +45,10 @@ function mathExtension() {
           return undefined
         },
         renderer(t: Tokens.Generic) {
+          if (!katex) {
+            loadKatex()
+            return `<div class="md-math"><pre>${esc(t.text)}</pre></div>`
+          }
           try {
             return `<div class="md-math">${katex.renderToString(t.text, { displayMode: true, throwOnError: false })}</div>`
           } catch {
@@ -47,6 +66,10 @@ function mathExtension() {
           return undefined
         },
         renderer(t: Tokens.Generic) {
+          if (!katex) {
+            loadKatex()
+            return `<code>${esc(t.raw)}</code>`
+          }
           try {
             return katex.renderToString(t.text, { throwOnError: false })
           } catch {

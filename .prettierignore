@@ -1,0 +1,6 @@
+# Generated / vendored
+out/
+dist/
+node_modules/
+package-lock.json
+resources/

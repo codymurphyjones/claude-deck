@@ -2,7 +2,7 @@ import { providerOf } from '@shared/agent'
 import { useEffect, useMemo, useState } from 'react'
 import type { ChatRecord, Project, TranscriptSummary } from '@shared/types'
 import { api } from '../api'
-import { askText, attempt, focusSessionTab, get, openSession, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
+import { askText, attempt, focusSessionTab, get, openProjectHome, openSession, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
@@ -20,7 +20,7 @@ const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
   { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
   { id: 'routines', icon: 'wand', title: 'Routines — reusable jobs for any repo' },
   { id: 'scheduled', icon: 'clock', title: 'Scheduled tasks' },
-  { id: 'reviews', icon: 'pr', title: 'Pull request reviews' }
+  { id: 'reviews', icon: 'pr', title: 'Pull requests' }
 ]
 
 export function Sidebar({ open }: { open: boolean }) {
@@ -94,6 +94,8 @@ function ProjectsView() {
   const home = useStore((s) => s.homedir)
   const [q, setQ] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  // The project whose home tab is showing, highlighted in the list.
+  const homeProjectId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.projectId)
   const [results, setResults] = useState<{ agentSessionId: string; snippet: string }[] | null>(null)
   const [history, setHistory] = useState<TranscriptSummary[] | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -216,8 +218,25 @@ function ProjectsView() {
           const isCollapsed = collapsed[p.id]
           return (
             <div key={p.id} className="project">
-              <div className="project-head" onClick={() => setCollapsed((c) => ({ ...c, [p.id]: !c[p.id] }))} onContextMenu={(e) => projectMenu(e, p)} title={p.folders.join('\n')}>
-                <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={13} style={{ color: 'var(--muted)' }} />
+              <div
+                className={`project-head ${homeProjectId === p.id ? 'active' : ''}`}
+                onClick={() => {
+                  openProjectHome(p.id)
+                  setCollapsed((c) => ({ ...c, [p.id]: false }))
+                }}
+                onContextMenu={(e) => projectMenu(e, p)}
+                title={`${p.folders.join('\n')}\nClick for the project home`}
+              >
+                <button
+                  className="icon-btn sm project-chevron"
+                  title={isCollapsed ? 'Expand' : 'Collapse'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setCollapsed((c) => ({ ...c, [p.id]: !c[p.id] }))
+                  }}
+                >
+                  <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={13} style={{ color: 'var(--muted)' }} />
+                </button>
                 <Icon name="folder" size={14} style={{ color: 'var(--accent)' }} />
                 <span className="grow ellipsis">{p.name}</span>
                 {p.pinned && <Icon name="pin" size={11} style={{ color: 'var(--muted)' }} />}

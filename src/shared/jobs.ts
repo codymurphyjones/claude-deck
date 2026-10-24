@@ -263,6 +263,15 @@ export function buildStepPrompt(job: JobDef, index: number, opts: { withContext:
   return parts.join('\n\n')
 }
 
+/**
+ * What a routine run is called: "<Project> - <Routine>", so the same routine run on several
+ * projects can be told apart. The project is the library project's name, else the folder's name.
+ */
+export function routineRunName(routineName: string, project: string | undefined): string {
+  const p = project?.trim()
+  return p ? `${p} - ${routineName}` : routineName
+}
+
 /** A routine composed into one message, for running it interactively in a chat. */
 export function buildRoutineChatPrompt(job: JobDef, extra?: string): string {
   const parts: string[] = [`Run the routine "${job.name}" on this repository.`]

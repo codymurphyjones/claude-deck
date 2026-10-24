@@ -106,6 +106,11 @@ describe('applyCommitPrefix', () => {
   it('does not double a prefix the message already has', () => {
     expect(applyCommitPrefix('CJ | already there', 'CJ | ')).toBe('CJ | already there')
   })
+  it('treats a prefix that only starts a longer word as missing', () => {
+    expect(applyCommitPrefix('WIPE stale cache', 'WIP')).toBe('WIP WIPE stale cache')
+    expect(applyCommitPrefix('WIP: stale cache', 'WIP')).toBe('WIP: stale cache')
+    expect(applyCommitPrefix('[ABC-1]: fix', '[ABC-1]')).toBe('[ABC-1]: fix')
+  })
   it('is a no-op without a prefix', () => {
     expect(applyCommitPrefix('msg', '')).toBe('msg')
     expect(applyCommitPrefix('msg', '   ')).toBe('msg')

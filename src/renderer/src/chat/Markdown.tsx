@@ -3,6 +3,7 @@ import { api } from '../api'
 import { toast } from '../store'
 import { renderChart } from './chart'
 import { renderMarkdown } from './mdRender'
+import { useRenderVersion } from '../lazyRender'
 
 let mermaidLoader: Promise<typeof import('mermaid').default> | undefined
 let mermaidSeq = 0
@@ -71,12 +72,14 @@ function useStreamThrottle(text: string, streaming: boolean | undefined, costMs:
 export const Markdown = memo(function Markdown({ text, streaming, cwd, dark }: { text: string; streaming?: boolean; cwd: string; dark: boolean }) {
   const cost = useRef(0)
   const deferred = useDeferredValue(useStreamThrottle(text, streaming, cost))
+  // Bumps when on-demand languages / KaTeX finish loading, so this re-renders with them.
+  const rv = useRenderVersion()
   const html = useMemo(() => {
     const t0 = performance.now()
     const out = renderMarkdown(deferred, streaming)
     cost.current = performance.now() - t0
     return out
-  }, [deferred, streaming])
+  }, [deferred, streaming, rv])
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

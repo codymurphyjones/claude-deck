@@ -6,6 +6,9 @@ import { boot } from './boot'
 import * as store from './store'
 import { api } from './api'
 import { readLines } from './terminal/registry'
+import { installErrorReporting } from './diagnostics'
+
+installErrorReporting()
 
 void boot().then(() => {
   createRoot(document.getElementById('root')!).render(<App />)

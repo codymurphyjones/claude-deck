@@ -1082,11 +1082,29 @@ li.task.done > div {
   outline: none;
   resize: none;
   background: transparent;
-  padding: 14px 16px 6px;
+  /* Right padding keeps text clear of the lock button. */
+  padding: 14px 36px 6px 16px;
   line-height: 1.5;
   font-size: var(--chat-size);
   max-height: 320px;
   user-select: text;
+}
+/* Sets the current message aside and puts it back (ChatComposer toggleLock). */
+.composer-lock {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  color: var(--muted);
+  opacity: 0.7;
+}
+.composer-lock:hover {
+  opacity: 1;
+}
+.composer-lock.on {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  opacity: 1;
 }
 .composer-bar {
   display: flex;

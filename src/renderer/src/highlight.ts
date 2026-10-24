@@ -1,9 +1,35 @@
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import { languageForPath, normalizeLang } from '@shared/languages'
+import { bumpRenderVersion } from './lazyRender'
 
 // Syntax highlighting for everything the app renders as code: markdown code blocks,
-// tool cards, diffs. Uses the full highlight.js bundle (190+ languages); token colours
-// are the .hljs-* rules in chat/chat.css.
+// tool cards, diffs. Token colours are the .hljs-* rules in chat/chat.css.
+// Startup ships highlight.js's common set (~40 languages); the full set (190+, ~1.2 MB) loads
+// on demand: when an unknown language is asked for, and in idle time shortly after launch.
+// Code rendered before it lands is plain text until a re-render (see lazyRender.ts).
+
+let allLoaded = false
+let allLoading: Promise<void> | undefined
+
+/** Register every highlight.js language (same hljs instance: both bundles share lib/core). */
+export function loadAllLanguages(): Promise<void> {
+  allLoading ??= import('highlight.js').then(
+    () => {
+      allLoaded = true
+      bumpRenderVersion()
+    },
+    () => {
+      allLoading = undefined
+    }
+  )
+  return allLoading
+}
+
+if (typeof window !== 'undefined')
+  setTimeout(() => {
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 0))
+    idle(() => void loadAllLanguages())
+  }, 3000)
 
 /** Larger inputs are shown unhighlighted to keep rendering fast. */
 const MAX_CHARS = 300_000
@@ -16,7 +42,9 @@ export function resolveLang(lang?: string): string | undefined {
   if (!lang) return undefined
   const l = normalizeLang(lang)
   if (l === 'plaintext') return l
-  return hljs.getLanguage(l) ? l : undefined
+  if (hljs.getLanguage(l)) return l
+  if (!allLoaded) void loadAllLanguages()
+  return undefined
 }
 
 /** Language for a file: by name/extension, then shebang; 'plaintext' if unknown (no guessing). */

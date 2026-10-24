@@ -1,4 +1,7 @@
+// First: picks the profile's userData folder before anything reads app paths or takes the lock.
+import { profileName } from './profile'
 import { app, BrowserWindow, Menu, nativeTheme, net, protocol } from 'electron'
+import { installProcessDiagnostics } from './diagnostics'
 import * as fs from 'fs'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
@@ -13,7 +16,8 @@ import { WindowManager } from './windows'
 import { initUpdater, stopUpdater } from './updater'
 import { JobService } from './jobs/jobService'
 import { ProcessService } from './processes/processService'
-import { APP_TOOLS, callAppTool } from './appTools'
+import { isAppTool } from '@shared/agentTools'
+import { callAppTool } from './appTools'
 import { MergedWorktreeCleanup } from './worktrees/mergedCleanup'
 
 // If Claude Deck was launched from inside a Claude Code session, don't let that
@@ -35,7 +39,17 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.setAppUserModelId('com.magerx.claudedeck')
+  installProcessDiagnostics()
+  // A separate taskbar identity and a "(dev)"-style title keep a profile window distinguishable from the installed app.
+  app.setAppUserModelId(profileName ? `com.magerx.claudedeck.${profileName.toLowerCase().replace(/[^a-z0-9]+/g, '')}` : 'com.magerx.claudedeck')
+  const titleSuffix = profileName ? ` (${profileName.toLowerCase()})` : ''
+  if (titleSuffix)
+    app.on('browser-window-created', (_e, w) =>
+      w.on('page-title-updated', (ev, title) => {
+        ev.preventDefault()
+        w.setTitle(title + titleSuffix)
+      })
+    )
 
   /** Folder/file paths passed on the command line (Explorer menu, "Open with"). */
   const pathArgs = (argv: string[]): string[] =>
@@ -87,7 +101,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!s) return 'Unknown session'
       const { tool, args } = params as { tool: string; args: Record<string, unknown> }
       // App tools work without a mesh group; the rest coordinate peers.
-      if (APP_TOOLS.has(tool)) return callAppTool({ sessions, processes, jobs }, s, tool, args ?? {})
+      if (isAppTool(tool)) return callAppTool({ sessions, processes, jobs }, s, tool, args ?? {})
       return sessions.mesh.callTool(s, tool, args ?? {})
     })
     await control.start()

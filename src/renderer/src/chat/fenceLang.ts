@@ -1,4 +1,4 @@
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import type { Token, Tokens } from 'marked'
 import { languageFromShebang } from '@shared/languages'
 import { langForFile, resolveLang } from '../highlight'

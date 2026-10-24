@@ -6,7 +6,8 @@ export default defineConfig({
   main: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
     build: {
-      rollupOptions: { input: { index: resolve('src/main/index.ts') } }
+      // tsWorker: the editor's TypeScript language service, run in a utility process (src/main/lsp).
+      rollupOptions: { input: { index: resolve('src/main/index.ts'), tsWorker: resolve('src/main/lsp/tsWorker.ts') } }
     }
   },
   preload: {
