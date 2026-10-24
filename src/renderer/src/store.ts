@@ -31,6 +31,8 @@ export interface Tab {
   activePane: string
   /** The project's Overview (sessionIds empty, activePane ''). Always first in its workspace. */
   projectId?: string
+  /** A script run's terminal (Actions), by process id (sessionIds empty, activePane ''). */
+  processId?: string
   /** The workspace's code editor (sessionIds empty, activePane ''); at most one per workspace. */
   editor?: boolean
   /** The editor's folder (explorer, search, quick open). */
@@ -42,7 +44,7 @@ export const QUICK = 'quick'
 /** `activeGroup` when the Home page (all projects) is showing. */
 export const HOME = 'home'
 
-export type SidebarView = 'projects' | 'activity' | 'repo' | 'jobs' | 'routines' | 'scheduled' | 'team' | 'reviews'
+export type SidebarView = 'projects' | 'activity' | 'repo' | 'actions' | 'jobs' | 'routines' | 'scheduled' | 'team' | 'reviews'
 export type RightPanel = 'review' | 'files' | 'team' | 'browser' | 'timeline' | null
 
 /** What the Repo manager's diff viewer shows. `path` focuses one file. */
@@ -100,8 +102,6 @@ export interface UiState {
   processes: ProcessInfo[]
   /** package.json scripts per project id (scanned on demand). */
   scripts: Record<string, ScriptPackage[]>
-  /** Process whose log viewer is open. */
-  processLog?: string
   /** Project whose Actions section should open (from the command palette). */
   actionsFocus?: string
   mesh: Record<string, MeshGroupState>
@@ -429,7 +429,7 @@ export function removeSessionFromTabs(sessionId: string): void {
         const ids = t.sessionIds.filter((x) => x !== sessionId)
         return { ...t, sessionIds: ids, activePane: t.activePane === sessionId ? ids[ids.length - 1] : t.activePane }
       })
-      .filter((t) => t.sessionIds.length > 0 || t.projectId || t.editor)
+      .filter((t) => t.sessionIds.length > 0 || t.projectId || t.editor || t.processId)
     const g = owner.group
     let { groups, activeGroup, activeTabId } = s
     // Quick chats closes with its last chat.
@@ -549,6 +549,38 @@ export function closeProjectTab(id: string): void {
     const activeTabId = s.activeTabId === id ? neighborTab(tabs, s.tabs, id, t.group) : s.activeTabId
     return { tabs, activeTabId, groupActive: activeTabId && s.activeGroup === t.group ? { ...s.groupActive, [t.group]: activeTabId } : s.groupActive }
   })
+}
+
+/**
+ * Show a script run's terminal as a sub-tab in its project's workspace (opening it if needed),
+ * next to the project's chats.
+ */
+export function openProcessTab(processId: string): void {
+  set((s) => {
+    const p = s.processes.find((x) => x.id === processId)
+    if (!p) return {}
+    const g = s.library.projects.some((x) => x.id === p.projectId) ? p.projectId : QUICK
+    const base = withGroup(s, g)
+    let tabs = base.tabs
+    let t = tabs.find((x) => x.processId === processId)
+    if (!t) {
+      t = { id: tabId(), group: g, sessionIds: [], activePane: '', processId }
+      tabs = insertTab(tabs, t, s.activeGroup === g ? s.activeTabId : undefined)
+    }
+    return { ...base, tabs, activeGroup: g, activeTabId: t.id, groupActive: { ...s.groupActive, [g]: t.id } }
+  })
+}
+
+/** A restarted script gets a new process id: its open tab follows the new run. */
+export function retargetProcessTab(oldId: string, newId: string): void {
+  set((s) => (s.tabs.some((t) => t.processId === oldId) ? { tabs: s.tabs.map((t) => (t.processId === oldId ? { ...t, processId: newId } : t)) } : {}))
+}
+
+/** Close the tabs of runs that no longer exist (their terminal was closed or the run forgotten). */
+export function pruneProcessTabs(): void {
+  const s = get()
+  const live = new Set(s.processes.map((p) => p.id))
+  for (const t of s.tabs) if (t.processId && !live.has(t.processId)) closeProjectTab(t.id)
 }
 
 /** Each open editor's unsaved file names, by editor tab id (registered by the editor). */

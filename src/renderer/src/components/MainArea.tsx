@@ -28,6 +28,7 @@ import { openFind } from '../find'
 import { UpdateBanner } from './Updates'
 import { mergeChat } from '../branchActions'
 import { HomeView } from './HomeView'
+import { ProcessPane } from './Actions'
 import { ProjectHome } from './ProjectHome'
 import { SubTabs } from './SubTabs'
 import { openMenuAt, shortPath, STATUS_LABEL, timeAgo } from './ui'
@@ -118,6 +119,12 @@ export function MainArea() {
 }
 
 function TabPage({ tab, active }: { tab: Tab; active: boolean }) {
+  if (tab.processId)
+    return (
+      <div className={`tab-page ${active ? '' : 'hidden'}`}>
+        <ProcessPane processId={tab.processId} active={active} />
+      </div>
+    )
   if (tab.editor)
     return (
       <div className={`tab-page ${active ? '' : 'hidden'}`}>

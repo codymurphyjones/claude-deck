@@ -3,7 +3,7 @@ import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
 import { comboIndex, eventCombo } from './shortcuts'
-import { addSessionToTabs, focusSessionTab, get, groupOf, HOME, loadJobs, loadRoutines, openFolders, openInEditor, openSession, QUICK, removeSessionFromTabs, set, toast, type Tab } from './store'
+import { addSessionToTabs, focusSessionTab, get, groupOf, HOME, loadJobs, loadRoutines, openFolders, openInEditor, openSession, pruneProcessTabs, QUICK, removeSessionFromTabs, set, toast, type Tab } from './store'
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
@@ -173,6 +173,8 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
     // Finished processes are forgotten by main; drop their terminal views too.
     for (const p of get().processes) if (!processes.some((x) => x.id === p.id)) disposeTerminal(p.id)
     set({ processes })
+    // A closed or forgotten run's terminal tab closes with it.
+    pruneProcessTabs()
   })
   bridge.on('jobs:changed', (root: string) => {
     if (get().jobDefs[root]) void loadJobs(root)

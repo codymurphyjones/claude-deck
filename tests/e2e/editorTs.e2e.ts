@@ -30,8 +30,12 @@ test.describe('editor TypeScript support', () => {
 
     // Hover: type and docs from the other file.
     const call = editor.locator('.cm-line').nth(2).getByText('add', { exact: true })
-    await call.hover()
-    await expect(page.locator('.cm-ts-info')).toContainText('add(a: number, b: number): number')
+    // (Re-hover until it shows: the layout can still shift under the pointer as panels open.)
+    await expect(async () => {
+      await page.mouse.move(0, 0)
+      await call.hover()
+      await expect(page.locator('.cm-ts-info')).toContainText('add(a: number, b: number): number', { timeout: 3000 })
+    }).toPass({ timeout: 20_000 })
     await expect(page.locator('.cm-ts-info')).toContainText('Adds two numbers.')
 
     // Ctrl+click: opens b.ts at the definition.

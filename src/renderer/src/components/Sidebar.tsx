@@ -8,7 +8,8 @@ import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
 import { RoutinesView, runRoutine } from './Routines'
 import { RepoView } from './RepoManager'
-import { ProjectActions } from './Actions'
+import { ActionsView } from './Actions'
+import { isOpenFailure } from '@shared/processes'
 import { ReviewsView } from './Reviews'
 import { openMenu, Seg, shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
 
@@ -16,6 +17,7 @@ const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
   { id: 'projects', icon: 'folder', title: 'Projects & chats' },
   { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)' },
   { id: 'repo', icon: 'branch', title: 'Repository — changes, commits, branches' },
+  { id: 'actions', icon: 'play', title: 'Actions — the project’s package.json scripts and running processes' },
   { id: 'team', icon: 'users', title: 'Teams — sessions sharing a folder' },
   { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
   { id: 'routines', icon: 'wand', title: 'Routines — reusable jobs for any repo' },
@@ -29,6 +31,8 @@ export function Sidebar({ open }: { open: boolean }) {
   const sessions = useStore((s) => s.sessions)
   const runs = useStore((s) => s.automations.runs)
   const jobRuns = useStore((s) => s.jobRuns)
+  // Scripts running, or failed and not looked at yet, across projects.
+  const actionPip = useStore((s) => s.processes.filter((p) => p.status === 'running' || isOpenFailure(p)).length)
   const attention = Object.values(sessions).filter((s) => s.kind === 'agent' && (s.status === 'needs-input' || s.unread)).length
   const unreadRuns = runs.filter((r) => r.unread && !r.archived).length
   const teams = new Set(
@@ -54,7 +58,7 @@ export function Sidebar({ open }: { open: boolean }) {
     <>
       <div className="rail">
         {VIEWS.map((v) => {
-          const pip = v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'routines' ? jobsRailPip(jobRuns, 'routine') : v.id === 'team' ? teams : 0
+          const pip = v.id === 'actions' ? actionPip : v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'routines' ? jobsRailPip(jobRuns, 'routine') : v.id === 'team' ? teams : 0
           return (
             <button key={v.id} className={`icon-btn ${open && view === v.id ? 'on' : ''}`} title={v.title} onClick={() => showSidebar(v.id)}>
               <Icon name={v.icon} size={18} />
@@ -76,6 +80,7 @@ export function Sidebar({ open }: { open: boolean }) {
           {view === 'activity' && <ActivityView />}
           {view === 'team' && <TeamsView />}
           {view === 'repo' && <RepoView />}
+          {view === 'actions' && <ActionsView />}
           {view === 'jobs' && <JobsView />}
           {view === 'routines' && <RoutinesView />}
           {view === 'scheduled' && <ScheduledView />}
@@ -264,7 +269,6 @@ function ProjectsView() {
               </div>
               {!isCollapsed && (
                 <>
-                  <ProjectActions project={p} />
                   {chats.slice(0, 30).map((c) => (
                     <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent />
                   ))}

@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { Project } from '@shared/types'
 import { isOpenFailure, plainLines, scriptState, type ProcessInfo, type ScriptPackage } from '@shared/processes'
 import { api } from '../api'
-import { attempt, get, loadScripts, set, useStore } from '../store'
+import { attempt, get, loadScripts, openProcessTab, retargetProcessTab, set, useStore } from '../store'
 import { attach, detach, focusTerminal, hydrate, refit } from '../terminal/registry'
 import { Icon } from './Icon'
-import { Modal, openMenu, useNow } from './ui'
+import { openMenu, useNow } from './ui'
 
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -25,12 +25,16 @@ const showLog = (e: React.MouseEvent, p?: ProcessInfo): void => {
   if (!p) return
   e.preventDefault()
   e.stopPropagation()
-  set({ processLog: p.id })
+  openProcessTab(p.id)
 }
 
-/** Collapsible "Actions" section inside a project: its package.json scripts and the processes it owns. */
-export function ProjectActions({ project }: { project: Project }) {
-  const [open, setOpen] = useState(false)
+/**
+ * A project's package.json scripts and the processes it owns. `embedded`: always open, without its
+ * own header row (the Actions sidebar view).
+ */
+export function ProjectActions({ project, embedded = false }: { project: Project; embedded?: boolean }) {
+  const [openState, setOpen] = useState(false)
+  const open = embedded || openState
   const focus = useStore((s) => s.actionsFocus)
   useEffect(() => {
     if (focus !== project.id) return
@@ -59,6 +63,7 @@ export function ProjectActions({ project }: { project: Project }) {
 
   return (
     <>
+      {!embedded && (
       <div
         className="list-item chat-item"
         onClick={() => setOpen((v) => !v)}
@@ -92,6 +97,7 @@ export function ProjectActions({ project }: { project: Project }) {
           </span>
         )}
       </div>
+      )}
       {open && (
         <div className="proj-actions">
           {active.map((p) => (
@@ -105,6 +111,70 @@ export function ProjectActions({ project }: { project: Project }) {
           ))}
         </div>
       )}
+    </>
+  )
+}
+
+/**
+ * The Actions sidebar view: the current project's scripts and processes (the code on disk, not
+ * chats). Follows the selected project tab; from Home or Quick chats, pick a project. Scripts
+ * running in other projects are listed too, so nothing keeps running out of sight.
+ */
+export function ActionsView() {
+  const projects = useStore((s) => s.library.projects)
+  const activeGroup = useStore((s) => s.activeGroup)
+  const focus = useStore((s) => s.actionsFocus)
+  const procs = useStore((s) => s.processes)
+  const [picked, setPicked] = useState<string | undefined>(undefined)
+  // "All actions" links (Overview, command palette) name a project.
+  useEffect(() => {
+    if (!focus) return
+    setPicked(focus)
+    set({ actionsFocus: undefined })
+  }, [focus])
+  const fromTab = projects.some((p) => p.id === activeGroup) ? activeGroup : undefined
+  const id = (focus ?? fromTab ?? picked) || projects[0]?.id
+  const p = projects.find((x) => x.id === id)
+  const elsewhere = procs.filter((x) => x.projectId !== id && (x.status === 'running' || isOpenFailure(x)))
+  return (
+    <>
+      <div className="sidebar-head">
+        <span className="title">Actions</span>
+        {p && (
+          <button className="icon-btn sm" title="Rescan package.json scripts" onClick={() => void loadScripts(p.id, true)}>
+            <Icon name="refresh" size={14} />
+          </button>
+        )}
+      </div>
+      <div className="col" style={{ padding: '0 10px 8px', gap: 6 }}>
+        {fromTab && !focus ? (
+          <div className="muted mono ellipsis" style={{ fontSize: 11.5 }} title={`${p?.folders[0] ?? ''} (follows the selected project tab)`}>
+            {p?.name}
+          </div>
+        ) : (
+          <select className="select" value={id ?? ''} onChange={(e) => setPicked(e.target.value)}>
+            {projects.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="sidebar-body">
+        {!p && <div className="empty-note">Add a project to run its scripts here.</div>}
+        {p && <ProjectActions key={p.id} project={p} embedded />}
+        {elsewhere.length > 0 && (
+          <>
+            <div className="section-label">Running in other projects</div>
+            {elsewhere.map((x) => (
+              <div key={x.id} title={projects.find((q) => q.id === x.projectId)?.name}>
+                <ProcessRow p={x} />
+              </div>
+            ))}
+          </>
+        )}
+      </div>
     </>
   )
 }
@@ -157,7 +227,7 @@ function ProcessRow({ p }: { p: ProcessInfo }) {
   const now = Date.now()
   const status = p.status === 'running' ? `running ${elapsed(now - p.startedAt)}` : p.status === 'success' ? 'done' : p.status === 'failed' ? `failed · exit ${p.exitCode}` : 'stopped'
   return (
-    <div className={`list-item proj-proc ${p.status}`} title={`${p.command}\n${p.cwd}${p.reason ? `\n\n${p.reason}` : ''}`} onClick={() => set({ processLog: p.id })} onContextMenu={(e) => showLog(e, p)}>
+    <div className={`list-item proj-proc ${p.status}`} title={`${p.command}\n${p.cwd}${p.reason ? `\n\n${p.reason}` : ''}`} onClick={() => openProcessTab(p.id)} onContextMenu={(e) => showLog(e, p)}>
       {p.status === 'running' ? <span className="dot running" /> : <Icon name={p.status === 'success' ? 'check' : 'x'} size={12} />}
       <div className="grow" style={{ minWidth: 0 }}>
         <div className="ellipsis">
@@ -179,15 +249,15 @@ function ProcessButtons({ p, small, log = true }: { p: ProcessInfo; small?: bool
   const restart = (e: React.MouseEvent): void => {
     e.stopPropagation()
     void attempt(() => api.processes.restart(p.id)).then((np) => {
-      // Keep an open log viewer following the new run.
-      if (np && get().processLog === p.id) set({ processLog: np.id })
+      // Keep an open terminal tab following the new run.
+      if (np) retargetProcessTab(p.id, np.id)
     })
   }
   const dismiss = (e: React.MouseEvent): void => (e.stopPropagation(), void attempt(() => api.processes.dismiss(p.id)))
   return (
     <>
       {log && small && (
-        <button className={cls} title="View log" onClick={(e) => (e.stopPropagation(), set({ processLog: p.id }))}>
+        <button className={cls} title="View log" onClick={(e) => (e.stopPropagation(), openProcessTab(p.id))}>
           <Icon name="terminal" size={12} />
         </button>
       )}
@@ -215,75 +285,68 @@ function ProcessButtons({ p, small, log = true }: { p: ProcessInfo; small?: bool
 }
 
 // ------------------------------------------------------------------ log viewer
-export function ProcessLogDialog() {
-  const id = useStore((s) => s.processLog)
-  const p = useStore((s) => s.processes.find((x) => x.id === id))
+/**
+ * A script run's terminal, shown in a sub-tab of its project's workspace (next to the chats). Closing
+ * the tab leaves the script running; "Close terminal" stops it and clears its status.
+ */
+export function ProcessPane({ processId, active }: { processId: string; active: boolean }) {
+  const p = useStore((s) => s.processes.find((x) => x.id === processId))
   const host = useRef<HTMLDivElement>(null)
-  useNow(p?.status === 'running' ? 1000 : 60_000)
-  useEffect(() => {
-    if (!id) return
-    if (!p) return set({ processLog: undefined })
-  }, [id, p])
+  useNow(p?.status === 'running' && active ? 1000 : 60_000)
   useEffect(() => {
     const el = host.current
-    if (!id || !el) return
-    attach(id, el)
-    void hydrate(id).then(() => {
-      refit(id)
-      focusTerminal(id)
+    if (!el || !p) return
+    attach(processId, el)
+    void hydrate(processId).then(() => refit(processId))
+    return () => detach(processId, el)
+  }, [processId, !!p])
+  // Fit the terminal when its tab is shown (it can't measure itself while hidden).
+  useEffect(() => {
+    if (!active || !p) return
+    requestAnimationFrame(() => {
+      refit(processId)
+      focusTerminal(processId)
     })
-    return () => detach(id, el)
-  }, [id, !!p])
-  if (!id || !p) return null
-  const close = (): void => set({ processLog: undefined })
+  }, [active, processId, !!p])
+  if (!p) return <div className="empty-note">This run is gone.</div>
   const copy = async (): Promise<void> => {
     await api.clipboard.writeText(plainLines(await api.session.buffer(p.id)).join('\n'))
   }
   return (
-    <Modal
-      wide
-      icon="terminal"
-      onClose={close}
-      title={
-        <span className="row" style={{ gap: 8, minWidth: 0 }}>
-          <span className="mono ellipsis">{p.command}</span>
-          <span className={`badge ${p.status === 'running' ? 'warn' : p.status === 'failed' ? 'err' : p.status === 'success' ? 'ok' : ''}`}>
-            {p.status === 'running' ? `running ${elapsed(Date.now() - p.startedAt)}` : p.status === 'failed' ? `failed · exit ${p.exitCode}` : p.status}
-          </span>
+    <div className="proc-pane">
+      <div className="proc-pane-head">
+        <Icon name="terminal" size={14} style={{ color: 'var(--accent)' }} />
+        <span className="mono ellipsis" title={p.command}>
+          {p.command}
         </span>
-      }
-      footer={
-        <>
-          <span className="muted mono ellipsis" style={{ marginRight: 'auto', fontSize: 11.5 }} title={p.cwd}>
-            {p.cwd}
-          </span>
-          <button className="btn sm" title="Copy output" onClick={() => void attempt(copy, 'Output copied')}>
-            <Icon name="copy" size={12} /> Copy
-          </button>
-          <button className="btn sm" title="Reveal folder" onClick={() => api.shell.openPath(p.cwd)}>
-            <Icon name="folder-open" size={12} />
-          </button>
-          <ProcessButtons p={p} log={false} />
-          <button
-            className="btn sm danger"
-            title={p.status === 'running' ? 'Stop the process, close its terminal and clear its status' : 'Close this terminal and clear the script’s status'}
-            onClick={() => void attempt(() => api.processes.close(p.id))}
-          >
-            <Icon name="trash" size={12} /> Close terminal
-          </button>
-          <button className="btn sm" onClick={close}>
-            Close
-          </button>
-        </>
-      }
-    >
+        <span className={`badge ${p.status === 'running' ? 'warn' : p.status === 'failed' ? 'err' : p.status === 'success' ? 'ok' : ''}`}>
+          {p.status === 'running' ? `running ${elapsed(Date.now() - p.startedAt)}` : p.status === 'failed' ? `failed · exit ${p.exitCode}` : p.status}
+        </span>
+        <span className="muted mono ellipsis grow" style={{ fontSize: 11.5 }} title={p.cwd}>
+          {p.rel || p.cwd}
+        </span>
+        <button className="btn sm" title="Copy output" onClick={() => void attempt(copy, 'Output copied')}>
+          <Icon name="copy" size={12} /> Copy
+        </button>
+        <button className="btn sm" title="Reveal folder" onClick={() => api.shell.openPath(p.cwd)}>
+          <Icon name="folder-open" size={12} />
+        </button>
+        <ProcessButtons p={p} log={false} />
+        <button
+          className="btn sm danger"
+          title={p.status === 'running' ? 'Stop the process, close its terminal and clear its status' : 'Close this terminal and clear the script’s status'}
+          onClick={() => void attempt(() => api.processes.close(p.id))}
+        >
+          <Icon name="trash" size={12} /> Close terminal
+        </button>
+      </div>
       {p.status === 'failed' && p.reason && (
         <div className="proc-reason">
           <Icon name="x" size={13} /> {p.reason}
         </div>
       )}
-      <div className="proc-log" ref={host} />
-    </Modal>
+      <div className="proc-pane-term" ref={host} />
+    </div>
   )
 }
 
@@ -292,12 +355,13 @@ export function ProcessLogDialog() {
 export function ProcessAlerts() {
   const failed = useStore((s) => s.processes).filter(isOpenFailure)
   const projects = useStore((s) => s.library.projects)
-  // While an output viewer is open the cards would cover its buttons; they return when it closes.
-  const viewing = useStore((s) => !!s.processLog)
-  if (!failed.length || viewing) return null
+  // The run whose terminal tab is showing doesn't need a card too.
+  const viewing = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.processId)
+  const cards = failed.filter((p) => p.id !== viewing)
+  if (!cards.length) return null
   return (
     <div className="proc-alerts">
-      {failed.slice(-4).map((p) => {
+      {cards.slice(-4).map((p) => {
         const project = projects.find((x) => x.id === p.projectId)
         const tail = (p.tail ?? '').split('\n').slice(-6).join('\n')
         return (
@@ -320,7 +384,7 @@ export function ProcessAlerts() {
             {p.reason && <div className="proc-alert-reason">{p.reason}</div>}
             {tail && tail !== p.reason && <pre className="proc-alert-tail mono selectable">{tail}</pre>}
             <div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>
-              <button className="btn sm" onClick={() => set({ processLog: p.id })}>
+              <button className="btn sm" onClick={() => openProcessTab(p.id)}>
                 <Icon name="terminal" size={12} /> View log
               </button>
               <button className="btn sm" onClick={() => void attempt(() => api.processes.restart(p.id))}>

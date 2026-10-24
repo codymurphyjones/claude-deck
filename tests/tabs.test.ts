@@ -130,3 +130,28 @@ describe('workspaces', () => {
     expect(groupTabs('pA')).toHaveLength(0)
   })
 })
+
+describe('script terminals as sub-tabs', () => {
+  const proc = (id: string, projectId: string) => ({ id, projectId, cwd: 'C:\code\a', rel: '', script: 'dev', command: 'npm run dev', status: 'running', startedAt: 0 }) as never
+
+  it('opens a run in its project’s workspace, once, and follows a restart', () => {
+    S.set({ processes: [proc('p1', 'pA')] })
+    S.addSessionToTabs('b1')
+    S.openProcessTab('p1')
+    expect(st().activeGroup).toBe('pA')
+    expect(groupTabs('pA').map((t) => (t.projectId ? 'overview' : t.processId))).toEqual(['overview', 'p1'])
+    S.openProcessTab('p1')
+    expect(st().tabs.filter((t) => t.processId)).toHaveLength(1)
+    S.retargetProcessTab('p1', 'p2')
+    expect(groupTabs('pA').some((t) => t.processId === 'p2')).toBe(true)
+  })
+
+  it('closes the tab when its run goes away', () => {
+    S.set({ processes: [proc('p1', 'pA')] })
+    S.openProcessTab('p1')
+    S.set({ processes: [] })
+    S.pruneProcessTabs()
+    expect(st().tabs.some((t) => t.processId)).toBe(false)
+    expect(st().activeGroup).toBe('pA')
+  })
+})

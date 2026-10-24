@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { runCommand } from '../commands'
-import { closeSession, focusTab, get, mergeTabInto, moveTab, openSession, QUICK, set, useStore, type Tab } from '../store'
+import { closeProjectTab, closeSession, focusTab, get, mergeTabInto, moveTab, openSession, QUICK, retargetProcessTab, set, useStore, type Tab } from '../store'
 import { Icon } from './Icon'
-import { requestCloseEditor } from './FileEditor'
+// Not from './FileEditor': importing it here would pull CodeMirror into the startup bundle.
+import { requestCloseEditor } from '../editorClose'
 import { openMenu, STATUS_LABEL } from './ui'
 
 // The active workspace's sub-tabs (its Overview, chats and editor), under the title bar. A popout
@@ -23,6 +24,7 @@ export function SubTabs({ inTitleBar = false }: { inTitleBar?: boolean }) {
   const sessions = useStore((s) => s.sessions)
   const project = useStore((s) => s.library.projects.find((p) => p.id === s.activeGroup))
   const popout = useStore((s) => s.popoutSessionId)
+  const processes = useStore((s) => s.processes)
   const [dropBefore, setDropBefore] = useState<string | null>(null)
   const tabs = popout ? allTabs : allTabs.filter((t) => t.group === group)
 
@@ -84,6 +86,52 @@ export function SubTabs({ inTitleBar = false }: { inTitleBar?: boolean }) {
               <span className="title">Overview</span>
             </div>
           )
+        if (t.processId) {
+          const p = processes.find((x) => x.id === t.processId)
+          // A run's status as a chat-style dot: running = working, failed = needs attention.
+          const dot = p?.status === 'running' ? 'working' : p?.status === 'failed' ? 'needs-input' : 'idle'
+          const close = (): void => closeProjectTab(t.id)
+          return (
+            <div
+              key={t.id}
+              className={cls()}
+              {...drag}
+              onMouseDown={(e) => {
+                if (e.button === 1) {
+                  e.preventDefault()
+                  close()
+                } else if (e.button === 0) focusTab(t.id)
+              }}
+              onContextMenu={(e) =>
+                openMenu(e, [
+                  ...(p?.status === 'running'
+                    ? [{ label: 'Stop', icon: 'stop', onClick: () => void api.processes.stop(p.id) }]
+                    : p
+                      ? [{ label: 'Run again', icon: 'play', onClick: () => void api.processes.restart(p.id).then((np) => np && retargetProcessTab(p.id, np.id)) }]
+                      : []),
+                  { separator: true },
+                  { label: 'Close tab (keeps it running)', icon: 'x', onClick: close }
+                ])
+              }
+              title={p ? `${p.command}${p.rel ? ` · ${p.rel}` : ''}\n${p.status}\nClosing the tab doesn't stop it.` : 'Script run'}
+            >
+              <span className={`dot ${dot}`} />
+              <Icon name="terminal" size={13} style={{ color: 'var(--muted)' }} />
+              <span className="title">{p?.script ?? 'Script'}</span>
+              <button
+                className="icon-btn sm close"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  close()
+                }}
+                title="Close tab (the script keeps running)"
+              >
+                <Icon name="x" size={13} />
+              </button>
+            </div>
+          )
+        }
         if (t.editor)
           return (
             <div

@@ -25,8 +25,7 @@
     "@lydell/node-pty": "1.2.0-beta.15",
     "@replit/codemirror-minimap": "^0.5.2",
     "electron-updater": "^6.8.9",
-    "rrule": "^2.8.1",
-    "typescript": "^5.9.3"
+    "rrule": "^2.8.1"
   },
   "devDependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -65,6 +64,7 @@
     "prettier": "^3.9.10",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "^5.0.5",
     "zustand": "^5.0.15"
@@ -77,21 +77,26 @@
     },
     "files": [
       "out/**/*",
-      "package.json",
-      "!**/node_modules/typescript/bin/**",
-      "!**/node_modules/typescript/lib/{_tsc,_tsserver,_typingsInstaller,tsc,tsserver,tsserverlibrary,typingsInstaller,watchGuard,cancellationToken}.js",
-      "!**/node_modules/typescript/lib/{typescript,tsserverlibrary}.d.ts",
-      "!**/node_modules/typescript/lib/*/diagnosticMessages.generated.json"
+      "package.json"
     ],
     "extraResources": [
       {
         "from": "resources",
         "to": "resources"
+      },
+      {
+        "from": "node_modules/typescript",
+        "to": "typescript",
+        "filter": [
+          "package.json",
+          "LICENSE.txt",
+          "lib/typescript.js",
+          "lib/lib.*.d.ts"
+        ]
       }
     ],
     "asarUnpack": [
-      "**/node_modules/@lydell/**",
-      "**/node_modules/typescript/**"
+      "**/node_modules/@lydell/**"
     ],
     "win": {
       "target": "nsis",

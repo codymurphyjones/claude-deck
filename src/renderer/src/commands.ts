@@ -157,7 +157,7 @@ export function buildCommands(): Command[] {
       icon: 'play',
       run: () => {
         const pid = currentProjectId() ?? get().library.projects[0]?.id
-        set({ sidebarOpen: true, sidebarView: 'projects', actionsFocus: pid })
+        set({ sidebarOpen: true, sidebarView: 'actions', actionsFocus: pid })
       }
     },
     { id: 'newAutomation', title: 'New scheduled task…', group: 'Automation', icon: 'clock', run: () => set({ automationEdit: { cwd: activeSession()?.cwd ?? currentProjectRoot() } }) },

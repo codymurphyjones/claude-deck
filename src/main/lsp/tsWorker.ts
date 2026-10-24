@@ -7,8 +7,10 @@ import { TsProjects, type TsModule } from './tsService'
 // a query superseded by a newer one of the same kind for the same file (typing fast) is answered
 // with null without running.
 //
-// Which TypeScript: the copy shipped with the app (a dependency, unpacked from the asar), else the
-// project's own node_modules/typescript. Neither -> every query answers "unavailable".
+// Which TypeScript: the app's own copy (packaged builds: resources/typescript, copied there by
+// electron-builder's extraResources, since it drops .d.ts files from node_modules; dev: the
+// typescript devDependency), else the project's own node_modules/typescript. Neither -> every query
+// answers "unavailable".
 
 interface Request {
   id: number
@@ -29,11 +31,19 @@ const workspaceTs = new Map<string, TsModule | null>()
 
 function loadTs(root?: string): TsModule | undefined {
   if (bundled === undefined) {
-    try {
-      const ts = req(TS_PKG)
-      bundled = usable(ts) ? ts : null
-    } catch {
-      bundled = null
+    bundled = null
+    const shipped = process.resourcesPath ? path.join(process.resourcesPath, 'typescript') : undefined
+    for (const id of [shipped, TS_PKG]) {
+      if (!id) continue
+      try {
+        const ts = req(id)
+        if (usable(ts)) {
+          bundled = ts
+          break
+        }
+      } catch {
+        /* not there: try the next */
+      }
     }
   }
   if (bundled) return bundled

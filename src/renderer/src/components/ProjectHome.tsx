@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { isOpenPr, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, GitInfo, Project, PullRequestSummary } from '@shared/types'
 import { api, errMsg } from '../api'
-import { attempt, focusSessionTab, get, loadJobs, loadScripts, openInEditor, openSession, resumeChat, set, useStore } from '../store'
+import { attempt, focusSessionTab, get, loadJobs, loadScripts, openInEditor, openProcessTab, openSession, resumeChat, set, useStore } from '../store'
 import { cacheGet, cacheSet } from '../viewCache'
 import { Icon } from './Icon'
 import { ChatBranchBar } from './ChatBranchBar'
@@ -252,14 +252,14 @@ function ActionsCard({ project: p }: { project: Project }) {
   const scripts = (pkgs ?? []).flatMap((pkg) => Object.keys(pkg.scripts).map((name) => ({ pkg, name })))
   const runOf = (dir: string, name: string) => procs.filter((x) => x.cwd === dir && x.script === name).sort((a, b) => b.startedAt - a.startedAt)[0]
   return (
-    <Card title="Actions" icon="play" link={{ label: 'All actions', onClick: () => set({ sidebarOpen: true, sidebarView: 'projects', actionsFocus: p.id }) }}>
+    <Card title="Actions" icon="play" link={{ label: 'All actions', onClick: () => set({ sidebarOpen: true, sidebarView: 'actions', actionsFocus: p.id }) }}>
       {!pkgs && <div className="empty-note">Scanning scripts…</div>}
       {pkgs && !scripts.length && <div className="empty-note">No package.json scripts.</div>}
       {scripts.slice(0, 10).map(({ pkg, name }) => {
         const run = runOf(pkg.dir, name)
         const running = run?.status === 'running'
         return (
-          <div key={pkg.dir + name} className="list-item" title={pkg.scripts[name]} onClick={() => run && set({ processLog: run.id })}>
+          <div key={pkg.dir + name} className="list-item" title={pkg.scripts[name]} onClick={() => run && openProcessTab(run.id)}>
             <span className={`dot ${running ? 'working' : run?.status === 'failed' ? 'needs-input' : 'idle'}`} />
             <span className="grow ellipsis">
               <span className="mono">{name}</span>

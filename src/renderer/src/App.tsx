@@ -12,7 +12,7 @@ import { AutomationDialog } from './components/Automations'
 import { JobDesigner, JobRunDialog } from './components/Jobs'
 import { RoutineRunDialog } from './components/Routines'
 import { RepoDiffDialog } from './components/RepoManager'
-import { ProcessAlerts, ProcessLogDialog } from './components/Actions'
+import { ProcessAlerts } from './components/Actions'
 import { MenuHost, PromptDialog, Toasts } from './components/ui'
 
 export function App() {
@@ -40,7 +40,6 @@ export function App() {
       <JobDesigner scope="routine" />
       <RoutineRunDialog />
       <RepoDiffDialog />
-      <ProcessLogDialog />
       <PromptDialog />
       <MenuHost />
       <Toasts>{!popout && <ProcessAlerts />}</Toasts>
