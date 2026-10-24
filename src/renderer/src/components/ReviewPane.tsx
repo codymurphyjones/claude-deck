@@ -460,12 +460,14 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   // Refresh as Claude edits files.
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | undefined
-    const off = bridge.on('session:fileTouched', () => {
+    const later = (): void => {
       if (t) clearTimeout(t)
       t = setTimeout(() => void load(), 600)
-    })
+    }
+    // (A branch switch, here or in any other tool, changes everything shown.)
+    const offs = [bridge.on('session:fileTouched', later), bridge.on('branches:changed', later)]
     return () => {
-      off()
+      offs.forEach((o) => o())
       if (t) clearTimeout(t)
     }
   }, [load])

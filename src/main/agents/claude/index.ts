@@ -33,7 +33,7 @@ function headless(opts: HeadlessOptions): { done: Promise<HeadlessResult>; kill:
   let lastText = ''
   const proc = spawnLines(locate(), args, {
     cwd: opts.cwd,
-    env: plainEnv(),
+    env: plainEnv(opts.cwd),
     onLine: (line) => {
       try {
         const j = JSON.parse(line)

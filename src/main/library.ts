@@ -5,9 +5,16 @@ import { shortId } from './util'
 
 const WIN = process.platform === 'win32'
 
+const libraryListeners: (() => void)[] = []
+/** Run `fn` whenever the library (projects, chats, worktrees) changes. */
+export function onLibraryChanged(fn: () => void): void {
+  libraryListeners.push(fn)
+}
+
 export function emitLibrary(): void {
   const s = state()
   broadcast('library:changed', { projects: s.projects, chats: s.chats, worktrees: s.worktrees, recentFolders: s.recentFolders })
+  for (const fn of libraryListeners) fn()
 }
 
 export function findProjectForFolder(folder: string): Project | undefined {

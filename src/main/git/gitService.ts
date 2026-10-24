@@ -4,6 +4,7 @@ import { buildFilePatch, buildHunkPatch, parseUnifiedDiff } from '@shared/diff'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { Batcher, fromProcess, loadProgressive, type LoadResult } from '../loading/progressiveLoader'
 import { run, which } from '../util'
+import { assertPushable } from './pushGuard'
 
 const git = (cwd: string, args: string[], input?: string, timeout = 60_000) =>
   run('git', ['-c', 'core.quotepath=false', ...args], { cwd, input, timeout })
@@ -308,6 +309,7 @@ export async function commit(cwd: string, message: string, opts: { all?: boolean
 
 export async function push(cwd: string): Promise<string> {
   const root = (await toplevel(cwd)) ?? cwd
+  assertPushable(root, await currentBranch(root))
   const up = await git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
   const r = up.code === 0 ? await git(root, ['push'], undefined, 180_000) : await git(root, ['push', '-u', 'origin', 'HEAD'], undefined, 180_000)
   if (r.code !== 0) throw new Error(r.stderr.trim() || 'push failed')
@@ -333,6 +335,8 @@ export async function createPr(cwd: string, opts: { title?: string; body?: strin
   const gh = ghPath()
   if (!gh) throw new Error('GitHub CLI (gh) is not installed')
   const root = (await toplevel(cwd)) ?? cwd
+  // (gh pushes the head branch itself when it isn't on the remote yet.)
+  assertPushable(root, await currentBranch(root))
   const args = ['pr', 'create']
   if (opts.title) args.push('--title', opts.title, '--body', opts.body ?? '')
   else args.push('--fill')

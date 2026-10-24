@@ -102,17 +102,17 @@ function useRepo(root?: string) {
     void load()
   }, [load])
 
-  // Refresh when Claude edits files and when the window regains focus.
+  // Refresh when Claude edits files, a branch switches (anywhere) and the window regains focus.
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | undefined
     const later = (): void => {
       if (t) clearTimeout(t)
       t = setTimeout(() => void load(), 800)
     }
-    const off = bridge.on('session:fileTouched', later)
+    const offs = [bridge.on('session:fileTouched', later), bridge.on('branches:changed', later)]
     window.addEventListener('focus', later)
     return () => {
-      off()
+      offs.forEach((o) => o())
       window.removeEventListener('focus', later)
       if (t) clearTimeout(t)
     }
@@ -170,6 +170,11 @@ export function RepoView() {
 
   const st = data.status
   const gi = st?.info
+  // A chat's worktree: its branch never leaves the machine (merged into its target, which is pushed
+  // from its own folder), so nothing here pushes or opens a PR. The main process refuses it too.
+  const worktrees = useStore((s) => s.library.worktrees)
+  const isChatBranch = (name: string): boolean => worktrees.some((w) => w.target && w.branch === name)
+  const chatWt = useStore((s) => (root ? s.library.worktrees.find((w) => !w.deleted && w.target && !w.holdsBranch && w.path.toLowerCase() === root.toLowerCase()) : undefined))
 
   /** Run a git action with a busy label, toast its result, then refresh. */
   const run = async <T,>(label: string, fn: () => Promise<T>, ok?: string): Promise<T | undefined> => {
@@ -244,7 +249,7 @@ export function RepoView() {
                   { label: `Compare ${cur} with this`, icon: 'eye', onClick: () => diff({ kind: 'compare', base: b.name, title: `${cur} vs ${b.name}` }) }
                 ]
               : []),
-            ...(b.current && gi?.hasRemote ? [{ label: b.upstream ? 'Push' : 'Publish branch', icon: 'upload', onClick: () => run('push', () => api.repo.push(root), 'Pushed') }] : []),
+            ...(b.current && gi?.hasRemote && !chatWt && !isChatBranch(b.name) ? [{ label: b.upstream ? 'Push' : 'Publish branch', icon: 'upload', onClick: () => run('push', () => api.repo.push(root), 'Pushed') }] : []),
             { label: 'Rename…', icon: 'edit', onClick: () => void renameBranch(b) },
             { label: 'Copy name', icon: 'copy', onClick: () => api.clipboard.writeText(b.name) },
             { separator: true },
@@ -382,12 +387,12 @@ export function RepoView() {
             openMenu(e, [
               { label: 'Pull (rebase)', icon: 'download', disabled: !gi?.upstream, onClick: () => run('pull', () => api.repo.pull(root, 'rebase'), 'Pulled') },
               { label: 'Pull (merge)', icon: 'download', disabled: !gi?.upstream, onClick: () => run('pull', () => api.repo.pull(root, 'merge'), 'Pulled') },
-              { label: 'Push', icon: 'upload', disabled: !gi?.hasRemote, onClick: () => run('push', () => api.repo.push(root), 'Pushed') },
+              { label: 'Push', icon: 'upload', disabled: !gi?.hasRemote || !!chatWt, onClick: () => run('push', () => api.repo.push(root), 'Pushed') },
               {
                 label: 'Force push (with lease)',
                 icon: 'upload',
                 danger: true,
-                disabled: !gi?.hasRemote,
+                disabled: !gi?.hasRemote || !!chatWt,
                 onClick: async () => (await confirm(`Force push ${gi?.branch}?`, 'Overwrites the remote branch (refused if someone else pushed since your last fetch).', 'Force push')) && run('push', () => api.repo.push(root, { force: true }), 'Pushed')
               },
               { label: 'Push all tags', icon: 'flag', disabled: !gi?.hasRemote, onClick: () => run('push', () => api.repo.push(root, { tags: true }), 'Tags pushed') },
@@ -442,7 +447,11 @@ export function RepoView() {
                   <span className="ellipsis">{gi.branch ?? 'detached HEAD'}</span>
                   <Icon name="chevron-down" size={11} />
                 </button>
-                {gi.upstream ? (
+                {chatWt ? (
+                  <span className="badge" title={`A chat's worktree: its work goes into ${chatWt.target} with Merge, and ${chatWt.target} is pushed from its own folder. Chat branches are never pushed.`}>
+                    merges into {chatWt.target}
+                  </span>
+                ) : gi.upstream ? (
                   <button className="btn sm" title={`Sync with ${gi.upstream} (pull, then push)`} disabled={!!busy} onClick={async () => (await run('pull', () => api.repo.pull(root), 'Pulled')) !== undefined && gi.ahead ? run('push', () => api.repo.push(root), 'Pushed') : undefined}>
                     <Icon name="refresh" size={12} /> {gi.behind ? `↓${gi.behind} ` : ''}
                     {gi.ahead ? `↑${gi.ahead}` : ''}
@@ -470,7 +479,8 @@ export function RepoView() {
                 </div>
               ) : null}
               {/* A merged or closed PR still shows above, but new work on the branch can get a new PR. */}
-              {gi.ghAvailable &&
+              {!chatWt &&
+                gi.ghAvailable &&
                 gi.hasRemote &&
                 data.pr !== undefined &&
                 !isOpenPr(data.pr) &&

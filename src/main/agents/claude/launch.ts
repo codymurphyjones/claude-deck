@@ -6,6 +6,7 @@ import { settings } from '../../context'
 import { helperRuntime, runtime } from '../../runtime'
 import { agentEnv, meshServer, sessionBrief, sessionDirs } from '../../sessions/launch'
 import { ensureDir, toPosix } from '../../util'
+import { getWorktree } from '../../worktrees/worktreeService'
 
 /** Write per-session settings (hooks) + MCP config, and build the claude argv. */
 export function buildClaudeArgs(s: SessionInfo): string[] {
@@ -35,7 +36,12 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
   const mcp = (t: string): string => `mcp__deck-mesh__${t}`
   const allow = cfg.mesh.enabled ? autoAllowedTools(ap.appTools).map(mcp) : []
   const ask = [...expandShellRules(ap.alwaysAsk), ...(cfg.mesh.enabled ? confirmTools(ap.appTools).map(mcp) : [])]
-  if (allow.length || ask.length) sessionSettings.permissions = { ...(allow.length ? { allow } : {}), ...(ask.length ? { ask } : {}) }
+  // A chat in its own worktree never publishes its branch: its work goes into the target with "Merge
+  // into", and is pushed from the target's folder. Denied outright (deny rules hold in every
+  // permission mode, bypass included); the app's own push paths refuse it too (git/pushGuard.ts).
+  const w = s.worktreeId ? getWorktree(s.worktreeId) : undefined
+  const deny = w?.target && !w.holdsBranch ? expandShellRules(['Bash(git push)', 'Bash(git push:*)', 'Bash(gh pr create)', 'Bash(gh pr create:*)']) : []
+  if (allow.length || ask.length || deny.length) sessionSettings.permissions = { ...(allow.length ? { allow } : {}), ...(ask.length ? { ask } : {}), ...(deny.length ? { deny } : {}) }
   const settingsFile = path.join(dir, 'settings.json')
   fs.writeFileSync(settingsFile, JSON.stringify(sessionSettings, null, 2))
 

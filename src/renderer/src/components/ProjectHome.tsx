@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { isOpenPr, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, GitInfo, Project, PullRequestSummary } from '@shared/types'
-import { api, errMsg } from '../api'
+import { api, bridge, errMsg } from '../api'
 import { attempt, focusSessionTab, get, loadJobs, loadScripts, openInEditor, openProcessTab, openSession, resumeChat, set, useStore } from '../store'
 import { cacheGet, cacheSet } from '../viewCache'
 import { Icon } from './Icon'
@@ -66,6 +66,8 @@ function Home({ project: p, active }: { project: Project; active: boolean }) {
   useEffect(() => {
     if (active) void load()
   }, [active, load])
+  // …and when a branch switches or a merge lands (in Claude Deck or any other tool).
+  useEffect(() => bridge.on('branches:changed', () => active && void load()), [active, load])
 
   const gi = git?.info
   return (

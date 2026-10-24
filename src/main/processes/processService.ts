@@ -65,7 +65,7 @@ export class ProcessService {
     const args = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
     // Only the latest run of a script is kept for review; drop earlier finished ones.
     for (const old of this.list()) if (old.cwd === cwd && old.script === script && old.status !== 'running') this.forget(old.id, false)
-    const pid = this.pty.spawn(id, file, args, { cwd, env: { ...plainEnv(), FORCE_COLOR: '1' } })
+    const pid = this.pty.spawn(id, file, args, { cwd, env: { ...plainEnv(cwd), FORCE_COLOR: '1' } })
     const p: ProcessInfo = { id, projectId, cwd, rel: pkg.rel, script, command, status: 'running', pid, startedAt: Date.now() }
     this.procs.set(id, p)
     this.prune()

@@ -7,7 +7,7 @@ import * as path from 'path'
 import { pathToFileURL } from 'url'
 import { AuthService } from './auth/authService'
 import { Scheduler } from './automations/scheduler'
-import { broadcast, flushStores, initStores, settings } from './context'
+import { broadcast, flushStores, initStores, settings, state } from './context'
 import { ControlServer } from './control/server'
 import { registerIpc } from './ipc'
 import { PtyService } from './pty/ptyService'
@@ -19,6 +19,9 @@ import { ProcessService } from './processes/processService'
 import { isAppTool } from '@shared/agentTools'
 import { callAppTool } from './appTools'
 import { MergedWorktreeCleanup } from './worktrees/mergedCleanup'
+import { HeadWatcher } from './git/headWatcher'
+import { setWorktreeSource } from './git/pushGuard'
+import { onLibraryChanged } from './library'
 
 // If Claude Deck was launched from inside a Claude Code session, don't let that
 // session's identity leak into the sessions we start (it disables transcripts etc.).
@@ -106,6 +109,8 @@ if (!app.requestSingleInstanceLock()) {
     })
     await control.start()
 
+    // Every push checks that it isn't publishing a chat's worktree branch (git/pushGuard.ts).
+    setWorktreeSource(() => state().worktrees)
     registerIpc({ sessions, auth, scheduler, jobs, processes, windows })
     const win = windows.createMain()
     sessions.defaultHost = win.webContents.id
@@ -120,12 +125,18 @@ if (!app.requestSingleInstanceLock()) {
     scheduler.start()
     const mergedCleanup = new MergedWorktreeCleanup((w) => sessions.isWorktreeProtected(w.id))
     mergedCleanup.start()
+    // Each project folder's (and Claude Deck-held branch's) checked-out branch, followed live.
+    const heads = new HeadWatcher((folder, branch) => sessions.folderBranchChanged(folder, branch))
+    const watchFolders = (): string[] => [...state().projects.flatMap((p) => p.folders), ...state().worktrees.filter((w) => w.holdsBranch && !w.deleted).map((w) => w.path)]
+    void heads.sync(watchFolders())
+    onLibraryChanged(() => void heads.sync(watchFolders()))
     initUpdater()
 
     app.on('before-quit', () => {
       if (windows) windows.quitting = true
       scheduler.stop()
       mergedCleanup.stop()
+      heads.stop()
       jobs.stop()
       processes.stopAll()
       stopUpdater()

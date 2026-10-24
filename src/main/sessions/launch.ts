@@ -2,6 +2,7 @@ import type { MeshRole, SessionInfo } from '@shared/types'
 import { settings } from '../context'
 import { getProject } from '../library'
 import { getWorktree } from '../worktrees/worktreeService'
+import { pushBlockEnv } from '../git/pushGuard'
 import { helperRuntime, runtime } from '../runtime'
 
 const ROLE_BRIEFS: Record<MeshRole, string> = {
@@ -81,7 +82,8 @@ function worktreeBrief(s: SessionInfo): string {
   if (!w?.branch || !w.target) return ''
   return [
     `You are working in your own git worktree (${w.path}) on branch ${w.branch}, made from ${w.target}. The user's own folder and other chats are separate, so your edits don't disturb them.`,
-    `When a piece of work is done, commit it on ${w.branch} with a clear message. The user brings it into ${w.target} with Claude Deck's "Merge into ${w.target}", which also takes in ${w.target}'s newer commits first. Don't switch branches, and don't merge into or push ${w.target} yourself.`,
+    `When a piece of work is done, commit it on ${w.branch} with a clear message. The user brings it into ${w.target} with Claude Deck's "Merge into ${w.target}", which also takes in ${w.target}'s newer commits first. Don't switch branches, and don't merge into ${w.target} yourself.`,
+    `Never push and never open a pull request: not ${w.branch} (it stays on this machine) and not ${w.target} (it's pushed from its own folder). \`git push\` and \`gh pr create\` are blocked here.`,
     'If asked to resolve conflicts from merging the target into your branch, resolve them here, then `git add` the files and `git commit --no-edit`.'
   ].join(' ')
 }
@@ -107,15 +109,19 @@ export function agentEnv(s: SessionInfo): Record<string, string> {
     CLAUDE_DECK_SID: s.id,
     CLAUDE_DECK_TOKEN: runtime.token
   })
+  // In a chat's worktree, git can't push (any agent, any shell it opens): git/pushGuard.ts.
+  Object.assign(env, pushBlockEnv(s.cwd, env))
   return env
 }
 
-export function plainEnv(): Record<string, string> {
+/** Environment for other processes (terminals, scripts, headless runs); `cwd` where they start. */
+export function plainEnv(cwd?: string): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_NO_ATTACH_CONSOLE
   env.TERM = 'xterm-256color'
   env.COLORTERM = 'truecolor'
+  Object.assign(env, pushBlockEnv(cwd, env))
   return env
 }

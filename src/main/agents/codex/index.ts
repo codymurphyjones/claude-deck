@@ -46,7 +46,7 @@ function headless(opts: HeadlessOptions): { done: Promise<HeadlessResult>; kill:
   const res: HeadlessResult = { code: 0, text: '', isError: false, finished: false }
   const proc = spawnLines(locate(), args, {
     cwd: opts.cwd,
-    env: plainEnv(),
+    env: plainEnv(opts.cwd),
     input: opts.prompt,
     onLine: (line) => {
       let j: Json

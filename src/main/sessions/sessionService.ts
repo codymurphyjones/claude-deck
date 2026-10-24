@@ -248,6 +248,20 @@ export class SessionService extends EventEmitter {
     if (s.worktreeId) touchWorktree(s.worktreeId, { chatId: s.agentSessionId })
   }
 
+  /**
+   * A folder's checked-out branch changed (git/headWatcher). Live sessions working in it now work on
+   * that branch, so they and their chats move to it on the Chats page.
+   */
+  folderBranchChanged(folder: string, branch: string | undefined): void {
+    const k = path.resolve(folder).toLowerCase()
+    for (const s of this.sessions.values()) {
+      if (s.status === 'exited' || path.resolve(s.root).toLowerCase() !== k || s.branch === branch) continue
+      s.branch = branch
+      this.changed(s)
+      if (s.agentSessionId && getChat(s.agentSessionId)) updateChat(s.agentSessionId, { branch })
+    }
+  }
+
   isWorktreeProtected(id: string): boolean {
     const w = getWorktree(id)
     if (!w) return false
@@ -279,13 +293,13 @@ export class SessionService extends EventEmitter {
       } else if (s.kind === 'login') {
         s.status = 'working'
         const p = providerOf(s)
-        this.pty.spawn(s.id, adapter(p).locate(), this.auth.loginArgs(p, s.launch.login), { cwd: s.cwd, env: plainEnv(), ...size })
+        this.pty.spawn(s.id, adapter(p).locate(), this.auth.loginArgs(p, s.launch.login), { cwd: s.cwd, env: plainEnv(s.cwd), ...size })
       } else if (s.kind === 'shell') {
         s.status = 'idle'
-        this.pty.spawn(s.id, s.launch.command || defaultShell(settings().shell), s.launch.args ?? [], { cwd: s.cwd, env: plainEnv(), ...size })
+        this.pty.spawn(s.id, s.launch.command || defaultShell(settings().shell), s.launch.args ?? [], { cwd: s.cwd, env: plainEnv(s.cwd), ...size })
       } else {
         s.status = 'working'
-        this.pty.spawn(s.id, s.launch.command!, s.launch.args ?? [], { cwd: s.cwd, env: plainEnv(), ...size })
+        this.pty.spawn(s.id, s.launch.command!, s.launch.args ?? [], { cwd: s.cwd, env: plainEnv(s.cwd), ...size })
       }
     } catch (e) {
       s.status = 'exited'

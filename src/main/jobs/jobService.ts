@@ -71,7 +71,7 @@ Each folder is one routine, in the same layout as a repo's \`repo_jobs\` folder:
 /** Run a shell command; never rejects. */
 function runShell(cmd: string, cwd: string, timeoutMs: number): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    exec(cmd, { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: plainEnv(), windowsHide: true }, (err, stdout, stderr) => {
+    exec(cmd, { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: plainEnv(cwd), windowsHide: true }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : 1) : 0
       const output = `${stdout}${stderr ? (stdout ? '\n' : '') + stderr : ''}`.trim() || (err && !stdout && !stderr ? err.message : '')
       resolve({ code, output })

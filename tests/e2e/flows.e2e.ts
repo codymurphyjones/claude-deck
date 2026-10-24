@@ -89,6 +89,18 @@ test.describe('with a project folder', () => {
     expect(logErrors(deck)).toEqual([])
   })
 
+  test('follows a branch switch made outside the app in the Chats view', async ({ deck }) => {
+    const { page, repo } = deck
+    const sidebar = page.locator('.sidebar:not(.collapsed)')
+    await expect(sidebar.locator('.branch-label', { hasText: 'main' }).first()).toContainText('checked out')
+    // As in a terminal or another editor, with the app's window not even refocused.
+    git(repo, 'switch', '-q', '-c', 'from-terminal')
+    await expect(sidebar.locator('.branch-label', { hasText: 'from-terminal' })).toContainText('checked out')
+    await expect(sidebar.locator('.branch-label', { hasText: /^main/ }).first()).not.toContainText('checked out')
+    await expect(sidebar.getByText('fixture-repo · on from-terminal')).toBeVisible()
+    expect(logErrors(deck)).toEqual([])
+  })
+
   test('a chat in its own worktree merges into the checked-out branch, waiting while the folder has local changes', async ({ deck }) => {
     const { page, repo } = deck
     await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
@@ -99,6 +111,15 @@ test.describe('with a project folder', () => {
       .map((b) => b.split('\n'))
       .find((l) => l.some((x) => x.startsWith('branch refs/heads/claude/main-')))!
     const wt = entry.find((x) => x.startsWith('worktree '))!.slice(9)
+    // The app refuses to push a chat's worktree branch, whatever asks (a view, an agent tool…).
+    const pushError = await page.evaluate(async (dir) => {
+      const bridge = (window as unknown as { deckBridge: { call: (m: string, ...a: unknown[]) => Promise<unknown> } }).deckBridge
+      return bridge.call('git.push', dir).then(
+        () => 'pushed',
+        (e: Error) => e.message
+      )
+    }, wt)
+    expect(pushError).toContain('Chat branches are never pushed')
     // The chat's work, committed on its branch.
     fs.writeFileSync(path.join(wt, 'feature.txt'), 'from the chat\n')
     git(wt, 'add', 'feature.txt')
@@ -125,6 +146,7 @@ test.describe('with a project folder', () => {
     // (git may rewrite its line endings per core.autocrlf when re-applying it.)
     // (It's re-applied just after the fast-forward that brought feature.txt, so wait for it.)
     await expect.poll(() => fs.readFileSync(path.join(repo, 'notes.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('first line\nsecond line\n')
-    expect(logErrors(deck)).toEqual([])
+    // Nothing else went wrong (the refused push above is logged, as it should be).
+    expect(logErrors(deck).filter((l) => !l.includes('Chat branches are never pushed'))).toEqual([])
   })
 })
