@@ -8,6 +8,7 @@ import { Seg, useExclusive } from './ui'
 import { useFind } from './FindBar'
 import { loadProgressive, type ProgressiveLoad } from '../progressive'
 import { highlightDiffLines, langForFile } from '../highlight'
+import { LazyCtx, scrollParent, useLazyObserver, useLazyShown } from '../lazyMount'
 
 /** Files with more diff lines than this are shown without highlighting. */
 const HIGHLIGHT_MAX_LINES = 6000
@@ -57,182 +58,238 @@ export function DiffList({
   onEdit?: (path: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [draft, setDraft] = useState<{ file: string; line: number; code: string; text: string } | null>(null)
-  // Per file, per hunk: highlighted HTML for each line's content (without its +/- prefix).
-  const html = useMemo(
-    () =>
-      files.map((f) => {
-        const n = f.hunks.reduce((k, h) => k + h.lines.length, 0)
-        const lang = n > HIGHLIGHT_MAX_LINES ? 'plaintext' : langForFile(f.newPath || f.oldPath)
-        return f.hunks.map((h) => highlightDiffLines(h.lines, lang))
-      }),
-    [files]
-  )
+  const [draft, setDraft] = useState<Draft | null>(null)
   const find = useFind()
+  const listEl = useRef<HTMLDivElement | null>(null)
+  const observe = useLazyObserver(() => scrollParent(listEl.current))
+  // Find searches the DOM, so every file body renders while the find bar is open.
+  const findOpen = find.bar !== null
   if (!files.length) return <div className="empty-note">No changes.</div>
   return (
-    <div ref={find.scope}>
+    <div
+      ref={(el) => {
+        listEl.current = el
+        return find.scope(el)
+      }}
+    >
       {find.bar}
-      {files.map((f, fi) => {
-        const path = f.newPath || f.oldPath
-        const isViewed = viewed?.includes(path)
-        const isCollapsed = collapsed[path] ?? isViewed ?? false
-        const [ch, color] = STATUS_CHAR[f.status]
-        return (
-          <div key={path} className="diff-file">
-            <div className="diff-file-head" onClick={() => setCollapsed((c) => ({ ...c, [path]: !isCollapsed }))}>
-              <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={13} style={{ color: 'var(--muted)' }} />
-              <b style={{ color, width: 12, fontFamily: 'var(--code-font)', fontSize: 12 }}>{ch}</b>
-              <span
-                className="fname grow ellipsis"
-                title={root ? `${path} — click to open in editor` : path}
-                onClick={(e) => {
-                  if (!root) return
-                  e.stopPropagation()
-                  void api.shell.openInEditor(`${root}/${path}`)
-                }}
-                style={root ? { cursor: 'var(--cursor)' } : undefined}
-              >
-                {f.status === 'renamed' ? `${f.oldPath} → ${f.newPath}` : path}
-              </span>
-              <span style={{ color: 'var(--success)', fontSize: 11.5 }}>+{f.additions}</span>
-              <span style={{ color: 'var(--danger)', fontSize: 11.5 }}>-{f.deletions}</span>
-              {onEdit && f.status !== 'deleted' && !f.binary && (
-                <button
-                  className="icon-btn sm"
-                  title="Edit this file"
+      <LazyCtx.Provider value={observe}>
+        {files.map((f, fi) => {
+          const path = f.newPath || f.oldPath
+          const isViewed = viewed?.includes(path)
+          const isCollapsed = collapsed[path] ?? isViewed ?? false
+          const [ch, color] = STATUS_CHAR[f.status]
+          return (
+            <div key={path} className="diff-file">
+              <div className="diff-file-head" onClick={() => setCollapsed((c) => ({ ...c, [path]: !isCollapsed }))}>
+                <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={13} style={{ color: 'var(--muted)' }} />
+                <b style={{ color, width: 12, fontFamily: 'var(--code-font)', fontSize: 12 }}>{ch}</b>
+                <span
+                  className="fname grow ellipsis"
+                  title={root ? `${path} — click to open in editor` : path}
                   onClick={(e) => {
+                    if (!root) return
                     e.stopPropagation()
-                    onEdit(path)
+                    void api.shell.openInEditor(`${root}/${path}`)
                   }}
+                  style={root ? { cursor: 'var(--cursor)' } : undefined}
                 >
-                  <Icon name="edit" size={13} />
-                </button>
-              )}
-              {onToggleViewed && (
-                <label className="check" style={{ fontSize: 11.5 }} onClick={(e) => e.stopPropagation()}>
-                  <input type="checkbox" checked={!!isViewed} onChange={() => onToggleViewed(path)} /> Viewed
-                </label>
-              )}
-              {!readOnly && onAction && (
-                <span className="row" style={{ gap: 2 }} onClick={(e) => e.stopPropagation()}>
-                  {view !== 'staged' && (
-                    <button className="icon-btn sm" title="Stage file" disabled={busy} onClick={() => onAction(f, null, 'stage')}>
-                      <Icon name="plus" size={13} />
-                    </button>
-                  )}
-                  {view === 'staged' && (
-                    <button className="icon-btn sm" title="Unstage file" disabled={busy} onClick={() => onAction(f, null, 'unstage')}>
-                      <Icon name="minus" size={13} />
-                    </button>
-                  )}
-                  {view === 'unstaged' && (
-                    <button className="icon-btn sm" title="Revert file" disabled={busy} onClick={() => onAction(f, null, 'revert')}>
-                      <Icon name="undo" size={13} />
-                    </button>
-                  )}
+                  {f.status === 'renamed' ? `${f.oldPath} → ${f.newPath}` : path}
                 </span>
+                <span style={{ color: 'var(--success)', fontSize: 11.5 }}>+{f.additions}</span>
+                <span style={{ color: 'var(--danger)', fontSize: 11.5 }}>-{f.deletions}</span>
+                {onEdit && f.status !== 'deleted' && !f.binary && (
+                  <button
+                    className="icon-btn sm"
+                    title="Edit this file"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onEdit(path)
+                    }}
+                  >
+                    <Icon name="edit" size={13} />
+                  </button>
+                )}
+                {onToggleViewed && (
+                  <label className="check" style={{ fontSize: 11.5 }} onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={!!isViewed} onChange={() => onToggleViewed(path)} /> Viewed
+                  </label>
+                )}
+                {!readOnly && onAction && (
+                  <span className="row" style={{ gap: 2 }} onClick={(e) => e.stopPropagation()}>
+                    {view !== 'staged' && (
+                      <button className="icon-btn sm" title="Stage file" disabled={busy} onClick={() => onAction(f, null, 'stage')}>
+                        <Icon name="plus" size={13} />
+                      </button>
+                    )}
+                    {view === 'staged' && (
+                      <button className="icon-btn sm" title="Unstage file" disabled={busy} onClick={() => onAction(f, null, 'unstage')}>
+                        <Icon name="minus" size={13} />
+                      </button>
+                    )}
+                    {view === 'unstaged' && (
+                      <button className="icon-btn sm" title="Revert file" disabled={busy} onClick={() => onAction(f, null, 'revert')}>
+                        <Icon name="undo" size={13} />
+                      </button>
+                    )}
+                  </span>
+                )}
+              </div>
+              {!isCollapsed && f.binary && <div className="empty-note">Binary file</div>}
+              {!isCollapsed && !f.binary && (
+                <LazyFileBody
+                  eager={findOpen || fi < EAGER_FILES}
+                  f={f}
+                  path={path}
+                  view={view}
+                  readOnly={readOnly}
+                  busy={busy}
+                  onAction={onAction}
+                  comments={comments}
+                  onComment={onComment}
+                  draft={draft}
+                  setDraft={setDraft}
+                />
               )}
             </div>
-            {!isCollapsed && f.binary && <div className="empty-note">Binary file</div>}
-            {!isCollapsed &&
-              f.hunks.map((h, hi) => {
-                const nums = numberHunkLines(h)
-                return (
-                  <div key={hi} className="diff-hunk">
-                    <div className="diff-hunk-head">
-                      <span className="ellipsis">{h.header}</span>
-                      {!readOnly && onAction && f.status !== 'untracked' && (
-                        <span className="actions">
-                          {view !== 'staged' && (
-                            <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'stage')}>
-                              Stage
-                            </button>
-                          )}
-                          {view === 'staged' && (
-                            <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'unstage')}>
-                              Unstage
-                            </button>
-                          )}
-                          {view === 'unstaged' && (
-                            <button className="btn sm danger" disabled={busy} onClick={() => onAction(f, hi, 'revert')}>
-                              Revert
-                            </button>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <div className="diff-lines">
-                      {h.lines.map((l, li) => {
-                        const [o, n] = nums[li]
-                        const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''
-                        const lineNo = n ?? o ?? 0
-                        const lineComments = comments?.filter((c) => c.file === path && c.line === lineNo && kind !== 'del') ?? []
-                        return (
-                          <Fragment key={li}>
-                            <div className={`dl ${kind}`}>
-                              {onComment && kind !== 'del' && l[0] !== '\\' && (
-                                <button className="plus" title="Comment on this line" onClick={() => setDraft({ file: path, line: lineNo, code: l.slice(1), text: '' })}>
-                                  +
-                                </button>
-                              )}
-                              <span className="no" data-find-skip>{o ?? ''}</span>
-                              <span className="no" data-find-skip>{n ?? ''}</span>
-                              <span className="code hljs">
-                                {l[0]}
-                                <span dangerouslySetInnerHTML={{ __html: html[fi]?.[hi]?.[li] ?? '' }} />
-                              </span>
-                            </div>
-                            {lineComments.map((c, ci) => (
-                              <div key={ci} className="inline-comment">
-                                <Icon name="message" size={12} style={{ color: 'var(--accent)' }} /> {c.text}
-                              </div>
-                            ))}
-                            {draft && draft.file === path && draft.line === lineNo && kind !== 'del' && (
-                              <div className="inline-comment col">
-                                <textarea
-                                  className="textarea"
-                                  autoFocus
-                                  rows={3}
-                                  value={draft.text}
-                                  placeholder="Feedback for Claude on this line…"
-                                  onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && draft.text.trim()) {
-                                      onComment!(draft)
-                                      setDraft(null)
-                                    }
-                                    if (e.key === 'Escape') setDraft(null)
-                                  }}
-                                />
-                                <div className="row" style={{ justifyContent: 'flex-end' }}>
-                                  <button className="btn sm" onClick={() => setDraft(null)}>
-                                    Cancel
-                                  </button>
-                                  <button
-                                    className="btn sm primary"
-                                    disabled={!draft.text.trim()}
-                                    onClick={() => {
-                                      onComment!(draft)
-                                      setDraft(null)
-                                    }}
-                                  >
-                                    Add comment
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </Fragment>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )
-              })}
-          </div>
-        )
-      })}
+          )
+        })}
+      </LazyCtx.Provider>
     </div>
+  )
+}
+
+/** Files at the top whose diffs render straight away; the rest render as they're scrolled near. */
+const EAGER_FILES = 8
+
+type Draft = Comment
+
+type FileBodyProps = {
+  f: DiffFile
+  path: string
+  view?: DiffView
+  readOnly?: boolean
+  busy?: boolean
+  onAction?: (f: DiffFile, hunk: number | null, a: Action) => void
+  comments?: Comment[]
+  onComment?: (c: Comment) => void
+  draft: Draft | null
+  setDraft: (d: Draft | null) => void
+}
+
+/** A file's diff, as a placeholder of about its height until it comes near the visible area. */
+function LazyFileBody(props: FileBodyProps & { eager: boolean }) {
+  const { eager, ...rest } = props
+  const [shown, ph] = useLazyShown(eager)
+  if (shown) return <FileBody {...rest} />
+  // Hunk header ≈ 24px, diff line = 18px (12px × 1.5).
+  const height = props.f.hunks.reduce((h, k) => h + 24 + k.lines.length * 18, 0)
+  return <div ref={ph} style={{ height }} />
+}
+
+function FileBody({ f, path, view, readOnly, busy, onAction, comments, onComment, draft, setDraft }: FileBodyProps) {
+  // Per hunk: highlighted HTML for each line's content (without its +/- prefix).
+  const html = useMemo(() => {
+    const n = f.hunks.reduce((k, h) => k + h.lines.length, 0)
+    const lang = n > HIGHLIGHT_MAX_LINES ? 'plaintext' : langForFile(f.newPath || f.oldPath)
+    return f.hunks.map((h) => highlightDiffLines(h.lines, lang))
+  }, [f])
+  return (
+    <>
+      {f.hunks.map((h, hi) => {
+          const nums = numberHunkLines(h)
+          return (
+            <div key={hi} className="diff-hunk">
+              <div className="diff-hunk-head">
+                <span className="ellipsis">{h.header}</span>
+                {!readOnly && onAction && f.status !== 'untracked' && (
+                  <span className="actions">
+                    {view !== 'staged' && (
+                      <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'stage')}>
+                        Stage
+                      </button>
+                    )}
+                    {view === 'staged' && (
+                      <button className="btn sm" disabled={busy} onClick={() => onAction(f, hi, 'unstage')}>
+                        Unstage
+                      </button>
+                    )}
+                    {view === 'unstaged' && (
+                      <button className="btn sm danger" disabled={busy} onClick={() => onAction(f, hi, 'revert')}>
+                        Revert
+                      </button>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="diff-lines">
+                {h.lines.map((l, li) => {
+                  const [o, n] = nums[li]
+                  const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''
+                  const lineNo = n ?? o ?? 0
+                  const lineComments = comments?.filter((c) => c.file === path && c.line === lineNo && kind !== 'del') ?? []
+                  return (
+                    <Fragment key={li}>
+                      <div className={`dl ${kind}`}>
+                        {onComment && kind !== 'del' && l[0] !== '\\' && (
+                          <button className="plus" title="Comment on this line" onClick={() => setDraft({ file: path, line: lineNo, code: l.slice(1), text: '' })}>
+                            +
+                          </button>
+                        )}
+                        <span className="no" data-find-skip>{o ?? ''}</span>
+                        <span className="no" data-find-skip>{n ?? ''}</span>
+                        <span className="code hljs">
+                          {l[0]}
+                          <span dangerouslySetInnerHTML={{ __html: html[hi]?.[li] ?? '' }} />
+                        </span>
+                      </div>
+                      {lineComments.map((c, ci) => (
+                        <div key={ci} className="inline-comment">
+                          <Icon name="message" size={12} style={{ color: 'var(--accent)' }} /> {c.text}
+                        </div>
+                      ))}
+                      {draft && draft.file === path && draft.line === lineNo && kind !== 'del' && (
+                        <div className="inline-comment col">
+                          <textarea
+                            className="textarea"
+                            autoFocus
+                            rows={3}
+                            value={draft.text}
+                            placeholder="Feedback for Claude on this line…"
+                            onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && draft.text.trim()) {
+                                onComment!(draft)
+                                setDraft(null)
+                              }
+                              if (e.key === 'Escape') setDraft(null)
+                            }}
+                          />
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn sm" onClick={() => setDraft(null)}>
+                              Cancel
+                            </button>
+                            <button
+                              className="btn sm primary"
+                              disabled={!draft.text.trim()}
+                              onClick={() => {
+                                onComment!(draft)
+                                setDraft(null)
+                              }}
+                            >
+                              Add comment
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+    </>
   )
 }
 

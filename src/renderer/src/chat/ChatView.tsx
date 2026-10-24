@@ -1,10 +1,11 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ChatItem } from '@shared/chat'
 import type { LiveSession } from '../api'
 import { api } from '../api'
 import { Icon } from '../components/Icon'
 import { openMenu } from '../components/ui'
 import { useFind } from '../components/FindBar'
+import { LazyCtx, useLazyObserver, useLazyShown } from '../lazyMount'
 import { toast, useStore } from '../store'
 import { resolveTheme } from '../theme'
 import { ensureChat, useChat } from './chatStore'
@@ -100,41 +101,6 @@ const sameBlockProps = (p: BlockProps, n: BlockProps): boolean =>
 
 /** Blocks at the end that always render. */
 const LIVE_TAIL = 40
-/** How far outside the viewport a placeholder starts rendering its content. */
-const LAZY_MARGIN = '1500px 0px'
-
-type Observe = (el: Element, onNear: () => void) => () => void
-const LazyCtx = createContext<Observe | null>(null)
-
-/** One IntersectionObserver per chat, shared by all its placeholders. */
-function useLazyObserver(root: React.RefObject<HTMLElement | null>): Observe {
-  const io = useRef<IntersectionObserver | null>(null)
-  const cbs = useRef(new Map<Element, () => void>())
-  useEffect(() => () => io.current?.disconnect(), [])
-  return useCallback(
-    (el, onNear) => {
-      io.current ??= new IntersectionObserver(
-        (entries) => {
-          for (const e of entries) {
-            if (!e.isIntersecting) continue
-            const cb = cbs.current.get(e.target)
-            cbs.current.delete(e.target)
-            io.current?.unobserve(e.target)
-            cb?.()
-          }
-        },
-        { root: root.current, rootMargin: LAZY_MARGIN }
-      )
-      cbs.current.set(el, onNear)
-      io.current.observe(el)
-      return () => {
-        cbs.current.delete(el)
-        io.current?.unobserve(el)
-      }
-    },
-    [root]
-  )
-}
 
 const lineCount = (text: string, perLine: number): number => text.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / perLine)), 0)
 
@@ -161,14 +127,7 @@ function estimateHeight(b: Block, p: Pick<BlockProps, 'thinkingMode' | 'toolsMod
 /** A block that renders as a sized placeholder until it comes near the viewport (or is `eager`). */
 function LazyBlock(props: BlockProps & { eager: boolean }) {
   const { eager, ...rest } = props
-  const observe = useContext(LazyCtx)
-  const [shown, setShown] = useState(eager || !observe)
-  const ph = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (shown) return
-    if (eager || !observe) return setShown(true)
-    if (ph.current) return observe(ph.current, () => setShown(true))
-  }, [shown, eager, observe])
+  const [shown, ph] = useLazyShown(eager)
   // Hidden thinking renders nothing; a placeholder would only add a stray gap.
   if (shown || (rest.block.type === 'thinking' && rest.thinkingMode === 'hidden')) return <BlockView {...rest} />
   return <div ref={ph} className="chat-ph" style={{ height: estimateHeight(rest.block, rest) }} />
@@ -186,7 +145,7 @@ export function ChatView({ session: s }: { session: LiveSession }) {
   const [showJump, setShowJump] = useState(false)
   const cfg = settings.chat
   const find = useFind({ searchRoot: () => scrollRef.current })
-  const observe = useLazyObserver(scrollRef)
+  const observe = useLazyObserver(() => scrollRef.current)
   // Find searches the DOM, so everything renders while the find bar is open.
   const findOpen = find.bar !== null
 
