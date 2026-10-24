@@ -305,6 +305,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const [error, setError] = useState('')
   const [comments, setComments] = useState<Comment[]>([])
   const [msg, setMsg] = useState('')
+  const [amend, setAmend] = useState(false)
   const [busy, setBusy] = useState('')
   const reqRef = useRef(0)
   const loadRef = useRef<ProgressiveLoad | undefined>(undefined)
@@ -409,20 +410,27 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   }
 
   const doCommit = async (push: boolean): Promise<void> => {
-    if (!repo || !msg.trim()) return toast('Write a commit message first', 'error')
-    // Only what's staged is committed; nothing is staged automatically.
-    if (!info?.staged) return toast('Stage the changes to commit first', 'error')
+    if (!repo) return
+    // Amend with an empty message keeps the last commit's message (no -m / --no-edit).
+    if (!amend && !msg.trim()) return toast('Write a commit message first', 'error')
+    // Only what's staged is committed; nothing is staged automatically. (Amend may just reword.)
+    if (!info?.staged && !(amend && msg.trim())) return toast('Stage the changes to commit first', 'error')
     setBusy(push ? 'push' : 'commit')
-    const ok = await attempt(() => api.git.commit(repo, msg, {}), 'Committed')
-    if (ok !== undefined && push) await attempt(() => api.git.push(repo), 'Pushed')
-    if (ok !== undefined) setMsg('')
+    const ok = await attempt(() => api.git.commit(repo, msg, { amend }), amend ? 'Commit amended' : 'Committed')
+    // An amended commit replaces one that may already be on the remote.
+    if (ok !== undefined && push) await attempt(() => (amend ? api.repo.push(repo, { force: true }) : api.git.push(repo)), 'Pushed')
+    if (ok !== undefined) {
+      setMsg('')
+      setAmend(false)
+    }
     setBusy('')
     void load()
   }
+  const canCommit = amend ? !!info?.staged || !!msg.trim() : !!info?.staged
 
   // Nothing left to commit but local commits to publish (e.g. Commit was pressed instead of
   // Commit & push): the Commit button becomes Push.
-  const pushReady = !!info?.hasRemote && info.tracked === 0 && !msg.trim() && ((info.ahead ?? 0) > 0 || (!info.upstream && info.branch !== info.defaultBranch))
+  const pushReady = !!info?.hasRemote && info.tracked === 0 && !msg.trim() && !amend && ((info.ahead ?? 0) > 0 || (!info.upstream && info.branch !== info.defaultBranch))
   const doPush = async (): Promise<void> => {
     if (!repo) return
     setBusy('push')
@@ -585,23 +593,26 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         </div>
       )}
       <div className="col" style={{ padding: 10, borderTop: '1px solid var(--border)', gap: 6 }}>
-        <textarea className="textarea" rows={2} style={{ minHeight: 54 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Commit message" onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && void doCommit(false)} />
+        <textarea className="textarea" rows={2} style={{ minHeight: 54 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={amend ? "Leave empty to keep the last commit's message" : 'Commit message'} onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && void doCommit(false)} />
         <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
           <button className="btn sm" onClick={generate} disabled={!!busy}>
             <Icon name="wand" size={12} /> {busy === 'gen' ? 'Drafting…' : 'Draft'}
           </button>
+          <label className="check" style={{ fontSize: 12 }} title="Add the staged changes to the last commit instead of making a new one. With an empty message, the last commit's message is kept.">
+            <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} /> Amend
+          </label>
           <span className="grow" />
           {pushReady ? (
             <button className="btn sm primary" onClick={doPush} disabled={!!busy} title={info?.upstream ? `Push ${info.ahead} commit(s) to ${info.upstream}` : `Publish ${info?.branch}`}>
               <Icon name="upload" size={12} /> {busy === 'push' ? 'Pushing…' : `Push${info?.ahead ? ` ↑${info.ahead}` : ''}`}
             </button>
           ) : (
-            <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy || !info?.staged} title={info?.staged ? `Commit ${info.staged} staged file(s)` : 'Stage changes to commit them'}>
-              Commit
+            <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit' : `Commit ${info?.staged} staged file(s)`}>
+              {amend ? 'Amend' : 'Commit'}
             </button>
           )}
-          <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !info?.staged} title={info?.staged ? `Commit ${info.staged} staged file(s) and push` : 'Stage changes to commit them'}>
-            <Icon name="upload" size={12} /> Commit & push
+          <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit and force-push (with lease)' : `Commit ${info?.staged} staged file(s) and push`}>
+            <Icon name="upload" size={12} /> {amend ? 'Amend & force push' : 'Commit & push'}
           </button>
           <button className="btn sm primary" onClick={createPr} disabled={!!busy || !info?.ghAvailable || !info?.hasRemote} title={info?.ghAvailable ? 'Push and open a pull request' : 'Install the GitHub CLI (gh) to create PRs'}>
             <Icon name="pr" size={12} /> {busy === 'pr' ? 'Creating…' : 'Create PR'}

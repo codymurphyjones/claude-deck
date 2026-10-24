@@ -266,6 +266,8 @@ async function mustGit(cwd: string, args: string[], input?: string): Promise<str
 export async function commit(cwd: string, message: string, opts: { all?: boolean; amend?: boolean } = {}): Promise<string> {
   const root = (await toplevel(cwd)) ?? cwd
   if (opts.all) await mustGit(root, ['add', '-A'])
+  // Amending with no message folds the staged changes into the last commit and keeps its message.
+  if (opts.amend && !message.trim()) return mustGit(root, ['commit', '--amend', '--no-edit'])
   const args = ['commit', '-F', '-']
   if (opts.amend) args.push('--amend')
   return mustGit(root, args, message)

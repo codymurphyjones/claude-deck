@@ -185,10 +185,12 @@ export function RepoView() {
   const match = (b: BranchInfo): boolean => !branchFilter || b.name.toLowerCase().includes(branchFilter.toLowerCase())
   const origin = data.remotes.find((r) => r.name === 'origin') ?? data.remotes[0]
 
+  const canCommit = amend ? staged.length > 0 || !!msg.trim() : staged.length > 0 && !!msg.trim()
   const commit = async (push: boolean): Promise<void> => {
-    if (!msg.trim()) return toast('Write a commit message first', 'error')
+    // Amend with an empty message keeps the last commit's message (no -m / --no-edit).
+    if (!amend && !msg.trim()) return toast('Write a commit message first', 'error')
     // Only what's staged is committed; nothing is staged automatically. (Amend may just reword.)
-    if (!staged.length && !amend) return toast('Stage the changes to commit first', 'error')
+    if (!staged.length && !(amend && msg.trim())) return toast('Stage the changes to commit first', 'error')
     const ok = await run('commit', () => api.git.commit(root, msg, { amend }), amend ? 'Commit amended' : 'Committed')
     if (ok === undefined) return
     setMsg('')
@@ -579,7 +581,7 @@ export function RepoView() {
                   Amend
                 </label>
                 <span className="grow" />
-                <button className="btn sm primary" disabled={!!busy || !msg.trim()} onClick={() => void commit(false)}>
+                <button className="btn sm primary" disabled={!!busy || !canCommit} title={canCommit ? undefined : amend ? 'Stage changes or enter a new message' : !staged.length ? 'Stage changes to commit them' : 'Write a commit message'} onClick={() => void commit(false)}>
                   {busy === 'commit' ? 'Committing…' : amend ? 'Amend' : 'Commit'}
                 </button>
                 <button
@@ -587,7 +589,7 @@ export function RepoView() {
                   title="More commit options"
                   onClick={(e) =>
                     openMenuAt(e.currentTarget, [
-                      { label: amend ? 'Amend & force push' : 'Commit & push', icon: 'upload', disabled: !gi.hasRemote || !msg.trim(), onClick: () => void commit(true) },
+                      { label: amend ? 'Amend & force push' : 'Commit & push', icon: 'upload', disabled: !gi.hasRemote || !canCommit, onClick: () => void commit(true) },
                       { label: 'Stage all', icon: 'plus', onClick: () => void allAct('stage') },
                       { label: 'Unstage all', icon: 'minus', onClick: () => void allAct('unstage') },
                       { label: 'Undo last commit (keep changes)', icon: 'undo', disabled: !data.commits[1], onClick: () => data.commits[1] && void reset(data.commits[1], 'reset-soft') }
