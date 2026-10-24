@@ -16,6 +16,7 @@ import type {
 } from '@shared/types'
 import type { JobDef, JobRun, JobSource } from '@shared/jobs'
 import type { ProgressEvent } from '@shared/types'
+import { etaKey, runningLabel } from '@shared/progress'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import { api, errMsg, type Library, type LiveSession } from './api'
 
@@ -228,17 +229,99 @@ const tabId = (): string => 't' + Math.random().toString(36).slice(2, 9)
 
 // ------------------------------------------------------------------ toasts
 export function toast(text: string, kind: ToastMessage['kind'] = 'info'): void {
+  // A success is a finished action: shown like one (full ring, then a check) for a consistent look.
+  if (kind === 'success') {
+    const id = 's' + Math.random().toString(36).slice(2, 9)
+    set((s) => ({ progress: [...s.progress, { id, label: text, startedAt: Date.now(), expectedMs: 1, state: 'running' as const }] }))
+    return finishProgress(id, { label: text })
+  }
   const t: ToastMessage = { id: Math.random().toString(36).slice(2), kind, text }
   set((s) => ({ toasts: [...s.toasts, t].slice(-5) }))
   setTimeout(() => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== t.id) })), kind === 'error' ? 7000 : 3800)
 }
 
+/** How long a finished action's toast stays (full ring, then a check) before it goes. */
+const LINGER_MS = 2600
+const ETA_KEY = 'deck.actionEta'
+
+/** Expected duration of an action, learned from its recent runs (in this browser profile). */
+function actionEta(key: string): number {
+  try {
+    const runs: number[] = JSON.parse(localStorage.getItem(ETA_KEY) ?? '{}')[key] ?? []
+    const sorted = [...runs].sort((a, b) => a - b)
+    return sorted.length ? Math.max(200, sorted[Math.floor(sorted.length / 2)]) : 1500
+  } catch {
+    return 1500
+  }
+}
+function recordEta(key: string, ms: number): void {
+  try {
+    const all: Record<string, number[]> = JSON.parse(localStorage.getItem(ETA_KEY) ?? '{}')
+    all[key] = [...(all[key] ?? []), ms].slice(-5)
+    // Bounded: only the most recently used kinds of action are kept.
+    const keys = Object.keys(all)
+    if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete all[k]
+    localStorage.setItem(ETA_KEY, JSON.stringify(all))
+  } catch {
+    /* storage full or unavailable: ETAs just aren't learned */
+  }
+}
+
+/** Show a progress toast's end: the full ring, then a check, lingering a moment before it goes. */
+export function finishProgress(id: string, patch: Partial<ProgressEvent> = {}): void {
+  set((s) => ({ progress: s.progress.map((p) => (p.id === id ? { ...p, ...patch, state: patch.state ?? 'done', doneAt: Date.now() } : p)) }))
+  setTimeout(() => set((s) => ({ progress: s.progress.filter((p) => p.id !== id) })), patch.state === 'error' ? 4000 : LINGER_MS)
+}
+
+/**
+ * Run a user action. With `okText` (what it says when done) it's shown as it runs: a toast with a
+ * ring filling toward its ETA (learned per kind of action), which completes and lingers with
+ * `okText` on success. Failures are toasted as errors either way.
+ */
+export interface ActionToast {
+  /** Finished: the ring completes, then `text` lingers with a check. */
+  done(text: string): void
+  /** Ended without a success to show (failed, cancelled, nothing to do): the toast just goes. */
+  drop(): void
+}
+
+/**
+ * Show an action as it runs: a toast with `label` and a ring filling toward its ETA, learned from
+ * earlier runs of the same `key` (kind of action).
+ */
+export function startAction(label: string, key = etaKey(label)): ActionToast {
+  const id = 'a' + Math.random().toString(36).slice(2, 9)
+  const startedAt = Date.now()
+  set((s) => ({ progress: [...s.progress, { id, label, startedAt, expectedMs: actionEta(key), state: 'running' as const }] }))
+  let ended = false
+  return {
+    done: (text) => {
+      if (ended) return
+      ended = true
+      recordEta(key, Date.now() - startedAt)
+      finishProgress(id, { label: text })
+    },
+    drop: () => {
+      if (ended) return
+      ended = true
+      set((s) => ({ progress: s.progress.filter((p) => p.id !== id) }))
+    }
+  }
+}
+
+/**
+ * Run a user action. With `okText` (what it says when done) it's shown as it runs (startAction):
+ * "Pushed main" reads "Pushing main…" with its ring, then completes and lingers as "Pushed main".
+ * Failures are toasted as errors either way.
+ */
 export async function attempt<T>(fn: () => Promise<T>, okText?: string): Promise<T | undefined> {
+  const a = okText ? startAction(runningLabel(okText), etaKey(okText)) : undefined
   try {
     const r = await fn()
-    if (okText) toast(okText, 'success')
+    if (okText) a?.done(okText)
     return r
   } catch (e) {
+    a?.drop()
     toast(errMsg(e), 'error')
     return undefined
   }

@@ -165,6 +165,8 @@ export interface ProgressEvent {
   /** How long it's expected to take, learned from recent runs. */
   expectedMs: number
   state: 'running' | 'done' | 'error'
+  /** When it finished: the full ring shows a moment, then a check while the toast lingers. */
+  doneAt?: number
 }
 
 /** Where a worktree chat stands relative to the branch it merges into. */

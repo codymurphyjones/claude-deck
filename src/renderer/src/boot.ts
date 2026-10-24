@@ -3,7 +3,7 @@ import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
 import { comboIndex, eventCombo } from './shortcuts'
-import { addSessionToTabs, focusSessionTab, get, groupOf, HOME, loadJobs, loadRoutines, openFolders, openInEditor, openSession, pruneProcessTabs, QUICK, removeSessionFromTabs, set, toast, type Tab } from './store'
+import { addSessionToTabs, finishProgress, focusSessionTab, get, groupOf, HOME, loadJobs, loadRoutines, openFolders, openInEditor, openSession, pruneProcessTabs, QUICK, removeSessionFromTabs, set, toast, type Tab } from './store'
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
@@ -187,8 +187,10 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   bridge.on('toast', (t: ToastMessage) => toast(t.text, t.kind))
   // Long operations: shown while running; a finished one lingers a moment so the full ring is seen.
   bridge.on('progress', (p: ProgressEvent) => {
-    set((s) => ({ progress: [...s.progress.filter((x) => x.id !== p.id), p] }))
-    if (p.state !== 'running') setTimeout(() => set((s) => ({ progress: s.progress.filter((x) => x.id !== p.id) })), p.state === 'done' ? 900 : 4000)
+    if (p.state === 'running') return set((s) => ({ progress: [...s.progress.filter((x) => x.id !== p.id), p] }))
+    // Finished: the ring completes, then a check while it lingers (store.finishProgress).
+    if (!get().progress.some((x) => x.id === p.id)) set((s) => ({ progress: [...s.progress, p] }))
+    finishProgress(p.id, { state: p.state, detail: p.state === 'done' ? 'Ready' : 'Failed' })
   })
   bridge.on('settings:changed', (settings: Settings) => {
     set({ settings })

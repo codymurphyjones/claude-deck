@@ -142,27 +142,42 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
   )
 }
 
-/** A long operation: a ring filling toward its ETA (learned from earlier runs), and what it's doing. */
+/** How long a finished toast shows its full ring before it turns into a check. */
+const FULL_RING_MS = 450
+
+/**
+ * An action's toast: a ring filling toward its ETA (learned from earlier runs) while it runs; when
+ * done, the ring completes, shows full a moment, then becomes a check while the toast lingers.
+ */
 function ProgressToast({ p }: { p: ProgressEvent }) {
-  const now = useNow(200)
+  const now = useNow(100)
   const elapsed = now - p.startedAt
-  // Quick operations finish before they'd be worth showing.
-  if (p.state === 'running' && elapsed < 500) return null
-  const f = p.state === 'done' ? 1 : progressFraction(elapsed, p.expectedMs)
+  const done = p.state === 'done'
+  const failed = p.state === 'error'
+  const showCheck = done && !!p.doneAt && now - p.doneAt > FULL_RING_MS
+  const f = done ? 1 : progressFraction(elapsed, p.expectedMs)
   const left = Math.ceil((p.expectedMs - elapsed) / 1000)
   const R = 9
   const C = 2 * Math.PI * R
   return (
-    <div className={`toast progress-toast ${p.state === 'error' ? 'error' : ''}`} data-testid="progress-toast">
-      <svg width="24" height="24" viewBox="0 0 24 24" className="progress-ring" aria-label={`${Math.round(f * 100)}%`}>
-        <circle cx="12" cy="12" r={R} className="track" />
-        <circle cx="12" cy="12" r={R} className="fill" strokeDasharray={C} strokeDashoffset={C * (1 - f)} transform="rotate(-90 12 12)" />
-      </svg>
+    <div className={`toast progress-toast ${failed ? 'error' : done ? 'success' : ''}`} data-testid="progress-toast" data-state={p.state}>
+      {failed ? (
+        <Icon name="x" size={16} style={{ color: 'var(--danger)', flex: 'none' }} />
+      ) : showCheck ? (
+        <span className="progress-check">
+          <Icon name="check" size={16} style={{ color: 'var(--success)' }} />
+        </span>
+      ) : (
+        <svg width="24" height="24" viewBox="0 0 24 24" className="progress-ring" aria-label={`${Math.round(f * 100)}%`}>
+          <circle cx="12" cy="12" r={R} className="track" />
+          <circle cx="12" cy="12" r={R} className="fill" strokeDasharray={C} strokeDashoffset={C * (1 - f)} transform="rotate(-90 12 12)" />
+        </svg>
+      )}
       <div className="grow" style={{ minWidth: 0 }}>
         <div className="ellipsis">{p.label}</div>
-        <div className="sub ellipsis">
-          {p.state === 'done' ? 'Ready' : p.state === 'error' ? 'Failed' : `${p.detail ?? 'Working…'} · ${left > 0 ? `about ${left}s left` : 'taking longer than usual…'}`}
-        </div>
+        {(done || failed ? p.detail : true) && (
+          <div className="sub ellipsis">{done || failed ? p.detail : `${p.detail ? `${p.detail} · ` : ''}${left > 0 ? `about ${left}s left` : 'taking longer than usual…'}`}</div>
+        )}
       </div>
     </div>
   )

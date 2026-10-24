@@ -17,7 +17,7 @@ import {
 } from '@shared/jobs'
 import type { Automation } from '@shared/types'
 import { api } from '../api'
-import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, toast, useStore } from '../store'
+import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, startAction, toast, useStore } from '../store'
 import { copyJobCard } from '../jobClipboard'
 import { Icon } from './Icon'
 import { runRoutine } from './Routines'
@@ -751,15 +751,16 @@ export function JobDesigner({ scope = 'repo' }: { scope?: JobSource }) {
     setAssisting(true)
     const hasContent = job.steps.some((s) => s.prompt.trim()) || job.description.trim()
     const current = hasContent ? job : undefined
+    const action = startAction(`${hasContent ? 'Revising' : 'Drafting'} the ${isRoutine ? 'routine' : 'job'} with Claude…`, 'job assist')
     const r = await attempt(() => (isRoutine ? api.routines.assist(assist.trim(), current) : api.jobs.assist(root!, assist.trim(), current)))
     setAssisting(false)
-    if (!r) return
+    if (!r) return action.drop()
     undo.current = job
     setJob({ ...r, slug: origSlug ?? r.slug })
     setDirty(true)
     setSel('overview')
     setAssist('')
-    toast(`${isRoutine ? 'Routine' : 'Job'} ${hasContent ? 'revised' : 'drafted'} — review and save`, 'success')
+    action.done(`${isRoutine ? 'Routine' : 'Job'} ${hasContent ? 'revised' : 'drafted'} — review and save`)
   }
   const moveStep = (i: number, d: -1 | 1): void => {
     const j = i + d

@@ -2562,3 +2562,11 @@ html.buddy-page body {
 .btn-split { display: inline-flex; }
 .btn-split > .btn:not(:last-child) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .btn-split > .btn + .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 7px; border-left: 1px solid rgba(0, 0, 0, 0.2); }
+/* A finished action's toast: the full ring gives way to a check. */
+.progress-check {
+  display: inline-flex;
+  width: 24px;
+  justify-content: center;
+  flex: none;
+  animation: popIn 0.2s var(--ease);
+}

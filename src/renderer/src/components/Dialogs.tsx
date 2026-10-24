@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { activeSession, openSession, set, toast, useStore } from '../store'
+import { activeSession, openSession, set, startAction, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { providerOf } from '@shared/agent'
 import { Modal, Switch } from './ui'
@@ -81,6 +81,7 @@ export function FleetDialog() {
     close()
     const base = cwd.split(/[\\/]/).pop() ?? 'team'
     const names = Array.from({ length: workers }, (_, i) => `worker-${i + 1}`)
+    const action = startAction(`Launching the team (lead + ${workers} worker${workers > 1 ? 's' : ''})…`, `launch team ${workers}`)
     const lead = await openSession('agent', {
       cwd,
       name: 'lead',
@@ -88,7 +89,7 @@ export function FleetDialog() {
       model: model || undefined,
       initialPrompt: `You are leading a team of ${workers} worker session${workers > 1 ? 's' : ''} (${names.join(', ')})${reviewer ? ' and a reviewer session ("reviewer")' : ''} working in ${base}${worktrees ? ' (each worker has its own git worktree of this repository)' : ''}.\n\nTeam task:\n${task.trim()}\n\nFirst explore just enough to plan. Then split the work into independent, file-disjoint tasks and put them on the shared board with board_add, assigning each to a worker by name. Workers start automatically when you assign them. Monitor progress with board_list and mesh_inbox, answer questions, and when all tasks are done, verify and integrate the results${worktrees ? ' (merge the workers\' branches)' : ''}, then report back to me.`
     })
-    if (!lead) return
+    if (!lead) return action.drop()
     for (const n of names)
       await openSession(
         'agent',
@@ -104,7 +105,7 @@ export function FleetDialog() {
       )
     if (reviewer) await openSession('agent', { cwd, name: 'reviewer', role: 'reviewer', permissionMode: 'plan', model: model || undefined }, { mode: 'tab', background: true })
     set({ rightPanel: 'team', teamKey: lead.meshGroup })
-    toast(`Team launched: lead + ${workers} worker${workers > 1 ? 's' : ''}${reviewer ? ' + reviewer' : ''}`, 'success')
+    action.done(`Team launched: lead + ${workers} worker${workers > 1 ? 's' : ''}${reviewer ? ' + reviewer' : ''}`)
   }
   return (
     <Modal

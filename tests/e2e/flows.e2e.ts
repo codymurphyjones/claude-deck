@@ -87,6 +87,10 @@ test.describe('with a project folder', () => {
     await picker.locator('input').fill('from-origin')
     await picker.getByRole('button', { name: 'origin/from-origin' }).click()
     await expect(sidebar.locator('.branch-label', { hasText: 'from-origin' })).toContainText('in Claude Deck')
+    // The action's toast ran with a ring and finished: full, then a check, with its success message.
+    const actionToast = page.getByTestId('progress-toast').filter({ hasText: 'from-origin is now active' })
+    await expect(actionToast).toHaveAttribute('data-state', 'done')
+    await expect(actionToast.locator('.progress-check')).toBeVisible()
     expect(git(repo, 'rev-parse', '--abbrev-ref', 'from-origin@{upstream}')).toBe('origin/from-origin')
 
     // A new branch, typed into the same search.

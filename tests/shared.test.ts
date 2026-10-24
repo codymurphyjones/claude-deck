@@ -153,3 +153,18 @@ describe('progress toward an ETA', () => {
     expect(progressFraction(2000, 1000)).toBeGreaterThan(progressFraction(1500, 1000))
   })
 })
+
+describe('action toasts', () => {
+  it('say what is happening while the action runs, from its done message', async () => {
+    const { runningLabel, etaKey } = await import('@shared/progress')
+    expect(runningLabel('Pushed main')).toBe('Pushing main…')
+    expect(runningLabel('Committed')).toBe('Committing…')
+    expect(runningLabel('Merged 2 commits into main.')).toBe('Merging 2 commits into main…')
+    expect(runningLabel('Copied 3 files')).toBe('Copying 3 files…')
+    expect(runningLabel('Created branch x')).toBe('Creating branch x…')
+    expect(runningLabel('Chat deleted')).toBe('Working…')
+    expect(runningLabel('main is now active in Claude Deck')).toBe('Working…')
+    expect(etaKey('Pushed claude/main-1')).toBe(etaKey('Pushed feature/x'))
+    expect(etaKey('Pushed main')).not.toBe(etaKey('Pulled main'))
+  })
+})

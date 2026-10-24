@@ -3,7 +3,7 @@ import { numberHunkLines } from '@shared/diff'
 import { isOpenPr, refNameError, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
-import { askText, attempt, openInEditor, set, toast, useStore, type AgentNote } from '../store'
+import { askText, attempt, openInEditor, set, startAction, toast, useStore, type AgentNote } from '../store'
 import { Icon } from './Icon'
 import { ChatBranchBar } from './ChatBranchBar'
 import { mergeChat } from '../branchActions'
@@ -615,13 +615,13 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
       if (!name) return setBusy('')
       if ((await attempt(() => api.git.createBranch(repo, name))) === undefined) return setBusy('')
     }
-    await attempt(() => api.git.push(repo))
-    const url = await attempt(() => api.git.createPr(repo, { draft: false }))
+    const action = startAction('Pushing and creating the pull request…', 'create pr')
+    const url = (await attempt(() => api.git.push(repo))) !== undefined ? await attempt(() => api.git.createPr(repo, { draft: false })) : undefined
     setBusy('')
     if (url) {
-      toast('Pull request created', 'success')
+      action.done('Pull request created')
       void api.shell.openExternal(url)
-    }
+    } else action.drop()
     void load()
     void loadPr()
   }

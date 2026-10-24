@@ -1,7 +1,7 @@
 import type { BranchInfo } from '@shared/repo'
 import type { ChatMergeResult, LaunchOptions } from '@shared/types'
 import { api, errMsg } from './api'
-import { attempt, focusSessionTab, get, openInEditor, openSession, set, toast } from './store'
+import { attempt, focusSessionTab, get, openInEditor, openSession, set, startAction, toast } from './store'
 import { openMenuAt } from './components/ui'
 
 // Branch actions for chats that work in their own worktrees (main: worktrees/branchSync.ts).
@@ -15,24 +15,27 @@ function chatIn(worktreeId: string) {
 
 /**
  * "Merge into <target>": bring a chat's worktree branch back into the branch it works toward, and
- * handle every outcome: ask the chat to commit or resolve conflicts, hold an update for a folder
- * with uncommitted changes, report pushes.
+ * handle every outcome: open Review to commit, ask the chat to resolve conflicts, hold an update for a
+ * folder with uncommitted changes. Shown as it runs (a toast with its ETA ring).
  */
 export async function mergeChat(worktreeId: string, opts: { stashLocal?: boolean } = {}): Promise<ChatMergeResult | undefined> {
+  const w = get().library.worktrees.find((x) => x.id === worktreeId)
+  const action = startAction(`Merging into ${w?.target ?? 'its branch'}…`, 'merge chat')
   let r: ChatMergeResult
   try {
     r = await api.branches.merge(worktreeId, opts)
   } catch (e) {
+    action.drop()
     toast(errMsg(e), 'error')
     return undefined
   }
   const chat = chatIn(worktreeId)
-  const w = get().library.worktrees.find((x) => x.id === worktreeId)
+  if (r.status !== 'merged') action.drop()
   set((s) => ({ heldMerges: s.heldMerges.filter((h) => h.worktreeId !== worktreeId) }))
   switch (r.status) {
     case 'merged': {
       const inDeck = !!r.updated && get().library.worktrees.some((x) => x.holdsBranch && x.path.toLowerCase() === r.updated!.toLowerCase())
-      toast(`Merged ${plural(r.commits, 'commit')} into ${r.target}. ${inDeck ? `Push it from ${r.target}'s branch options when ready.` : 'Your folder is up to date.'}`, 'success')
+      action.done(`Merged ${plural(r.commits, 'commit')} into ${r.target}. ${inDeck ? `Push it from ${r.target}'s branch options when ready.` : 'Your folder is up to date.'}`)
       if (r.stashConflict) toast(`Your uncommitted changes conflicted when re-applied on top of ${r.target}; they're kept in git stash.`, 'error')
       break
     }
@@ -133,9 +136,11 @@ export async function switchBranchSafely(root: string, branch: string, doSwitch:
       pullAfter = c === 0
     }
   }
+  const action = startAction(`Switching to ${branch}…`, pullAfter ? 'switch branch and pull' : 'switch branch')
   try {
     await doSwitch()
   } catch (e) {
+    action.drop()
     toast(errMsg(e), 'error')
     return false
   }
@@ -146,7 +151,7 @@ export async function switchBranchSafely(root: string, branch: string, doSwitch:
       toast(`Pull failed: ${errMsg(e)}`, 'error')
     }
   }
-  toast(`Switched to ${branch}`, 'success')
+  action.done(`Switched to ${branch}`)
   return true
 }
 
