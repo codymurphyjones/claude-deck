@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ChatItem } from '@shared/chat'
 import type { LiveSession } from '../api'
 import { api } from '../api'
@@ -93,7 +93,88 @@ const sameBlockProps = (p: BlockProps, n: BlockProps): boolean =>
   p.busy === n.busy &&
   sameBlock(p.block, n.block, p.children, n.children)
 
-const fmtDur =(ms?: number): string => (!ms ? '' : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
+// ------------------------------------------------------------------ lazy history
+// Only the latest blocks render on load. Older ones start as empty placeholders of roughly their
+// height and mount (for good) when scrolled near, so opening a long conversation doesn't parse and
+// highlight all of it. Scroll anchoring keeps the view steady when a real height differs.
+
+/** Blocks at the end that always render. */
+const LIVE_TAIL = 40
+/** How far outside the viewport a placeholder starts rendering its content. */
+const LAZY_MARGIN = '1500px 0px'
+
+type Observe = (el: Element, onNear: () => void) => () => void
+const LazyCtx = createContext<Observe | null>(null)
+
+/** One IntersectionObserver per chat, shared by all its placeholders. */
+function useLazyObserver(root: React.RefObject<HTMLElement | null>): Observe {
+  const io = useRef<IntersectionObserver | null>(null)
+  const cbs = useRef(new Map<Element, () => void>())
+  useEffect(() => () => io.current?.disconnect(), [])
+  return useCallback(
+    (el, onNear) => {
+      io.current ??= new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue
+            const cb = cbs.current.get(e.target)
+            cbs.current.delete(e.target)
+            io.current?.unobserve(e.target)
+            cb?.()
+          }
+        },
+        { root: root.current, rootMargin: LAZY_MARGIN }
+      )
+      cbs.current.set(el, onNear)
+      io.current.observe(el)
+      return () => {
+        cbs.current.delete(el)
+        io.current?.unobserve(el)
+      }
+    },
+    [root]
+  )
+}
+
+const lineCount = (text: string, perLine: number): number => text.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / perLine)), 0)
+
+/** A rough rendered height, so the scrollbar and scroll position stay sensible before content mounts. */
+function estimateHeight(b: Block, p: Pick<BlockProps, 'thinkingMode' | 'toolsMode'>): number {
+  switch (b.type) {
+    case 'user':
+      return 46 + lineCount(b.item.text, 90) * 20 + (b.item.images?.length ? 130 : 0)
+    case 'text':
+      return Math.min(6000, 12 + lineCount(b.item.text, 95) * 22)
+    case 'thinking':
+      return p.thinkingMode === 'hidden' ? 0 : p.thinkingMode === 'expanded' ? 40 + lineCount(b.item.text, 95) * 20 : 30
+    case 'tools':
+      return p.toolsMode === 'expanded' ? 40 + b.tools.length * 38 : b.tools.some((t) => ['Edit', 'MultiEdit', 'Write'].includes(t.name)) ? 70 : 40
+    case 'special':
+      return 140
+    case 'notice':
+      return 34
+    case 'turn':
+      return 20
+  }
+}
+
+/** A block that renders as a sized placeholder until it comes near the viewport (or is `eager`). */
+function LazyBlock(props: BlockProps & { eager: boolean }) {
+  const { eager, ...rest } = props
+  const observe = useContext(LazyCtx)
+  const [shown, setShown] = useState(eager || !observe)
+  const ph = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (shown) return
+    if (eager || !observe) return setShown(true)
+    if (ph.current) return observe(ph.current, () => setShown(true))
+  }, [shown, eager, observe])
+  // Hidden thinking renders nothing; a placeholder would only add a stray gap.
+  if (shown || (rest.block.type === 'thinking' && rest.thinkingMode === 'hidden')) return <BlockView {...rest} />
+  return <div ref={ph} className="chat-ph" style={{ height: estimateHeight(rest.block, rest) }} />
+}
+
+const fmtDur = (ms?: number): string => (!ms ? '' : ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
 const fmtTok = (n?: number): string => (!n ? '' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 
 export function ChatView({ session: s }: { session: LiveSession }) {
@@ -105,6 +186,9 @@ export function ChatView({ session: s }: { session: LiveSession }) {
   const [showJump, setShowJump] = useState(false)
   const cfg = settings.chat
   const find = useFind({ searchRoot: () => scrollRef.current })
+  const observe = useLazyObserver(scrollRef)
+  // Find searches the DOM, so everything renders while the find bar is open.
+  const findOpen = find.bar !== null
 
   useEffect(() => {
     void ensureChat(s.id)
@@ -160,9 +244,22 @@ export function ChatView({ session: s }: { session: LiveSession }) {
         <div className="chat-col">
           {!chat?.ready && <div className="chat-loading">Loading conversation…</div>}
           {chat?.ready && !items.length && <ChatEmpty session={s} />}
-          {blocks.map((b, i) => (
-            <BlockView key={'item' in b ? b.item.id : b.id} block={b} session={s} dark={dark} children={children} thinkingMode={cfg.thinking} toolsMode={cfg.tools} isLast={i === blocks.length - 1} busy={i === blocks.length - 1 && busy} />
-          ))}
+          <LazyCtx.Provider value={observe}>
+            {blocks.map((b, i) => (
+              <LazyBlock
+                key={'item' in b ? b.item.id : b.id}
+                eager={findOpen || i >= blocks.length - LIVE_TAIL}
+                block={b}
+                session={s}
+                dark={dark}
+                children={children}
+                thinkingMode={cfg.thinking}
+                toolsMode={cfg.tools}
+                isLast={i === blocks.length - 1}
+                busy={i === blocks.length - 1 && busy}
+              />
+            ))}
+          </LazyCtx.Provider>
           {busy && !streamingText && <WorkingIndicator session={s} />}
           {s.status === 'exited' && (
             <div className="chat-ended">

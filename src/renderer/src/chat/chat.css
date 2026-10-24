@@ -42,6 +42,12 @@
   contain-intrinsic-size: auto 80px;
   animation: msgIn 0.22s var(--ease);
 }
+/* Unrendered history (ChatView's LazyBlock): just reserves space. */
+.chat-col > .chat-ph {
+  animation: none;
+  contain-intrinsic-size: none;
+  flex: none;
+}
 @keyframes msgIn {
   from {
     opacity: 0;
