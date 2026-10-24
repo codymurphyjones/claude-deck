@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { numberHunkLines } from '@shared/diff'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
-import { askText, attempt, toast, useStore } from '../store'
+import { askText, attempt, set, toast, useStore } from '../store'
 import { Icon } from './Icon'
 import { Seg, useExclusive } from './ui'
 import { useFind } from './FindBar'
@@ -39,7 +39,8 @@ export function DiffList({
   viewed,
   onToggleViewed,
   root,
-  busy
+  busy,
+  onEdit
 }: {
   files: DiffFile[]
   readOnly?: boolean
@@ -52,6 +53,8 @@ export function DiffList({
   viewed?: string[]
   onToggleViewed?: (path: string) => void
   root?: string
+  /** Show an Edit button per file (opens the in-app editor). */
+  onEdit?: (path: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [draft, setDraft] = useState<{ file: string; line: number; code: string; text: string } | null>(null)
@@ -94,6 +97,18 @@ export function DiffList({
               </span>
               <span style={{ color: 'var(--success)', fontSize: 11.5 }}>+{f.additions}</span>
               <span style={{ color: 'var(--danger)', fontSize: 11.5 }}>-{f.deletions}</span>
+              {onEdit && f.status !== 'deleted' && !f.binary && (
+                <button
+                  className="icon-btn sm"
+                  title="Edit this file"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEdit(path)
+                  }}
+                >
+                  <Icon name="edit" size={13} />
+                </button>
+              )}
               {onToggleViewed && (
                 <label className="check" style={{ fontSize: 11.5 }} onClick={(e) => e.stopPropagation()}>
                   <input type="checkbox" checked={!!isViewed} onChange={() => onToggleViewed(path)} /> Viewed
@@ -237,6 +252,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const reqRef = useRef(0)
   const loadRef = useRef<ProgressiveLoad | undefined>(undefined)
   const [acting, exclusive] = useExclusive()
+  const editing = useStore((s) => !!s.editorFile && !!s.editorFile.locked)
 
   useEffect(() => () => loadRef.current?.cancel(), [])
 
@@ -346,6 +362,17 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
     void load()
   }
 
+  // Nothing left to commit but local commits to publish (e.g. Commit was pressed instead of
+  // Commit & push): the Commit button becomes Push.
+  const pushReady = !!info?.hasRemote && info.tracked === 0 && !msg.trim() && ((info.ahead ?? 0) > 0 || (!info.upstream && info.branch !== info.defaultBranch))
+  const doPush = async (): Promise<void> => {
+    if (!repo) return
+    setBusy('push')
+    await attempt(() => api.git.push(repo), 'Pushed')
+    setBusy('')
+    void load()
+  }
+
   const generate = async (): Promise<void> => {
     if (!repo) return
     setBusy('gen')
@@ -421,7 +448,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         </div>
         <Seg
           value={view}
-          onChange={setView}
+          onChange={(v) => (editing ? toast('Close the file editor before switching tabs', 'error') : setView(v))}
           options={[
             ['unstaged', 'Unstaged'],
             ['staged', 'Staged'],
@@ -477,7 +504,12 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         {files === null ? (
           <div className="empty-note">Loading diff…</div>
         ) : (
-          <DiffList files={files} view={view} onAction={view === 'unstaged' || view === 'staged' ? act : undefined} busy={acting} comments={comments} onComment={(c) => setComments((cs) => [...cs, c])} root={repo} />
+          <DiffList files={files} view={view} onAction={view === 'unstaged' || view === 'staged' ? act : undefined} busy={acting} comments={comments}
+            onComment={(c) => setComments((cs) => [...cs, c])}
+            root={repo}
+            // An editor already open over the content area is re-targeted rather than remounted, so its unsaved edits survive.
+            onEdit={(p) => set((s) => ({ editorFile: { path: `${repo}/${p}`, locked: s.editorFile ? s.editorFile.locked : true } }))}
+          />
         )}
       </div>
       {comments.length > 0 && (
@@ -501,9 +533,15 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
             <Icon name="wand" size={12} /> {busy === 'gen' ? 'Drafting…' : 'Draft'}
           </button>
           <span className="grow" />
-          <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy}>
-            Commit
-          </button>
+          {pushReady ? (
+            <button className="btn sm primary" onClick={doPush} disabled={!!busy} title={info?.upstream ? `Push ${info.ahead} commit(s) to ${info.upstream}` : `Publish ${info?.branch}`}>
+              <Icon name="upload" size={12} /> {busy === 'push' ? 'Pushing…' : `Push${info?.ahead ? ` ↑${info.ahead}` : ''}`}
+            </button>
+          ) : (
+            <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy}>
+              Commit
+            </button>
+          )}
           <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote}>
             <Icon name="upload" size={12} /> Commit & push
           </button>

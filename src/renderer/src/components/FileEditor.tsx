@@ -59,9 +59,10 @@ interface DocMeta {
   bom: boolean
 }
 
-export function FileEditor() {
+/** Rendered twice: over the content area, and (`locked`, opened from Review) over everything left of the right panel. */
+export function FileEditor({ locked = false }: { locked?: boolean }) {
   const req = useStore((s) => s.editorFile)
-  if (!req) return null
+  if (!req || !!req.locked !== locked) return null
   return <EditorOverlay initialPath={req.path} />
 }
 

@@ -64,8 +64,11 @@ export interface UiState {
   jobsRoot?: string
   /** Repository shown in the Repo manager view. */
   repoRoot?: string
-  /** Full-screen file editor over the content area; `path` is the file to open. */
-  editorFile: false | { path?: string }
+  /**
+   * Full-screen file editor over the content area; `path` is the file to open. `locked` (opened
+   * from Review) covers everything left of the right panel and blocks tab/panel switches until closed.
+   */
+  editorFile: false | { path?: string; locked?: boolean }
   /** Wide diff viewer opened from the Repo manager. */
   repoDiff: false | RepoDiffSource
   /** App-level routines (loaded on demand from ~/.claude-deck/routines). */
@@ -160,6 +163,36 @@ export const useStore = create<UiState>(() => ({
   repoDiff: false,
   editorFile: false
 }))
+
+// While a locked editor is open, switching tabs, right panels or sidebar views is refused.
+// Guarding setState itself covers every caller (buttons, shortcuts, commands, notifications).
+const rawSet = useStore.setState
+let lockToastAt = 0
+useStore.setState = ((partial, replace) =>
+  rawSet((s) => {
+    const next = typeof partial === 'function' ? partial(s) : partial
+    const ed = s.editorFile
+    if (!ed || !ed.locked || !next || ('editorFile' in next && !next.editorFile)) return next as UiState
+    const out: Partial<UiState> = { ...next }
+    // Re-targeting the open editor keeps it locked (and mounted in the same place, so edits survive).
+    if (out.editorFile) out.editorFile = { ...out.editorFile, locked: true }
+    let blocked = false
+    // The active tab may still move if it was closed out from under the editor.
+    if ('activeTabId' in out && out.activeTabId !== s.activeTabId && (out.tabs ?? s.tabs).some((t) => t.id === s.activeTabId)) {
+      delete out.activeTabId
+      blocked = true
+    }
+    for (const k of ['rightPanel', 'sidebarView', 'sidebarOpen'] as const)
+      if (k in out && out[k] !== s[k]) {
+        delete out[k]
+        blocked = true
+      }
+    if (blocked && Date.now() - lockToastAt > 1500) {
+      lockToastAt = Date.now()
+      queueMicrotask(() => toast('Close the file editor before switching tabs', 'error'))
+    }
+    return out as UiState
+  }, replace as false)) as typeof useStore.setState
 
 export const get = useStore.getState
 export const set = useStore.setState

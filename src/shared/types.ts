@@ -424,6 +424,8 @@ export interface GitInfo {
   ahead?: number
   behind?: number
   dirty?: number
+  /** Changed tracked files, staged or not (what a commit can pick up; untracked files excluded). */
+  tracked?: number
   defaultBranch?: string
   hasRemote?: boolean
   ghAvailable?: boolean

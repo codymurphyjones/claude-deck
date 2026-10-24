@@ -44,7 +44,9 @@ export async function info(cwd: string): Promise<GitInfo> {
   let ahead = 0
   let behind = 0
   let dirty = 0
+  let tracked = 0
   for (const line of st.stdout.split('\n')) {
+    if (/^[12u] /.test(line)) tracked++
     if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
     else if (line.startsWith('# branch.ab ')) {
       const m = /\+(\d+) -(\d+)/.exec(line)
@@ -67,6 +69,7 @@ export async function info(cwd: string): Promise<GitInfo> {
     ahead,
     behind,
     dirty,
+    tracked,
     defaultBranch,
     hasRemote: remotes.stdout.trim().length > 0,
     ghAvailable: !!ghPath()
@@ -306,7 +309,21 @@ export async function rawDiffForMessage(cwd: string): Promise<string> {
   const staged = await git(root, ['diff', '--cached', '--no-color', '--stat', '-p'])
   if (staged.stdout.trim()) return staged.stdout.slice(0, 60_000)
   const all = await git(root, ['diff', '--no-color', '--stat', '-p'])
-  return all.stdout.slice(0, 60_000)
+  // `commit -a` doesn't add new files, but the user usually stages them anyway; describe them too.
+  const untracked = (await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout.split('\0').filter(Boolean)
+  let out = all.stdout
+  for (const f of untracked) {
+    if (out.length >= 60_000) break
+    let body = ''
+    try {
+      const buf = await fs.promises.readFile(path.join(root, f))
+      body = buf.includes(0) ? '(binary file)\n' : buf.toString('utf8').slice(0, 8_000)
+    } catch {
+      continue
+    }
+    out += `\nNew file: ${f}\n${body}`
+  }
+  return out.slice(0, 60_000)
 }
 
 export { git as rawGit, mustGit }

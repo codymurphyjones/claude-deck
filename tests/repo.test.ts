@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseBranches, parseConflicts, parseLog, parseRemotes, parseStashes, parseTags, parseTrack, refNameError, remoteWebUrl, summarizeChecks } from '@shared/repo'
+import { cleanCommitMessage, parseBranches, parseConflicts, parseLog, parseRemotes, parseStashes, parseTags, parseTrack, refNameError, remoteWebUrl, summarizeChecks } from '@shared/repo'
 
 const S = '\x1f'
 const row = (...cols: string[]): string => cols.join(S)
@@ -70,5 +70,27 @@ describe('repo manager parsers', () => {
     expect(refNameError('a..b')).toBeTruthy()
     expect(refNameError('-x')).toBeTruthy()
     expect(refNameError('x.lock')).toBeTruthy()
+  })
+})
+
+describe('cleanCommitMessage', () => {
+  it('keeps a plain message as is', () => {
+    expect(cleanCommitMessage('Add find bar\n\nCtrl+F opens it.\n')).toBe('Add find bar\n\nCtrl+F opens it.')
+  })
+  it('takes the inside of a code fence', () => {
+    expect(cleanCommitMessage('```\nAdd find bar\n\nBody line\n```')).toBe('Add find bar\n\nBody line')
+    expect(cleanCommitMessage('```text\r\nFix `foo` parsing\r\n```')).toBe('Fix `foo` parsing')
+  })
+  it('drops a lead-in and text around the fence', () => {
+    expect(cleanCommitMessage("Here's a commit message:\n\n```\nBump version to 0.7.0\n```\n\nLet me know if you want changes.")).toBe('Bump version to 0.7.0')
+    expect(cleanCommitMessage('Here is a concise commit message:\nBump version to 0.7.0')).toBe('Bump version to 0.7.0')
+  })
+  it('handles an unclosed fence and quotes', () => {
+    expect(cleanCommitMessage('```\nAdd X')).toBe('Add X')
+    expect(cleanCommitMessage('"Add X"')).toBe('Add X')
+    expect(cleanCommitMessage('`Add X`')).toBe('Add X')
+  })
+  it('keeps inline code inside the message', () => {
+    expect(cleanCommitMessage('Rename `foo` to `bar`')).toBe('Rename `foo` to `bar`')
   })
 })

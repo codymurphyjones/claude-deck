@@ -177,3 +177,23 @@ export function refNameError(name: string): string | undefined {
   if (/[\s~^:?*[\\]|\.\.|@\{|\/\/|^[-/.]|[/.]$|\.lock$/.test(n)) return `"${n}" is not a valid name`
   return undefined
 }
+
+/**
+ * A drafted commit message as plain text. Models sometimes wrap the message in a ``` fence,
+ * lead with "Here's a commit message:", or quote it; keep only the message itself.
+ */
+export function cleanCommitMessage(raw: string): string {
+  let t = raw.replace(/\r\n?/g, '\n').trim()
+  // The content of the first fenced block, if there is one.
+  const fence = /^(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n?\1[ \t]*$/m.exec(t)
+  if (fence) t = fence[2]
+  else t = t.replace(/^(`{3,}|~{3,})[^\n]*\n?/, '').replace(/\n?(`{3,}|~{3,})\s*$/, '')
+  t = t.trim()
+  // A lead-in line such as "Here's a concise commit message:" when more lines follow.
+  const lines = t.split('\n')
+  if (lines.length > 1 && /^(here('|’)?s|here is|sure|suggested|proposed|commit message)\b.*:\s*$/i.test(lines[0])) t = lines.slice(1).join('\n').trim()
+  // Whole message in quotes or backticks.
+  const q = /^(["'`])([\s\S]+)\1$/.exec(t)
+  if (q && !q[2].includes(q[1])) t = q[2].trim()
+  return t.replace(/^(subject|title):\s*/i, '').replace(/\n{3,}/g, '\n\n')
+}

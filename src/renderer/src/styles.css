@@ -452,6 +452,20 @@ label.check {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
+}
+/* Host for the editor opened from Review: covers the sidebar and content area, not the right panel. */
+.fe-left {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+.fe-left > .file-editor {
+  pointer-events: auto;
+  border-right: 1px solid var(--border);
 }
 
 /* ---------------- sidebar ---------------- */

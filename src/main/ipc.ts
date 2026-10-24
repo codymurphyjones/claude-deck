@@ -14,7 +14,7 @@ import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
 import * as gh from './github/ghService'
 import * as repo from './git/repoService'
-import type { CommitAction, StashAction } from '@shared/repo'
+import { cleanCommitMessage, type CommitAction, type StashAction } from '@shared/repo'
 import { archiveProjectChats, emitLibrary, removeChat, removeProject, updateChat, updateProject } from './library'
 import type { LoadResult } from './loading/progressiveLoader'
 import { runtime } from './runtime'
@@ -306,7 +306,14 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'git.generateCommitMessage': async (_e, cwd: string) => {
       const diff = await git.rawDiffForMessage(cwd)
       if (!diff.trim()) throw new Error('No changes to describe')
-      return adapter().complete('Write a concise git commit message (imperative subject line under 72 chars, optional short body) for the diff on stdin. Output only the message.', { cwd, input: diff })
+      const raw = await adapter().complete(
+        'Write a git commit message for the changes on stdin: an imperative subject line under 72 characters, then optionally a blank line and a short body. ' +
+          'Reply with the commit message text only, exactly as it should be committed: no code fences, no markdown headings, no quotes, no introduction or explanation.',
+        { cwd, input: diff }
+      )
+      const msg = cleanCommitMessage(raw)
+      if (!msg) throw new Error('The drafted commit message was empty')
+      return msg
     },
 
     // ---- worktrees ----
