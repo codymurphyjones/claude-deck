@@ -44,10 +44,10 @@ export function ChatBranchBar({ worktreeId, compact = false }: { worktreeId: str
         {st.branch}
       </span>
       <Icon name="arrow" size={11} style={{ color: 'var(--muted)', flex: 'none' }} />
-      <b className="mono" title={st.targetCheckout ? `Checked out in ${st.targetCheckout}` : 'Not checked out: updated and pushed from Claude Deck'}>
+      <b className="mono ellipsis" title={`${st.target}\n${st.targetCheckout ? `Checked out in ${st.targetCheckout}` : 'Not checked out: updated and pushed from Claude Deck'}`}>
         {st.target}
       </b>
-      <span className="grow ellipsis sub">
+      <span className="grow ellipsis sub cbb-status">
         {st.ahead ? `${st.ahead} to merge` : 'nothing to merge'}
         {st.behind ? ` · ${st.target} has ${st.behind} newer` : ''}
         {st.dirty ? ` · ${st.dirty} uncommitted` : ''}
@@ -57,8 +57,16 @@ export function ChatBranchBar({ worktreeId, compact = false }: { worktreeId: str
           {st.conflicts.length} conflict{st.conflicts.length === 1 ? '' : 's'}
         </span>
       )}
-      <button className="btn sm primary" disabled={busy || (!st.ahead && !blocked && !st.dirty)} onClick={() => void merge()} title={`Bring this chat's commits into ${st.target}`}>
-        <Icon name="fork" size={12} /> {busy ? 'Merging…' : `Merge into ${st.target}`}
+      <button className="btn sm primary cbb-merge" disabled={busy || (!st.ahead && !blocked && !st.dirty)} onClick={() => void merge()} title={`Bring this chat's commits into ${st.target}`}>
+        <Icon name="fork" size={12} style={{ flex: 'none' }} />
+        {busy ? (
+          'Merging…'
+        ) : (
+          <>
+            <span style={{ flex: 'none' }}>Merge into</span>
+            <span className="ellipsis mono">{st.target}</span>
+          </>
+        )}
       </button>
     </div>
   )
