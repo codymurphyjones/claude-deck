@@ -32,6 +32,7 @@ import { debounce, shortId, truncate } from '../util'
 import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
 import { runHeadless, type HeadlessResult } from '../automations/headless'
 import { migrateSessionRefs } from '@shared/migrate'
+import { applyCommitPrefix } from '@shared/repo'
 
 const README = `# repo_jobs
 
@@ -364,7 +365,7 @@ export class JobService {
     const st = await git(cwd, ['status', '--porcelain'])
     if (!st.stdout.trim()) return
     await git(cwd, ['add', '-A'])
-    await git(cwd, ['commit', '-q', '-m', message])
+    await git(cwd, ['commit', '-q', '-m', applyCommitPrefix(message, settings().git.commitPrefix)])
   }
 
   private async agent(runId: string, prompt: string, cwd: string, resumeId: string | undefined, o: JobRunOptions, onSession: (id: string) => void): Promise<HeadlessResult> {

@@ -148,6 +148,106 @@ const TOOLS = [
       properties: { target: str('"shell", a peer name, or "<peer>:shell"'), lines: { type: 'number' } },
       required: ['target']
     }
+  },
+  {
+    name: 'open_file',
+    description:
+      "Open a file for the user in Claude Deck's built-in editor (it appears over their workspace), optionally at a line. Use it whenever the user asks you to open, show or pull up a file. " +
+      'First find the exact file: search with Glob/Grep for what they described. If exactly one file matches, open it. If several plausible files match, ask the user which one they mean (AskUserQuestion, listing the candidates) and open only their choice; never guess between candidates. If nothing matches, tell them instead of opening something else. ' +
+      'Pass where: "external" only if they ask for their own editor (VS Code etc.).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: str('The file: absolute, or relative to your working directory'),
+        line: { type: 'number', description: 'Line to show, if a specific place was asked for or found' },
+        where: { type: 'string', enum: ['app', 'external'], description: 'app (default): Claude Deck editor; external: the user’s own editor' }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'show_diff',
+    description:
+      "Show the user changes in Claude Deck's Review pane (the git diff viewer beside the chat), optionally switching its view and scrolling to one file. Use when they ask to see what changed, e.g. \"show me what you changed in the store\".",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: str('A changed file to scroll to (absolute or relative to your working directory)'),
+        view: { type: 'string', enum: ['unstaged', 'staged', 'lastTurn', 'branch'], description: 'unstaged: uncommitted changes; staged; lastTurn: changes since the start of your latest turn; branch: the branch vs the default branch' }
+      }
+    }
+  },
+  {
+    name: 'request_review',
+    description:
+      'Walk the user through changes: pin short notes to specific lines of the diff in the Review pane (shown under those lines, plus a list at the top). Use to point out the risky or important parts of your changes, decisions worth checking, or what to test. Line numbers are in the new version of the file. Calling it again replaces your previous notes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        notes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { path: str('File (absolute or relative to your working directory)'), line: { type: 'number', description: 'Line in the new version of the file' }, text: str('The note: what to look at and why') },
+            required: ['path', 'line', 'text']
+          }
+        },
+        summary: str('Optional overview shown above the notes'),
+        view: { type: 'string', enum: ['unstaged', 'staged', 'lastTurn', 'branch'], description: 'Which diff the notes refer to (default unstaged)' }
+      },
+      required: ['notes']
+    }
+  },
+  {
+    name: 'run_process',
+    description:
+      "Start (or restart, if it's already running) one of the project's package.json scripts as a Claude Deck background process, e.g. the dev server or tests, the same as the user's Actions panel. Waits a few seconds and returns the status and output so far. Long-running scripts keep running; check them later with read_process.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        script: str('Script name from package.json, e.g. "dev" or "test"'),
+        folder: str('Which package, when the project has several (as listed in the error if ambiguous)'),
+        waitSeconds: { type: 'number', description: 'How long to wait before reporting (default 8, max 120). Use more for test runs you want to see finish.' }
+      },
+      required: ['script']
+    }
+  },
+  {
+    name: 'read_process',
+    description: "Read the output of a script run in Claude Deck (a dev server, test run…). With no script, lists the project's runs and their status.",
+    inputSchema: {
+      type: 'object',
+      properties: { script: str('Script name'), folder: str('Package folder, if several have the script'), lines: { type: 'number', description: 'How many of the last lines (default 80, max 400)' } }
+    }
+  },
+  {
+    name: 'open_browser',
+    description:
+      "Open a URL in Claude Deck's built-in browser pane (beside the chat, so the user sees it too) and read the result: the page's visible text, its console messages, and/or a screenshot file you can then read. Use to check a dev server page loads, look for console errors, or verify a UI change. Omit url to read the page that's already open.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: str('e.g. "localhost:5173" or a full URL'),
+        read: { type: 'string', enum: ['text', 'console', 'screenshot', 'all', 'none'], description: 'What to return (default text)' },
+        waitSeconds: { type: 'number', description: 'Extra wait after loading, for pages that render late (default 2)' }
+      }
+    }
+  },
+  {
+    name: 'notify',
+    description:
+      'Send the user a desktop notification (a toast if the app is in front). Use when they ask to be told about something, e.g. "tell me when the tests pass", once it happens. Clicking it opens this chat.',
+    inputSchema: { type: 'object', properties: { message: str('What happened'), title: str('Optional title (default: this chat\'s name)') }, required: ['message'] }
+  },
+  {
+    name: 'run_routine',
+    description:
+      "Open the run dialog for one of the user's Claude Deck routines (saved multi-step jobs), targeting this repository, with optional context filled in. The user reviews and starts it; it does not run until they do. If the name is ambiguous you get the list to ask them from.",
+    inputSchema: {
+      type: 'object',
+      properties: { routine: str('Routine name or slug'), context: str('Optional run-specific instructions to pre-fill') },
+      required: ['routine']
+    }
   }
 ]
 
@@ -223,7 +323,8 @@ async function handle(msg) {
           capabilities: { tools: {} },
           serverInfo: { name: 'deck-mesh', version: '1.0.0' },
           instructions:
-            'Claude Deck mesh: coordinate with other Claude sessions working in the same folder. Use mesh_peers to see who is around, claim files before editing, use the shared board to split work, and message peers when you hand off or need something.'
+            'Claude Deck mesh: coordinate with other Claude sessions working in the same folder. Use mesh_peers to see who is around, claim files before editing, use the shared board to split work, and message peers when you hand off or need something. ' +
+            'You are running inside the Claude Deck app, and some tools act on it: open_file (show a file; find it first and ask which one if several match), show_diff and request_review (show or walk the user through changes in the Review pane), run_process / read_process (the project\'s scripts, e.g. a dev server or tests), open_browser (the built-in browser pane), notify (a desktop notification), run_routine (opens a routine\'s run dialog for the user to start).'
         }
       })
     }

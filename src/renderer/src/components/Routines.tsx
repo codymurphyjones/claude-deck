@@ -141,7 +141,7 @@ export function RoutineRunDialog() {
     if (!req) return
     setSlug(req.slug ?? '')
     setCwd(req.cwd ?? roots[0] ?? '')
-    setExtra('')
+    setExtra(req.context ?? '')
     setOpts(req.step !== undefined ? { onlyStep: req.step } : {})
     setPreview(false)
     // Only reset when the dialog is (re)opened.

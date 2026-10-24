@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanCommitMessage, parseBranches, parseConflicts, parseLog, parseRemotes, parseStashes, parseTags, parseTrack, refNameError, remoteWebUrl, summarizeChecks } from '@shared/repo'
+import { applyCommitPrefix, cleanCommitMessage, parseBranches, parseConflicts, parseLog, parseRemotes, parseStashes, parseTags, parseTrack, refNameError, remoteWebUrl, summarizeChecks } from '@shared/repo'
 
 const S = '\x1f'
 const row = (...cols: string[]): string => cols.join(S)
@@ -92,5 +92,26 @@ describe('cleanCommitMessage', () => {
   })
   it('keeps inline code inside the message', () => {
     expect(cleanCommitMessage('Rename `foo` to `bar`')).toBe('Rename `foo` to `bar`')
+  })
+})
+
+describe('applyCommitPrefix', () => {
+  it('prefixes with one space, whatever spacing the setting has', () => {
+    expect(applyCommitPrefix('adding proper search', 'CJ |')).toBe('CJ | adding proper search')
+    expect(applyCommitPrefix('adding proper search', 'CJ | ')).toBe('CJ | adding proper search')
+  })
+  it('keeps the body', () => {
+    expect(applyCommitPrefix('Subject\n\nBody', 'CJ |')).toBe('CJ | Subject\n\nBody')
+  })
+  it('does not double a prefix the message already has', () => {
+    expect(applyCommitPrefix('CJ | already there', 'CJ | ')).toBe('CJ | already there')
+  })
+  it('is a no-op without a prefix', () => {
+    expect(applyCommitPrefix('msg', '')).toBe('msg')
+    expect(applyCommitPrefix('msg', '   ')).toBe('msg')
+    expect(applyCommitPrefix('msg', undefined)).toBe('msg')
+  })
+  it('leaves an empty message empty (amend keeps the last message)', () => {
+    expect(applyCommitPrefix('', 'CJ |')).toBe('')
   })
 })

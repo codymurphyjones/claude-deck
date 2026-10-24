@@ -7,6 +7,7 @@ import { addSessionToTabs, focusSessionTab, get, loadJobs, loadRoutines, openFol
 import { applyTerminalOptions, disposeTerminal, hydrate, setKeyInterceptor } from './terminal/registry'
 import { applyTheme, resolveTheme } from './theme'
 import { runCommand } from './commands'
+import { initAgentRequests } from './agentRequests'
 import { copyPointedJobCard, isTypingTarget, pasteJobCard } from './jobClipboard'
 
 let combos = new Map<string, string>()
@@ -182,6 +183,12 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   bridge.on('app:openPaths', async (paths: string[]) => {
     const folders = await api.fs.resolveDrop(paths)
     await openFolders(folders)
+  })
+  // Agents' other app tools (show_diff, request_review, open_browser, run_routine).
+  if (!isPopout) initAgentRequests()
+  // An agent's open_file tool. `at` makes asking again for the same file re-jump to the line.
+  bridge.on('app:openFile', (ev: { path: string; line?: number }) => {
+    if (!isPopout) set((s) => ({ editorFile: { path: ev.path, line: ev.line, at: Date.now(), locked: s.editorFile ? s.editorFile.locked : undefined } }))
   })
   bridge.on('session:fileTouched', (ev: { id: string; path: string }) => {
     if (get().settings.autoOpenFiles && !isPopout) set({ fileToOpen: { path: ev.path, sessionId: ev.id }, rightPanel: 'files' })

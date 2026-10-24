@@ -64,6 +64,17 @@ export async function info(cwd: string): Promise<GitInfo> {
     const has = async (b: string) => (await git(root, ['rev-parse', '--verify', '--quiet', b])).code === 0
     defaultBranch = (await has('main')) ? 'main' : (await has('master')) ? 'master' : undefined
   }
+  // Nothing tracked upstream (a new branch, or a worktree's detached HEAD): count the commits that
+  // aren't on the default branch yet, i.e. what a push would publish.
+  if (!upstream && defaultBranch && branch !== defaultBranch) {
+    for (const base of [`origin/${defaultBranch}`, defaultBranch]) {
+      const r = await git(root, ['rev-list', '--count', `${base}..HEAD`])
+      if (r.code === 0) {
+        ahead = +r.stdout.trim() || 0
+        break
+      }
+    }
+  }
   return {
     isRepo: true,
     root,

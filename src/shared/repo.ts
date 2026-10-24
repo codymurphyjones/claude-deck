@@ -200,3 +200,16 @@ export function cleanCommitMessage(raw: string): string {
   if (q && !q[2].includes(q[1])) t = q[2].trim()
   return t.replace(/^(subject|title):\s*/i, '').replace(/\n{3,}/g, '\n\n')
 }
+
+/**
+ * Put the user's commit prefix (e.g. "CJ | ") in front of a message, separated by a space even if
+ * the setting has none; a message that already starts with it is left as is. An empty prefix or
+ * message is returned untouched (an empty amend message means "keep the last one").
+ */
+export function applyCommitPrefix(message: string, prefix: string | undefined): string {
+  const p = (prefix ?? '').trim()
+  if (!p || !message.trim()) return message
+  const m = message.replace(/^\s+/, '')
+  if (m.startsWith(p)) return m
+  return `${p} ${m}`
+}

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { parseUnifiedDiff } from '@shared/diff'
 import type { PullRequestDetail, PullRequestSummary } from '@shared/types'
 import { api, errMsg } from '../api'
-import { activeSession, attempt, openSession, set, toast, useStore } from '../store'
+import { activeSession, attempt, openSession, set, tabProjectRoot, toast, useStore } from '../store'
 import { DiffList } from './ReviewPane'
+import { cacheGet, cacheSet } from '../viewCache'
 import { Icon } from './Icon'
 import { Modal, Seg, timeAgo } from './ui'
 
@@ -13,21 +14,33 @@ const usePr = create<{ cwd: string; number: number } | null>(() => null)
 export function ReviewsView() {
   const projects = useStore((s) => s.library.projects)
   const pinned = useStore((s) => s.pinnedReviews)
-  const [cwd, setCwd] = useState<string>(() => activeSession()?.root ?? projects[0]?.folders[0] ?? '')
+  // Follows the selected tab's project, like the Repository view.
+  const cwd = useStore(tabProjectRoot) ?? projects[0]?.folders[0] ?? ''
   const [filter, setFilter] = useState<'review' | 'assigned' | 'authored' | 'all'>('review')
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null)
   const [err, setErr] = useState('')
   const [link, setLink] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const req = useRef(0)
 
+  // The last list for this repo + filter shows at once (e.g. after switching tabs) while it reloads.
   const load = async (): Promise<void> => {
     if (!cwd) return
-    setPrs(null)
+    const n = ++req.current
+    const key = `prs:${cwd}|${filter}`
+    setPrs(cacheGet<PullRequestSummary[]>(key) ?? null)
     setErr('')
+    setRefreshing(true)
     try {
-      setPrs(await api.gh.list(cwd, filter))
+      const list = await api.gh.list(cwd, filter)
+      cacheSet(key, list)
+      if (n === req.current) setPrs(list)
     } catch (e) {
+      if (n !== req.current) return
       setErr(errMsg(e))
       setPrs([])
+    } finally {
+      if (n === req.current) setRefreshing(false)
     }
   }
   useEffect(() => {
@@ -44,18 +57,16 @@ export function ReviewsView() {
     <>
       <div className="sidebar-head">
         <span className="title">Code review</span>
-        <button className="icon-btn sm" title="Refresh" onClick={load}>
+        <button className={`icon-btn sm ${refreshing ? 'spinning' : ''}`} title={refreshing ? 'Refreshing…' : 'Refresh'} onClick={load}>
           <Icon name="refresh" size={14} />
         </button>
       </div>
       <div className="col" style={{ padding: '0 10px 8px', gap: 6 }}>
-        <select className="select" value={cwd} onChange={(e) => setCwd(e.target.value)}>
-          {projects.map((p) => (
-            <option key={p.id} value={p.folders[0]}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        {cwd && (
+          <div className="muted mono ellipsis" style={{ fontSize: 11.5 }} title={`${cwd} (follows the selected tab)`}>
+            {cwd.split(/[\\/]/).pop()}
+          </div>
+        )}
         <Seg
           value={filter}
           onChange={setFilter}

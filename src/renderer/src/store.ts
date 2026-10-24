@@ -68,7 +68,7 @@ export interface UiState {
    * Full-screen file editor over the content area; `path` is the file to open. `locked` (opened
    * from Review) covers everything left of the right panel and blocks tab/panel switches until closed.
    */
-  editorFile: false | { path?: string; locked?: boolean }
+  editorFile: false | { path?: string; locked?: boolean; line?: number; at?: number }
   /** Wide diff viewer opened from the Repo manager. */
   repoDiff: false | RepoDiffSource
   /** App-level routines (loaded on demand from ~/.claude-deck/routines). */
@@ -111,13 +111,33 @@ export interface UiState {
   routineEdit: false | { slug?: string; draft?: JobDef }
   /** A routine or job list item to highlight briefly (e.g. after pasting a job card). */
   flash?: { kind: JobSource; slug: string }
-  /** Run dialog for a routine; `cwd` pre-selects the target repo. */
-  routineRunFor: false | { slug?: string; cwd?: string; step?: number }
+  /**
+   * Run dialog for a routine; `cwd` pre-selects the target repo, `context` pre-fills the run's
+   * extra instructions (e.g. from an agent's run_routine).
+   */
+  routineRunFor: false | { slug?: string; cwd?: string; step?: number; context?: string }
+  /** An agent asked the Review pane to show a view and/or file (show_diff, request_review). */
+  reviewFocus?: { sessionId: string; view?: string; path?: string; at: number }
+  /** Notes an agent pinned to lines of its diff (request_review), per session. */
+  agentNotes: Record<string, AgentReview>
   prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }
   fileToOpen?: { path: string; sessionId?: string }
   updateState?: UpdateState
   teamKey?: string
   browserUrl?: string
+}
+
+export interface AgentNote {
+  /** Repo-relative, forward slashes. */
+  path: string
+  line: number
+  text: string
+}
+
+export interface AgentReview {
+  notes: AgentNote[]
+  summary?: string
+  at: number
 }
 
 export const useStore = create<UiState>(() => ({
@@ -161,7 +181,8 @@ export const useStore = create<UiState>(() => ({
   routineEdit: false,
   routineRunFor: false,
   repoDiff: false,
-  editorFile: false
+  editorFile: false,
+  agentNotes: {}
 }))
 
 // While a locked editor is open, switching tabs, right panels or sidebar views is refused.
@@ -243,12 +264,22 @@ export function activeSession(): LiveSession | undefined {
  */
 export function currentProjectRoot(): string | undefined {
   const s = get()
-  const a = activeSession()
-  const owner = a?.kind === 'shell' && a.launch.parentId ? s.sessions[a.launch.parentId] : a
-  if (owner?.kind === 'agent' && (owner.root || owner.cwd)) return owner.root || owner.cwd
+  const fromTab = tabProjectRoot(s)
+  if (fromTab) return fromTab
   if (s.sidebarOpen && s.sidebarView === 'repo' && s.repoRoot) return s.repoRoot
   if (s.sidebarOpen && s.sidebarView === 'jobs' && s.jobsRoot) return s.jobsRoot
-  return a?.root
+  return activeSession()?.root
+}
+
+/**
+ * The repo of the focused tab's chat (a terminal pane counts as its chat's). A pure selector, so
+ * views can follow tab switches with `useStore(tabProjectRoot)`.
+ */
+export function tabProjectRoot(s: UiState): string | undefined {
+  const tab = s.tabs.find((t) => t.id === s.activeTabId)
+  const a = tab ? s.sessions[tab.activePane] : undefined
+  const owner = a?.kind === 'shell' && a.launch.parentId ? s.sessions[a.launch.parentId] : a
+  return owner?.kind === 'agent' ? owner.root || owner.cwd || undefined : undefined
 }
 
 function persistTabs(): void {

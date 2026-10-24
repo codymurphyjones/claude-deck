@@ -62,6 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   shell: '',
   worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true },
+  git: { commitPrefix: '' },
   mesh: {
     enabled: true,
     claimMode: 'ask',

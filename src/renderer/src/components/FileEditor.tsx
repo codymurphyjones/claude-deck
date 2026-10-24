@@ -63,10 +63,10 @@ interface DocMeta {
 export function FileEditor({ locked = false }: { locked?: boolean }) {
   const req = useStore((s) => s.editorFile)
   if (!req || !!req.locked !== locked) return null
-  return <EditorOverlay initialPath={req.path} />
+  return <EditorOverlay initialPath={req.path} initialLine={req.line} requestedAt={req.at} />
 }
 
-function EditorOverlay({ initialPath }: { initialPath?: string }) {
+function EditorOverlay({ initialPath, initialLine, requestedAt }: { initialPath?: string; initialLine?: number; requestedAt?: number }) {
   const dark = useStore((s) => resolveTheme(s.settings, s.systemDark).dark)
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -216,13 +216,15 @@ function EditorOverlay({ initialPath }: { initialPath?: string }) {
     [setDoc]
   )
 
-  // Opened (or re-targeted from the Files panel) with a path.
+  // Opened (or re-targeted from the Files panel, Review or an agent's open_file) with a path, and
+  // maybe a line to show.
   useEffect(() => {
-    if (!initialPath || initialPath === metaRef.current.path) return
+    if (!initialPath) return
     void (async () => {
-      if (await actions.current.confirmDiscard()) await readInto(initialPath)
+      if (initialPath !== metaRef.current.path && !((await actions.current.confirmDiscard()) && (await readInto(initialPath)))) return
+      if (initialLine) jump(initialLine)
     })()
-  }, [initialPath, readInto])
+  }, [initialPath, initialLine, requestedAt, readInto])
 
   // Changes on disk (e.g. Claude editing the open file).
   useEffect(

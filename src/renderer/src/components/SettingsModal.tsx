@@ -20,7 +20,7 @@ const NAV: [string, string, string][] = [
   ['notifications', 'Notifications', 'bell'],
   ['account', 'Account', 'user'],
   ['collaboration', 'Collaboration', 'users'],
-  ['worktrees', 'Worktrees', 'branch'],
+  ['worktrees', 'Git & worktrees', 'branch'],
   ['templates', 'Templates', 'layers'],
   ['environment', 'Environments', 'play'],
   ['personalization', 'Personalization', 'note'],
@@ -528,8 +528,21 @@ function Collaboration({ s, update }: P) {
 function Worktrees({ s, update }: P) {
   const wts = useStore((st) => st.library.worktrees)
   const w = s.worktrees
+  const g = s.git
   return (
     <>
+      <h3>Commits</h3>
+      <Row
+        label="Commit prefix"
+        desc={
+          <>
+            Put in front of every commit message Claude Deck makes, e.g. <code>CJ |</code> gives <code>CJ | Add search</code>. Drafted messages aren't changed; the prefix is added when you commit.
+          </>
+        }
+      >
+        <input className="input mono" style={{ width: 160 }} value={g.commitPrefix} placeholder="none" onChange={(e) => update({ git: { ...g, commitPrefix: e.target.value } })} />
+      </Row>
+      <h3>Worktrees</h3>
       <Row label="Worktree folder" desc="Where managed worktrees are created. Empty = Claude Deck's data folder.">
         <div className="row">
           <input className="input mono" value={w.root} placeholder="default" onChange={(e) => update({ worktrees: { ...w, root: e.target.value } })} />

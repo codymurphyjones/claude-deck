@@ -234,6 +234,8 @@ export interface Settings {
   providers: Record<ProviderId, ProviderSettings>
   shell: string
   worktrees: { root: string; keep: number; autoDelete: boolean; branchPrefix: string; cleanupMerged: boolean; deleteRemoteMerged: boolean }
+  /** `commitPrefix` (e.g. "CJ | ") is put in front of every commit message the app makes. */
+  git: { commitPrefix: string }
   mesh: {
     enabled: boolean
     claimMode: 'ask' | 'deny' | 'off'

@@ -13,6 +13,7 @@ import { WindowManager } from './windows'
 import { initUpdater, stopUpdater } from './updater'
 import { JobService } from './jobs/jobService'
 import { ProcessService } from './processes/processService'
+import { APP_TOOLS, callAppTool } from './appTools'
 import { MergedWorktreeCleanup } from './worktrees/mergedCleanup'
 
 // If Claude Deck was launched from inside a Claude Code session, don't let that
@@ -85,6 +86,8 @@ if (!app.requestSingleInstanceLock()) {
       const s = sessions.get(sid)
       if (!s) return 'Unknown session'
       const { tool, args } = params as { tool: string; args: Record<string, unknown> }
+      // App tools work without a mesh group; the rest coordinate peers.
+      if (APP_TOOLS.has(tool)) return callAppTool({ sessions, processes, jobs }, s, tool, args ?? {})
       return sessions.mesh.callTool(s, tool, args ?? {})
     })
     await control.start()

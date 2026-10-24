@@ -2,22 +2,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { isOpenPr, refNameError, type BranchInfo, type CurrentPr, type RemoteInfo, type RepoStatus, type StashInfo, type TagInfo } from '@shared/repo'
 import type { CommitInfo, DiffFile } from '@shared/types'
 import { api, bridge, errMsg } from '../api'
-import { activeSession, askText, attempt, openSession, set, toast, useStore, type RepoDiffSource } from '../store'
+import { askText, attempt, get, openSession, set, tabProjectRoot, toast, useStore, type RepoDiffSource } from '../store'
 import { Icon } from './Icon'
 import { useRoots } from './Jobs'
 import { DiffList } from './ReviewPane'
-import { Modal, openMenu, openMenuAt, shortPath, Switch, useExclusive } from './ui'
+import { cacheGet, cacheSet } from '../viewCache'
+import { Modal, openMenu, openMenuAt, shortPath, useExclusive } from './ui'
 
 // Repo manager: stage and commit, branches, history, stashes, tags, remotes and the
 // current branch's pull request, for any project folder (not tied to a chat).
-
-const STATUS_CHAR: Record<DiffFile['status'], [string, string]> = {
-  modified: ['M', 'var(--warning)'],
-  added: ['A', 'var(--success)'],
-  deleted: ['D', 'var(--danger)'],
-  renamed: ['R', 'var(--accent)'],
-  untracked: ['U', 'var(--success)']
-}
 
 const filePath = (f: DiffFile): string => f.newPath || f.oldPath
 const baseName = (p: string): string => p.split(/[\\/]/).pop() ?? p
@@ -55,7 +48,17 @@ type DiffRequest = RepoDiffSource extends infer T ? (T extends unknown ? Omit<T,
 const EMPTY: RepoData = { branches: [], commits: [], stashes: [], tags: [], remotes: [] }
 
 function useRepo(root?: string) {
-  const [data, setData] = useState<RepoData>(EMPTY)
+  // The last result for this repo shows at once (e.g. after switching tabs) while it reloads.
+  const [data, setDataRaw] = useState<RepoData>(() => (root && cacheGet<RepoData>(`repo:${root}`)) || EMPTY)
+  const setData = useCallback(
+    (next: RepoData | ((d: RepoData) => RepoData)) =>
+      setDataRaw((d) => {
+        const v = typeof next === 'function' ? next(d) : next
+        if (root && v !== EMPTY) cacheSet(`repo:${root}`, v)
+        return v
+      }),
+    [root]
+  )
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [limit, setLimit] = useState(40)
@@ -91,10 +94,10 @@ function useRepo(root?: string) {
     } finally {
       if (n === req.current) setLoading(false)
     }
-  }, [root, limit])
+  }, [root, limit, setData])
 
   useEffect(() => {
-    setData(EMPTY)
+    setDataRaw((root && cacheGet<RepoData>(`repo:${root}`)) || EMPTY)
     void load()
   }, [load])
 
@@ -138,19 +141,30 @@ function Section({ title, count, open, onToggle, actions, children }: { title: s
 }
 
 // ------------------------------------------------------------------ sidebar view
+/**
+ * The repository the view shows: the focused tab's project, so switching tabs switches repos.
+ * An explicit pick (a project's "Manage repository") holds until the next tab switch.
+ */
+export function useFollowedRoot(roots: string[]): string | undefined {
+  const tabRoot = useStore(tabProjectRoot)
+  const picked = useStore((s) => s.repoRoot)
+  const prevTab = useRef(tabRoot)
+  useEffect(() => {
+    if (prevTab.current === tabRoot) return
+    prevTab.current = tabRoot
+    if (get().repoRoot) set({ repoRoot: undefined })
+  }, [tabRoot])
+  return picked ?? tabRoot ?? roots[0]
+}
+
 export function RepoView() {
   const roots = useRoots()
   const home = useStore((s) => s.homedir)
-  const stored = useStore((s) => s.repoRoot)
-  const root = stored && roots.includes(stored) ? stored : (activeSession()?.root ?? roots[0])
+  const root = useFollowedRoot(roots)
   const { data, error, loading, load, more } = useRepo(root)
-  const [open, setOpen] = useState<Record<string, boolean>>({ conflicts: true, staged: true, changes: true, branches: true, commits: true })
+  const [open, setOpen] = useState<Record<string, boolean>>({ conflicts: true, branches: true, commits: true })
   const [busy, setBusy] = useState('')
-  const [staging, exclusive] = useExclusive()
-  const [msg, setMsg] = useState('')
-  const [amend, setAmend] = useState(false)
   const [branchFilter, setBranchFilter] = useState('')
-  const [showRemote, setShowRemote] = useState(false)
   const toggle = (k: string) => () => setOpen((o) => ({ ...o, [k]: !o[k] }))
 
   const st = data.status
@@ -181,22 +195,13 @@ export function RepoView() {
   const staged = st?.staged ?? []
   const unstaged = st?.unstaged ?? []
   const local = data.branches.filter((b) => !b.remote)
-  const remote = data.branches.filter((b) => b.remote)
-  const match = (b: BranchInfo): boolean => !branchFilter || b.name.toLowerCase().includes(branchFilter.toLowerCase())
+  // Remote branches without a local branch tracking them (a tracked one is shown by its local row, with ↑↓).
+  const tracked = new Set(local.map((b) => b.upstream).filter(Boolean))
+  const remote = data.branches.filter((b) => b.remote && !tracked.has(b.name))
+  const match = (b: BranchInfo): boolean => !branchFilter || b.name.toLowerCase().includes(branchFilter.trim().toLowerCase())
+  const shownLocal = local.filter(match)
+  const shownRemote = remote.filter(match)
   const origin = data.remotes.find((r) => r.name === 'origin') ?? data.remotes[0]
-
-  const canCommit = amend ? staged.length > 0 || !!msg.trim() : staged.length > 0 && !!msg.trim()
-  const commit = async (push: boolean): Promise<void> => {
-    // Amend with an empty message keeps the last commit's message (no -m / --no-edit).
-    if (!amend && !msg.trim()) return toast('Write a commit message first', 'error')
-    // Only what's staged is committed; nothing is staged automatically. (Amend may just reword.)
-    if (!staged.length && !(amend && msg.trim())) return toast('Stage the changes to commit first', 'error')
-    const ok = await run('commit', () => api.git.commit(root, msg, { amend }), amend ? 'Commit amended' : 'Committed')
-    if (ok === undefined) return
-    setMsg('')
-    setAmend(false)
-    if (push) await run('push', () => api.repo.push(root, { force: amend }), 'Pushed')
-  }
 
   const createPr = async (): Promise<void> => {
     if (gi?.branch && gi.branch === gi.defaultBranch) {
@@ -326,63 +331,10 @@ export function RepoView() {
     await run('stash', () => api.repo.stashAction(root, s.index, action), action === 'drop' ? 'Stash dropped' : 'Stash applied')
   }
 
-  // One stage/unstage/discard at a time, held until the refresh shows the result.
-  const fileAct = (f: DiffFile, action: 'stage' | 'unstage' | 'revert'): Promise<void> =>
-    exclusive(async () => {
-      if (action === 'revert' && !(await confirm(`Discard changes to ${filePath(f)}?`, f.status === 'untracked' ? 'The file is deleted.' : 'This cannot be undone.', 'Discard'))) return
-      await run('file', () => api.git.applyFile(root, f, action))
-    })
-  const allAct = (action: 'stage' | 'unstage' | 'revert'): Promise<void> =>
-    exclusive(async () => {
-      if (action === 'revert' && !(await confirm('Discard ALL changes?', 'Tracked changes are reverted and untracked files deleted. This cannot be undone.', 'Discard all'))) return
-      await run('all', () => api.git.applyAll(root, action))
-    })
-
-  const fileRow = (f: DiffFile, view: 'staged' | 'unstaged') => {
-    const p = filePath(f)
-    const [ch, color] = STATUS_CHAR[f.status]
-    return (
-      <div
-        key={view + p}
-        className="list-item repo-file"
-        title={p}
-        onClick={() => diff({ kind: 'working', view, path: p, title: p })}
-        onContextMenu={(e) =>
-          openMenu(e, [
-            { label: 'View diff', icon: 'eye', onClick: () => diff({ kind: 'working', view, path: p, title: p }) },
-            { label: 'Open in editor', icon: 'code', onClick: () => api.shell.openInEditor(`${root}/${p}`) },
-            view === 'unstaged' ? { label: 'Stage', icon: 'plus', onClick: () => void fileAct(f, 'stage') } : { label: 'Unstage', icon: 'minus', onClick: () => void fileAct(f, 'unstage') },
-            ...(view === 'unstaged' ? [{ separator: true }, { label: 'Discard changes', icon: 'undo', danger: true, onClick: () => void fileAct(f, 'revert') }] : [])
-          ])
-        }
-      >
-        <b className="repo-status" style={{ color }}>
-          {ch}
-        </b>
-        <span className="ellipsis grow">
-          {baseName(p)} <span className="muted">{dirName(p)}</span>
-        </span>
-        <span className="actions">
-          <button className="icon-btn sm" title="Open in editor" onClick={(e) => (e.stopPropagation(), void api.shell.openInEditor(`${root}/${p}`))}>
-            <Icon name="code" size={12} />
-          </button>
-          {view === 'unstaged' && (
-            <button className="icon-btn sm" title="Discard changes" disabled={staging} onClick={(e) => (e.stopPropagation(), void fileAct(f, 'revert'))}>
-              <Icon name="undo" size={12} />
-            </button>
-          )}
-          <button className="icon-btn sm" title={view === 'unstaged' ? 'Stage' : 'Unstage'} disabled={staging} onClick={(e) => (e.stopPropagation(), void fileAct(f, view === 'unstaged' ? 'stage' : 'unstage'))}>
-            <Icon name={view === 'unstaged' ? 'plus' : 'minus'} size={12} />
-          </button>
-        </span>
-      </div>
-    )
-  }
-
   const branchRow = (b: BranchInfo) => (
     <div
       key={b.name}
-      className={`list-item ${b.current ? 'active' : ''}`}
+      className={`list-item ${b.current ? 'active' : ''} ${b.remote ? 'repo-remote-branch' : ''}`}
       style={{ alignItems: 'flex-start' }}
       onDoubleClick={() => !b.current && run('checkout', () => api.repo.checkout(root, b.name, b.remote), `Switched to ${b.name}`)}
       onClick={(e) => branchMenu(e, b)}
@@ -412,7 +364,7 @@ export function RepoView() {
         <button className="icon-btn sm" title="Fetch all remotes" disabled={!!busy || !gi?.hasRemote} onClick={() => run('fetch', () => api.repo.fetch(root), 'Fetched')}>
           <Icon name="download" size={14} />
         </button>
-        <button className="icon-btn sm" title="Refresh" onClick={() => void load()}>
+        <button className={`icon-btn sm ${loading ? 'spinning' : ''}`} title={loading ? 'Refreshing…' : 'Refresh'} onClick={() => void load()}>
           <Icon name="refresh" size={14} />
         </button>
         <button
@@ -446,14 +398,10 @@ export function RepoView() {
         </button>
       </div>
       <div className="sidebar-body">
-        {roots.length > 1 && (
-          <select className="select" style={{ width: '100%', margin: '4px 0 6px' }} value={root} onChange={(e) => set({ repoRoot: e.target.value })}>
-            {roots.map((r) => (
-              <option key={r} value={r}>
-                {shortPath(r, home)}
-              </option>
-            ))}
-          </select>
+        {root && (
+          <div className="muted mono ellipsis" style={{ fontSize: 11.5, margin: '2px 0 6px' }} title={`${root} (follows the selected tab)`}>
+            {shortPath(root, home)}
+          </div>
         )}
         {error && <div className="empty-note" style={{ color: 'var(--danger)' }}>{error}</div>}
         {gi && !gi.isRepo && (
@@ -554,55 +502,6 @@ export function RepoView() {
               )}
             </div>
 
-            <div className="col repo-commit">
-              <textarea
-                className="textarea"
-                rows={2}
-                value={msg}
-                placeholder={staged.length ? `Message (commit ${staged.length} staged)` : unstaged.length ? `Message (commit all ${unstaged.length})` : 'Message'}
-                onChange={(e) => setMsg(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void commit(false)}
-              />
-              <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
-                <button className="btn sm" title="Draft a message with Claude" disabled={!!busy || (!staged.length && !unstaged.length)} onClick={async () => {
-                  setBusy('gen')
-                  const m = await attempt(() => api.git.generateCommitMessage(root))
-                  setBusy('')
-                  if (m) setMsg(m)
-                }}>
-                  <Icon name="wand" size={12} /> {busy === 'gen' ? 'Drafting…' : 'Draft'}
-                </button>
-                <label className="row" style={{ gap: 6, fontSize: 12 }} title="Replace the last commit instead of making a new one">
-                  <Switch
-                    on={amend}
-                    onChange={async (v) => {
-                      setAmend(v)
-                      if (v && !msg.trim()) setMsg((await attempt(() => api.repo.lastMessage(root))) ?? '')
-                    }}
-                  />
-                  Amend
-                </label>
-                <span className="grow" />
-                <button className="btn sm primary" disabled={!!busy || !canCommit} title={canCommit ? undefined : amend ? 'Stage changes or enter a new message' : !staged.length ? 'Stage changes to commit them' : 'Write a commit message'} onClick={() => void commit(false)}>
-                  {busy === 'commit' ? 'Committing…' : amend ? 'Amend' : 'Commit'}
-                </button>
-                <button
-                  className="icon-btn sm"
-                  title="More commit options"
-                  onClick={(e) =>
-                    openMenuAt(e.currentTarget, [
-                      { label: amend ? 'Amend & force push' : 'Commit & push', icon: 'upload', disabled: !gi.hasRemote || !canCommit, onClick: () => void commit(true) },
-                      { label: 'Stage all', icon: 'plus', onClick: () => void allAct('stage') },
-                      { label: 'Unstage all', icon: 'minus', onClick: () => void allAct('unstage') },
-                      { label: 'Undo last commit (keep changes)', icon: 'undo', disabled: !data.commits[1], onClick: () => data.commits[1] && void reset(data.commits[1], 'reset-soft') }
-                    ])
-                  }
-                >
-                  <Icon name="chevron-down" size={12} />
-                </button>
-              </div>
-            </div>
-
             {st!.conflicted.length > 0 && (
               <Section title="Conflicts" count={st!.conflicted.length} open={open.conflicts} onToggle={toggle('conflicts')}>
                 {st!.conflicted.map((p) => (
@@ -622,58 +521,8 @@ export function RepoView() {
             )}
 
             <Section
-              title="Staged"
-              count={staged.length}
-              open={open.staged}
-              onToggle={toggle('staged')}
-              actions={
-                staged.length > 0 && (
-                  <>
-                    <button className="icon-btn sm" title="View all staged changes" onClick={() => diff({ kind: 'working', view: 'staged', title: 'Staged changes' })}>
-                      <Icon name="eye" size={12} />
-                    </button>
-                    <button className="icon-btn sm" title="Unstage all" disabled={staging} onClick={() => void allAct('unstage')}>
-                      <Icon name="minus" size={12} />
-                    </button>
-                  </>
-                )
-              }
-            >
-              {!staged.length && <div className="empty-note repo-empty">Stage files to commit only part of your changes.</div>}
-              {staged.map((f) => fileRow(f, 'staged'))}
-            </Section>
-
-            <Section
-              title="Changes"
-              count={unstaged.length}
-              open={open.changes}
-              onToggle={toggle('changes')}
-              actions={
-                unstaged.length > 0 && (
-                  <>
-                    <button className="icon-btn sm" title="View all changes" onClick={() => diff({ kind: 'working', view: 'unstaged', title: 'Changes' })}>
-                      <Icon name="eye" size={12} />
-                    </button>
-                    <button className="icon-btn sm" title="Stash changes" onClick={() => void stash()}>
-                      <Icon name="archive" size={12} />
-                    </button>
-                    <button className="icon-btn sm" title="Discard all" disabled={staging} onClick={() => void allAct('revert')}>
-                      <Icon name="undo" size={12} />
-                    </button>
-                    <button className="icon-btn sm" title="Stage all" disabled={staging} onClick={() => void allAct('stage')}>
-                      <Icon name="plus" size={12} />
-                    </button>
-                  </>
-                )
-              }
-            >
-              {!unstaged.length && <div className="empty-note repo-empty">Working tree clean.</div>}
-              {unstaged.map((f) => fileRow(f, 'unstaged'))}
-            </Section>
-
-            <Section
               title="Branches"
-              count={local.length}
+              count={branchFilter.trim() ? shownLocal.length + shownRemote.length : local.length + remote.length}
               open={open.branches}
               onToggle={toggle('branches')}
               actions={
@@ -682,14 +531,17 @@ export function RepoView() {
                 </button>
               }
             >
-              {data.branches.length > 8 && <input className="input repo-filter" value={branchFilter} placeholder="Filter branches" onChange={(e) => setBranchFilter(e.target.value)} />}
-              {local.filter(match).map(branchRow)}
-              {remote.length > 0 && (
-                <div className="list-item muted" style={{ fontSize: 12 }} onClick={() => setShowRemote((v) => !v)}>
-                  <Icon name={showRemote ? 'chevron-down' : 'chevron-right'} size={12} /> Remote branches ({remote.length})
-                </div>
-              )}
-              {(showRemote || (branchFilter && remote.some(match))) && remote.filter(match).map(branchRow)}
+              <input
+                className="input repo-filter"
+                value={branchFilter}
+                placeholder={`Search ${local.length + remote.length} branches…`}
+                onChange={(e) => setBranchFilter(e.target.value)}
+                onKeyDown={(e) => e.key === 'Escape' && setBranchFilter('')}
+              />
+              {shownLocal.map(branchRow)}
+              {/* Branches that only exist on the remote, in gray. */}
+              {shownRemote.map(branchRow)}
+              {branchFilter.trim() && !shownLocal.length && !shownRemote.length && <div className="empty-note repo-empty">No branches match “{branchFilter.trim()}”.</div>}
             </Section>
 
             <Section title="Commits" open={open.commits} onToggle={toggle('commits')}>

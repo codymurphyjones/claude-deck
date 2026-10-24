@@ -14,7 +14,7 @@ import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
 import * as gh from './github/ghService'
 import * as repo from './git/repoService'
-import { cleanCommitMessage, type CommitAction, type StashAction } from '@shared/repo'
+import { applyCommitPrefix, cleanCommitMessage, type CommitAction, type StashAction } from '@shared/repo'
 import { archiveProjectChats, emitLibrary, removeChat, removeProject, updateChat, updateProject } from './library'
 import type { LoadResult } from './loading/progressiveLoader'
 import { runtime } from './runtime'
@@ -22,7 +22,9 @@ import { adapter } from './agents/registry'
 import type { ProviderId } from '@shared/agent'
 import type { SessionService } from './sessions/sessionService'
 import { insights, listTranscripts, searchTranscripts } from './transcripts/transcriptService'
-import { run, shortId, which } from './util'
+import { resolveAgentReply } from './appTools'
+import { openInExternalEditor } from './externalEditor'
+import { run, shortId } from './util'
 import * as wt from './worktrees/worktreeService'
 import type { WindowManager } from './windows'
 import * as updater from './updater'
@@ -244,14 +246,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     },
     'shell.openPath': (_e, p: string) => shell.openPath(p),
     'shell.showItem': (_e, p: string) => shell.showItemInFolder(p),
-    'shell.openInEditor': async (_e, p: string, line?: number) => {
-      const code = which('code') ?? which('cursor')
-      if (code) {
-        await run(code, ['-g', line ? `${p}:${line}` : p], { timeout: 15_000 })
-        return
-      }
-      await shell.openPath(p)
-    },
+    'shell.openInEditor': (_e, p: string, line?: number) => openInExternalEditor(p, line),
 
     // ---- auth ----
     'auth.refresh': (_e, p?: ProviderId) => (p ? auth.refresh(p) : auth.refreshAll()),
@@ -295,7 +290,8 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'git.applyHunk': (_e, cwd: string, file: DiffFile, idx: number, action: 'stage' | 'unstage' | 'revert') => git.applyHunk(cwd, file, idx, action),
     'git.applyFile': (_e, cwd: string, file: DiffFile, action: 'stage' | 'unstage' | 'revert') => git.applyFile(cwd, file, action),
     'git.applyAll': (_e, cwd: string, action: 'stage' | 'unstage' | 'revert') => git.applyAll(cwd, action),
-    'git.commit': (_e, cwd: string, msg: string, opts: { all?: boolean; amend?: boolean }) => git.commit(cwd, msg, opts),
+    // The commit prefix is added here, at commit time, so drafted messages stay as drafted.
+    'git.commit': (_e, cwd: string, msg: string, opts: { all?: boolean; amend?: boolean }) => git.commit(cwd, applyCommitPrefix(msg, settings().git.commitPrefix), opts),
     'git.push': (_e, cwd: string) => git.push(cwd),
     'git.pull': (_e, cwd: string) => git.pull(cwd),
     'git.createBranch': (_e, cwd: string, name: string) => git.createBranch(cwd, name),
@@ -323,7 +319,7 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       emitLibrary()
     },
     'worktree.restore': (_e, id: string) => wt.restoreWorktree(id),
-    'worktree.createBranch': (_e, id: string, name: string) => wt.createBranchHere(id, name),
+    'worktree.createBranch': (_e, id: string, name: string, exact?: boolean) => wt.createBranchHere(id, name, exact),
     'worktree.createPermanent': (_e, cwd: string, name?: string) => wt.createWorktree({ repoCwd: cwd, permanent: true, name }),
     'worktree.forget': (_e, id: string) => {
       updateState((s) => (s.worktrees = s.worktrees.filter((w) => w.id !== id)))
@@ -373,6 +369,8 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'processes.close': (_e, id: string) => processes.close(id),
 
     // ---- mesh ----
+    // The UI's answer to an agent app tool (see appTools.ts).
+    'agent.reply': (_e, reqId: string, result: unknown) => resolveAgentReply(reqId, result),
     'mesh.groups': () => sessions.mesh.allGroups(),
     'mesh.send': (_e, key: string, to: string, text: string, kind?: MeshMessageKind) => sessions.mesh.userSend(key, to, text, kind),
     'mesh.board': (_e, key: string, op: 'add' | 'update' | 'delete', item: Partial<BoardItem>) => sessions.mesh.userBoard(key, op, item),

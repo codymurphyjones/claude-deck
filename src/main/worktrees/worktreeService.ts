@@ -71,7 +71,9 @@ export async function createWorktree(opts: {
   const dir = opts.reuse?.path ?? path.join(worktreeRoot(), `${path.basename(repoRoot)}-${opts.name ? opts.name.replace(/[^\w.-]+/g, '-') + '-' : ''}${id}`)
   const carried = opts.carryChanges ? await captureChanges(repoRoot) : undefined
   const base = opts.baseRef || 'HEAD'
-  await mustGit(repoRoot, ['worktree', 'add', '--detach', dir, base])
+  // Re-creating a worktree that has a branch: check that branch out (pulled) rather than detaching.
+  const onBranch = opts.reuse?.branch && !carried ? await addOnBranch({ ...opts.reuse, path: dir, snapshot: undefined }) : false
+  if (!onBranch) await mustGit(repoRoot, ['worktree', 'add', '--detach', dir, base])
   if (carried) {
     const r = await git(dir, ['stash', 'apply', carried])
     if (r.code === 0) await git(dir, ['reset', '-q'])
@@ -85,6 +87,7 @@ export async function createWorktree(opts: {
     projectId: findProjectForFolder(repoRoot)?.id,
     baseRef: base === 'HEAD' ? (await headSha(repoRoot)) ?? 'HEAD' : base,
     permanent: !!opts.permanent,
+    branch: onBranch ? opts.reuse?.branch : undefined,
     createdAt: opts.reuse?.createdAt ?? Date.now(),
     lastUsed: Date.now(),
     chatId: opts.reuse?.chatId
@@ -129,23 +132,54 @@ export async function deleteWorktree(id: string): Promise<void> {
   touchWorktree(id, { deleted: true, snapshot: snap, snapshotHead: head })
 }
 
+const refExists = async (cwd: string, ref: string): Promise<boolean> => (await git(cwd, ['rev-parse', '--verify', '--quiet', ref])).code === 0
+
+/**
+ * Re-create a worktree on its branch, brought up to date with the remote ("pull it down"), instead
+ * of a detached snapshot. Returns false (nothing changed) if that isn't possible, e.g. the branch is
+ * checked out in another worktree; the caller then falls back to the detached snapshot.
+ */
+async function addOnBranch(w: WorktreeRecord): Promise<boolean> {
+  const b = w.branch
+  if (!b) return false
+  await git(w.repoRoot, ['fetch', '--quiet', 'origin', b], undefined, 60_000)
+  const remote = (await refExists(w.repoRoot, `refs/remotes/origin/${b}`)) ? `origin/${b}` : undefined
+  const local = await refExists(w.repoRoot, `refs/heads/${b}`)
+  if (!local && !remote) return false
+  const r = local ? await git(w.repoRoot, ['worktree', 'add', w.path, b]) : await git(w.repoRoot, ['worktree', 'add', '--track', '-b', b, w.path, remote!])
+  if (r.code !== 0) return false
+  // Take the remote's newer commits; a diverged branch is left alone for the user to reconcile.
+  if (local && remote && (await git(w.path, ['merge', '--ff-only', '--quiet', remote])).code !== 0) toast(`${b} has diverged from ${remote}; pull or rebase it in the worktree.`, 'info')
+  // Uncommitted work captured when the worktree was cleaned up.
+  if (w.snapshot && w.snapshot !== w.snapshotHead) {
+    const a = await git(w.path, ['stash', 'apply', w.snapshot])
+    if (a.code === 0) await git(w.path, ['reset', '-q'])
+    else toast(`Restored ${b}, but re-applying uncommitted changes failed (they're in refs/claude-deck/snapshots/${w.id}): ${a.stderr.trim()}`, 'error')
+  }
+  return true
+}
+
 export async function restoreWorktree(id: string): Promise<WorktreeRecord> {
   const w = getWorktree(id)
   if (!w) throw new Error('Unknown worktree')
   if (!w.deleted) return w
-  const target = w.snapshot || w.baseRef
-  await mustGit(w.repoRoot, ['worktree', 'add', '--detach', w.path, target])
-  if (w.snapshot && w.snapshotHead && w.snapshot !== w.snapshotHead) await git(w.path, ['reset', '-q', w.snapshotHead])
+  // Once the worktree has a branch, restore that branch rather than the snapshot.
+  if (!(await addOnBranch(w))) {
+    const target = w.snapshot || w.baseRef
+    await mustGit(w.repoRoot, ['worktree', 'add', '--detach', w.path, target])
+    if (w.snapshot && w.snapshotHead && w.snapshot !== w.snapshotHead) await git(w.path, ['reset', '-q', w.snapshotHead])
+  }
   await copyIncluded(w.repoRoot, w.path)
   touchWorktree(id, { deleted: false })
   return getWorktree(id)!
 }
 
-export async function createBranchHere(id: string, name: string): Promise<string> {
+/** Put the worktree on a new branch at its current commit. `exact` uses the name as given (no prefix). */
+export async function createBranchHere(id: string, name: string, exact = false): Promise<string> {
   const w = getWorktree(id)
   if (!w) throw new Error('Unknown worktree')
   const prefix = settings().worktrees.branchPrefix
-  const branch = name.startsWith(prefix) ? name : prefix + name
+  const branch = exact || name.startsWith(prefix) ? name : prefix + name
   await mustGit(w.path, ['switch', '-c', branch])
   touchWorktree(id, { branch })
   return branch

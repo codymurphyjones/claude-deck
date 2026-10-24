@@ -104,6 +104,11 @@ export class ProcessService {
     if (emit) this.emit()
   }
 
+  /** The run's terminal output as plain text lines (ANSI stripped), the last `lines` of them. */
+  output(id: string, lines = 80): string {
+    return plainLines(this.pty.buffer(id)).slice(-lines).join('\n')
+  }
+
   async stop(id: string): Promise<void> {
     const p = this.procs.get(id)
     if (!p || p.status !== 'running') return

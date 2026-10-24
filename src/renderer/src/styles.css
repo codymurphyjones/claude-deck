@@ -302,6 +302,15 @@ label.check {
     transform: scale(0.82);
   }
 }
+/* A refresh button whose view is reloading in the background. */
+.icon-btn.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -1102,6 +1111,51 @@ label.check {
   font-family: var(--ui-font);
   white-space: normal;
 }
+/* Notes Claude pinned to lines (request_review): set apart from the user's own comments. */
+.inline-comment.agent-note {
+  border-style: dashed;
+  background: var(--accent-soft);
+}
+.agent-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+}
+.agent-review-summary {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.agent-review-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 160px;
+  overflow: auto;
+}
+.agent-review-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor);
+}
+.agent-review-item:hover {
+  background: var(--panel);
+}
+.agent-review-item .mono {
+  flex: none;
+  max-width: 45%;
+}
 
 /* team */
 .peer {
@@ -1758,13 +1812,6 @@ html.buddy-page body {
   flex-direction: column;
   gap: 6px;
 }
-.repo-commit {
-  gap: 6px;
-  padding: 2px 2px 4px;
-}
-.repo-commit .textarea {
-  min-height: 52px;
-}
 .list-item.repo-file {
   min-height: 26px;
   padding: 3px 8px;
@@ -1785,6 +1832,13 @@ html.buddy-page body {
   width: 100%;
   height: 26px;
   margin: 2px 0 4px;
+}
+/* Branches that only exist on the remote: grayed out until checked out locally. */
+.list-item.repo-remote-branch {
+  color: var(--muted);
+}
+.list-item.repo-remote-branch .sub {
+  opacity: 0.8;
 }
 .repo-diff-body {
   flex: 1;

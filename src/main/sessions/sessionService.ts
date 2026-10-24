@@ -10,6 +10,7 @@ import { broadcast, pushTimeline, settings, state, toast, updateState } from '..
 import { loadEnvironment, setupCommand } from '../env/environmentService'
 import { currentBranch, snapshot, toplevel } from '../git/gitService'
 import { emitLibrary, ensureProject, findProjectForFolder, getChat, updateChat, upsertChat } from '../library'
+import { openInExternalEditor } from '../externalEditor'
 import { MeshService } from '../mesh/meshService'
 import { dismissNotification, focusSession, notify, updateSleepBlocker } from '../notify/notifyService'
 import type { PtyService } from '../pty/ptyService'
@@ -495,6 +496,32 @@ export class SessionService extends EventEmitter {
 
   broadcastPrompt(ids: string[], text: string): void {
     for (const id of ids) this.sendPrompt(id, text, 'queue')
+  }
+
+  /**
+   * The `open_file` agent tool: show a file to the user in Claude Deck's editor (or their external
+   * editor). Relative paths resolve against the session's folder. The returned text goes back to the agent.
+   */
+  async openFileFor(s: SessionInfo, a: Record<string, unknown>): Promise<string> {
+    const raw = typeof a.path === 'string' ? a.path.trim() : ''
+    if (!raw) return 'Pass the file to open as "path".'
+    const p = path.resolve(s.cwd, raw)
+    let st: fs.Stats
+    try {
+      st = fs.statSync(p)
+    } catch {
+      return `No file at ${p}. Search for it (Glob/Grep) and try again with the exact path.`
+    }
+    if (!st.isFile()) return `${p} is a folder, not a file.`
+    const line = Number(a.line) > 0 ? Math.floor(Number(a.line)) : undefined
+    if (a.where === 'external') {
+      await openInExternalEditor(p, line)
+      return `Opened ${p}${line ? ` at line ${line}` : ''} in the user's external editor.`
+    }
+    const wc = webContents.fromId(s.hostWindow)
+    if (wc && !wc.isDestroyed()) wc.send('app:openFile', { path: p, line })
+    else broadcast('app:openFile', { path: p, line })
+    return `Opened ${p}${line ? ` at line ${line}` : ''} in Claude Deck's editor for the user.`
   }
 
   async readTerminal(id: string, lines: number): Promise<string> {

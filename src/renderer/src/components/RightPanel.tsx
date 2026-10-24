@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type LiveSession } from '../api'
 import { activeSession, askText, focusSessionTab, set, toast, useStore, type RightPanel as Panel } from '../store'
+import { registerBrowser } from '../browserControl'
 import { FilesPanel } from './FilesPanel'
 import { Icon } from './Icon'
 import { ReviewPane } from './ReviewPane'
@@ -106,11 +107,60 @@ function BrowserPane({ session }: { session?: LiveSession }) {
       wv.removeEventListener('did-navigate-in-page', onNav)
     }
   }, [])
-  const go = (u: string): void => {
+  const go = (u: string): string => {
     const full = /^[a-z]+:\/\//i.test(u) ? u : /^localhost|^\d+\.\d+|^\[/.test(u) ? `http://${u}` : `https://${u}`
     setUrl(full)
     setInput(full)
+    return full
   }
+
+  // Console output since the last navigation, and a handle for the agent's open_browser tool.
+  const consoleLog = useRef<string[]>([])
+  useEffect(() => {
+    const wv = ref.current
+    if (!wv) return
+    const LEVEL = ['log', 'warning', 'error', 'debug']
+    const onConsole = (e: Event): void => {
+      const c = e as Event & { level: number | string; message: string; line?: number; sourceId?: string }
+      const level = typeof c.level === 'number' ? (LEVEL[c.level] ?? 'log') : c.level
+      const where = c.sourceId ? ` (${c.sourceId.split('/').pop()}${c.line ? `:${c.line}` : ''})` : ''
+      consoleLog.current = [...consoleLog.current, `[${level}] ${c.message}${where}`].slice(-200)
+    }
+    const onStart = (): void => {
+      consoleLog.current = []
+    }
+    wv.addEventListener('console-message', onConsole)
+    wv.addEventListener('did-start-navigation', onStart)
+    const off = registerBrowser({
+      url: () => wv.getURL(),
+      navigate: (u) =>
+        new Promise<void>((resolve) => {
+          const done = (): void => {
+            clearTimeout(t)
+            wv.removeEventListener('did-stop-loading', done)
+            wv.removeEventListener('did-fail-load', done)
+            resolve()
+          }
+          const t = setTimeout(done, 20_000)
+          wv.addEventListener('did-stop-loading', done)
+          wv.addEventListener('did-fail-load', done)
+          const full = go(u)
+          // Same URL: setting src again wouldn't reload.
+          if (full === wv.getURL()) wv.reload()
+        }),
+      text: async () => String(await wv.executeJavaScript(`document.title + '\\n\\n' + (document.body ? document.body.innerText : '')`).catch((e) => `Could not read the page: ${e}`)),
+      console: () => consoleLog.current,
+      screenshot: async () => {
+        const r = wv.getBoundingClientRect()
+        return api.window.capturePageRegion(wv.getWebContentsId(), { x: 0, y: 0, width: Math.round(r.width), height: Math.round(r.height) })
+      }
+    })
+    return () => {
+      off()
+      wv.removeEventListener('console-message', onConsole)
+      wv.removeEventListener('did-start-navigation', onStart)
+    }
+  }, [])
   const comment = async (): Promise<void> => {
     const wv = ref.current
     if (!wv || !session) return toast('Open a Claude session to send comments to', 'error')

@@ -1,15 +1,16 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { numberHunkLines } from '@shared/diff'
-import { isOpenPr, type CurrentPr } from '@shared/repo'
+import { isOpenPr, refNameError, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
-import { askText, attempt, set, toast, useStore } from '../store'
+import { askText, attempt, set, toast, useStore, type AgentNote } from '../store'
 import { Icon } from './Icon'
 import { Seg, useExclusive } from './ui'
 import { useFind } from './FindBar'
 import { loadProgressive, type ProgressiveLoad } from '../progressive'
 import { highlightDiffLines, langForFile } from '../highlight'
 import { LazyCtx, scrollParent, useLazyObserver, useLazyShown } from '../lazyMount'
+import { cacheGet, cacheSet } from '../viewCache'
 
 /** Files with more diff lines than this are shown without highlighting. */
 const HIGHLIGHT_MAX_LINES = 6000
@@ -42,9 +43,12 @@ export function DiffList({
   onToggleViewed,
   root,
   busy,
-  onEdit
+  onEdit,
+  agentNotes
 }: {
   files: DiffFile[]
+  /** Notes Claude pinned to lines (request_review), shown under those lines. */
+  agentNotes?: AgentNote[]
   readOnly?: boolean
   /** An action is running: action buttons are disabled. */
   busy?: boolean
@@ -81,7 +85,7 @@ export function DiffList({
           const isCollapsed = collapsed[path] ?? isViewed ?? false
           const [ch, color] = STATUS_CHAR[f.status]
           return (
-            <div key={path} className="diff-file">
+            <div key={path} className="diff-file" data-diff-path={path}>
               <div className="diff-file-head" onClick={() => setCollapsed((c) => ({ ...c, [path]: !isCollapsed }))}>
                 <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={13} style={{ color: 'var(--muted)' }} />
                 <b style={{ color, width: 12, fontFamily: 'var(--code-font)', fontSize: 12 }}>{ch}</b>
@@ -109,6 +113,18 @@ export function DiffList({
                     }}
                   >
                     <Icon name="edit" size={13} />
+                  </button>
+                )}
+                {root && f.status !== 'deleted' && (
+                  <button
+                    className="icon-btn sm"
+                    title="Open in editor"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void api.shell.openInEditor(`${root}/${path}`)
+                    }}
+                  >
+                    <Icon name="code" size={13} />
                   </button>
                 )}
                 {onToggleViewed && (
@@ -150,6 +166,7 @@ export function DiffList({
                   onComment={onComment}
                   draft={draft}
                   setDraft={setDraft}
+                  agentNotes={agentNotes}
                 />
               )}
             </div>
@@ -176,6 +193,7 @@ type FileBodyProps = {
   onComment?: (c: Comment) => void
   draft: Draft | null
   setDraft: (d: Draft | null) => void
+  agentNotes?: AgentNote[]
 }
 
 /** A file's diff, as a placeholder of about its height until it comes near the visible area. */
@@ -188,7 +206,7 @@ function LazyFileBody(props: FileBodyProps & { eager: boolean }) {
   return <div ref={ph} style={{ height }} />
 }
 
-function FileBody({ f, path, view, readOnly, busy, onAction, comments, onComment, draft, setDraft }: FileBodyProps) {
+function FileBody({ f, path, view, readOnly, busy, onAction, comments, onComment, draft, setDraft, agentNotes }: FileBodyProps) {
   // Per hunk: highlighted HTML for each line's content (without its +/- prefix).
   const html = useMemo(() => {
     const n = f.hunks.reduce((k, h) => k + h.lines.length, 0)
@@ -229,6 +247,7 @@ function FileBody({ f, path, view, readOnly, busy, onAction, comments, onComment
                   const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''
                   const lineNo = n ?? o ?? 0
                   const lineComments = comments?.filter((c) => c.file === path && c.line === lineNo && kind !== 'del') ?? []
+                  const lineNotes = kind === 'del' ? [] : (agentNotes?.filter((a) => a.path === path && a.line === lineNo) ?? [])
                   return (
                     <Fragment key={li}>
                       <div className={`dl ${kind}`}>
@@ -244,6 +263,11 @@ function FileBody({ f, path, view, readOnly, busy, onAction, comments, onComment
                           <span dangerouslySetInnerHTML={{ __html: html[hi]?.[li] ?? '' }} />
                         </span>
                       </div>
+                      {lineNotes.map((a, ai) => (
+                        <div key={`a${ai}`} className="inline-comment agent-note" title="Note from Claude">
+                          <Icon name="sparkles" size={12} style={{ color: 'var(--accent)' }} /> {a.text}
+                        </div>
+                      ))}
                       {lineComments.map((c, ci) => (
                         <div key={ci} className="inline-comment">
                           <Icon name="message" size={12} style={{ color: 'var(--accent)' }} /> {c.text}
@@ -307,6 +331,8 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const [comments, setComments] = useState<Comment[]>([])
   const [msg, setMsg] = useState('')
   const [amend, setAmend] = useState(false)
+  const branchPrefix = useStore((s) => s.settings.worktrees.branchPrefix)
+  const commitPrefix = useStore((s) => s.settings.git.commitPrefix)
   const [busy, setBusy] = useState('')
   const reqRef = useRef(0)
   const loadRef = useRef<ProgressiveLoad | undefined>(undefined)
@@ -322,10 +348,50 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   useEffect(() => setRepo(session?.root), [session?.root])
 
+  // ---- driven by the agent (show_diff / request_review) ----
+  const listRef = useRef<HTMLDivElement>(null)
+  const focus = useStore((s) => s.reviewFocus)
+  const agentReview = useStore((s) => (session ? s.agentNotes[session.id] : undefined))
+  // A file to scroll to once it's in the list (it may still be loading, or arrive with a view switch).
+  const pendingScroll = useRef<string | undefined>(undefined)
+  const scrollToFile = useCallback((p: string): boolean => {
+    const el = listRef.current?.querySelector(`[data-diff-path="${CSS.escape(p)}"]`)
+    el?.scrollIntoView({ block: 'start' })
+    return !!el
+  }, [])
+  useEffect(() => {
+    if (!focus || focus.sessionId !== session?.id) return
+    set({ reviewFocus: undefined })
+    if (focus.view && focus.view !== view) setView(focus.view as DiffView)
+    pendingScroll.current = focus.path
+    if (focus.path && files && (!focus.view || focus.view === view)) requestAnimationFrame(() => focus.path && scrollToFile(focus.path) && (pendingScroll.current = undefined))
+  }, [focus?.at, session?.id])
+  useEffect(() => {
+    const p = pendingScroll.current
+    if (p && files && scrollToFile(p)) pendingScroll.current = undefined
+  }, [files])
+  // Notes on lines the current diff doesn't show are listed in the banner instead.
+  const offDiff = useMemo(() => {
+    if (!agentReview || !files) return []
+    const shown = new Set<string>()
+    for (const f of files) {
+      const p = f.newPath || f.oldPath
+      for (const h of f.hunks) for (const [i, [, n]] of numberHunkLines(h).entries()) if (n !== undefined && h.lines[i][0] !== '-') shown.add(`${p}:${n}`)
+    }
+    return agentReview.notes.filter((n) => !shown.has(`${n.path}:${n.line}`))
+  }, [agentReview, files])
+  const clearNotes = (): void => {
+    if (session) set((s) => ({ agentNotes: Object.fromEntries(Object.entries(s.agentNotes).filter(([k]) => k !== session.id)) }))
+  }
+
+  // The last result for this repo + view shows at once (e.g. after switching tabs) while it reloads.
+  const cacheKey = `review:${repo}|${view}|${view === 'lastTurn' ? session?.turnSnapshot : view === 'commit' ? ref : view === 'branch' ? base : ''}`
+  const [refreshing, setRefreshing] = useState(false)
   const load = useCallback(async () => {
     if (!repo) return
     const req = ++reqRef.current
     setError('')
+    setRefreshing(true)
     try {
       const gi = await api.git.info(repo)
       if (req !== reqRef.current) return
@@ -339,24 +405,34 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
       // Files render as they arrive. The first batch replaces what's shown, so a refresh
       // doesn't blank the list while it reloads.
       loadRef.current?.cancel()
+      const all: DiffFile[] = []
       const pl = loadProgressive<DiffFile>(
         (id) => api.load.gitDiff(id, repo, view, { ref: view === 'lastTurn' ? session?.turnSnapshot : ref, base: b }),
-        (batch, first) => req === reqRef.current && setFiles((cur) => (first ? batch : [...(cur ?? []), ...batch]))
+        (batch, first) => {
+          all.push(...batch)
+          if (req === reqRef.current) setFiles((cur) => (first ? batch : [...(cur ?? []), ...batch]))
+        }
       )
       loadRef.current = pl
       const r = await pl.done
-      if (req === reqRef.current && !r.records) setFiles([])
+      if (req !== reqRef.current) return
+      if (!r.records) setFiles([])
+      cacheSet(cacheKey, { files: all, info: gi })
       if (view === 'commit' && !commits.length) setCommits(await api.git.commits(repo))
     } catch (e) {
       if (req === reqRef.current) {
         setError(errMsg(e))
         setFiles([])
       }
+    } finally {
+      if (req === reqRef.current) setRefreshing(false)
     }
-  }, [repo, view, ref, base, session?.turnSnapshot, commits.length])
+  }, [repo, view, ref, base, session?.turnSnapshot, commits.length, cacheKey])
 
   useEffect(() => {
-    setFiles(null)
+    const cached = cacheGet<{ files: DiffFile[]; info: GitInfo }>(cacheKey)
+    setFiles(cached?.files ?? null)
+    if (cached) setInfo(cached.info)
     void load()
   }, [load])
 
@@ -410,12 +486,29 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
     toast(`Sent ${comments.length} comment(s) to ${session.name}`, 'success')
   }
 
+  // A worktree starts on a detached HEAD, which can't be pushed. Before the first push, ask for the
+  // branch name to put it on; a worktree remembers the branch and is restored onto it from then on.
+  const isWorktree = !!session?.worktreeId && !!repo && repo === session.root
+  const ensureBranch = async (): Promise<boolean> => {
+    if (!repo || info?.branch) return true
+    const slug = (session?.name ?? 'work').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'work'
+    const name = (await askText(isWorktree ? 'Name the branch for this worktree' : 'HEAD is detached. Name a branch to push', `${branchPrefix}${slug}`))?.trim()
+    if (!name) return false
+    const bad = refNameError(name)
+    if (bad) return toast(bad, 'error'), false
+    const ok = await attempt<unknown>(() => (isWorktree ? api.worktree.createBranch(session!.worktreeId!, name, true) : api.git.createBranch(repo, name)), `On branch ${name}`)
+    if (ok === undefined) return false
+    await load()
+    return true
+  }
+
   const doCommit = async (push: boolean): Promise<void> => {
     if (!repo) return
     // Amend with an empty message keeps the last commit's message (no -m / --no-edit).
     if (!amend && !msg.trim()) return toast('Write a commit message first', 'error')
     // Only what's staged is committed; nothing is staged automatically. (Amend may just reword.)
     if (!info?.staged && !(amend && msg.trim())) return toast('Stage the changes to commit first', 'error')
+    if (push && !(await ensureBranch())) return
     setBusy(push ? 'push' : 'commit')
     const ok = await attempt(() => api.git.commit(repo, msg, { amend }), amend ? 'Commit amended' : 'Committed')
     // An amended commit replaces one that may already be on the remote.
@@ -431,9 +524,10 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   // Nothing left to commit but local commits to publish (e.g. Commit was pressed instead of
   // Commit & push): the Commit button becomes Push.
-  const pushReady = !!info?.hasRemote && info.tracked === 0 && !msg.trim() && !amend && ((info.ahead ?? 0) > 0 || (!info.upstream && info.branch !== info.defaultBranch))
+  // (A detached worktree counts as ahead by its commits beyond the default branch.)
+  const pushReady = !!info?.hasRemote && info.tracked === 0 && !msg.trim() && !amend && ((info.ahead ?? 0) > 0 || (!info.upstream && !!info.branch && info.branch !== info.defaultBranch))
   const doPush = async (): Promise<void> => {
-    if (!repo) return
+    if (!repo || !(await ensureBranch())) return
     setBusy('push')
     await attempt(() => api.git.push(repo), 'Pushed')
     setBusy('')
@@ -470,7 +564,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const openPr = pr && isOpenPr(pr) ? pr : undefined
 
   const createPr = async (): Promise<void> => {
-    if (!repo) return
+    if (!repo || !(await ensureBranch())) return
     setBusy('pr')
     if (info?.branch && info.branch === info.defaultBranch) {
       const name = await askText('You are on the default branch. Create a branch for this PR:', `claude/${Date.now().toString(36)}`)
@@ -531,7 +625,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           <button className="icon-btn sm" title="Pull (rebase)" onClick={() => repo && attempt(() => api.git.pull(repo), 'Pulled').then(load)}>
             <Icon name="download" size={14} />
           </button>
-          <button className="icon-btn sm" title="Refresh" onClick={load}>
+          <button className={`icon-btn sm ${refreshing ? 'spinning' : ''}`} title={refreshing ? 'Refreshing…' : 'Refresh'} onClick={load}>
             <Icon name="refresh" size={14} />
           </button>
         </div>
@@ -588,7 +682,40 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           </button>
         </div>
       </div>
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      {agentReview && (
+        <div className="agent-review">
+          <div className="row" style={{ gap: 6 }}>
+            <Icon name="sparkles" size={13} style={{ color: 'var(--accent)' }} />
+            <b className="grow">
+              {agentReview.notes.length} note{agentReview.notes.length === 1 ? '' : 's'} from {session.name}
+            </b>
+            <button className="btn sm ghost" onClick={clearNotes}>
+              Clear
+            </button>
+          </div>
+          {agentReview.summary && <div className="agent-review-summary">{agentReview.summary}</div>}
+          <div className="agent-review-list">
+            {agentReview.notes.map((n, i) => {
+              const off = offDiff.includes(n)
+              return (
+                <button
+                  key={i}
+                  className="agent-review-item"
+                  title={off ? 'Not part of this diff: opens the file at that line' : 'Show in the diff'}
+                  onClick={() => (off ? set({ editorFile: { path: `${repo}/${n.path}`, line: n.line, at: Date.now() } }) : scrollToFile(n.path))}
+                >
+                  <span className="mono ellipsis">
+                    {n.path.split('/').pop()}:{n.line}
+                  </span>
+                  <span className="ellipsis muted">{n.text}</span>
+                  {off && <span className="badge">not in diff</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      <div ref={listRef} style={{ flex: 1, overflow: 'auto' }}>
         {error && <div className="empty-note">{error}</div>}
         {files === null ? (
           <div className="empty-note">Loading diff…</div>
@@ -596,6 +723,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           <DiffList files={files} view={view} onAction={view === 'unstaged' || view === 'staged' ? act : undefined} busy={acting} comments={comments}
             onComment={(c) => setComments((cs) => [...cs, c])}
             root={repo}
+            agentNotes={agentReview?.notes}
             // An editor already open over the content area is re-targeted rather than remounted, so its unsaved edits survive.
             onEdit={(p) => set((s) => ({ editorFile: { path: `${repo}/${p}`, locked: s.editorFile ? s.editorFile.locked : true } }))}
           />
@@ -616,7 +744,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
         </div>
       )}
       <div className="col" style={{ padding: 10, borderTop: '1px solid var(--border)', gap: 6 }}>
-        <textarea className="textarea" rows={2} style={{ minHeight: 54 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={amend ? "Leave empty to keep the last commit's message" : 'Commit message'} onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && void doCommit(false)} />
+        <textarea className="textarea" rows={2} style={{ minHeight: 54 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={amend ? "Leave empty to keep the last commit's message" : commitPrefix.trim() ? `Commit message (committed as "${commitPrefix.trim()} …")` : 'Commit message'} onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && void doCommit(false)} />
         <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
           <button className="btn sm" onClick={generate} disabled={!!busy}>
             <Icon name="wand" size={12} /> {busy === 'gen' ? 'Drafting…' : 'Draft'}

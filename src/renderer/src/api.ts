@@ -179,7 +179,7 @@ export const api = {
   worktree: {
     delete: c<void, [string]>('worktree.delete'),
     restore: c<WorktreeRecord, [string]>('worktree.restore'),
-    createBranch: c<string, [string, string]>('worktree.createBranch'),
+    createBranch: c<string, [string, string, boolean?]>('worktree.createBranch'),
     createPermanent: c<WorktreeRecord, [string, string?]>('worktree.createPermanent'),
     forget: c<void, [string]>('worktree.forget')
   },
@@ -223,6 +223,9 @@ export const api = {
     restart: c<ProcessInfo, [string]>('processes.restart'),
     dismiss: c<void, [string]>('processes.dismiss'),
     close: c<void, [string]>('processes.close')
+  },
+  agent: {
+    reply: c<void, [string, unknown]>('agent.reply')
   },
   mesh: {
     groups: c<MeshGroupState[]>('mesh.groups'),

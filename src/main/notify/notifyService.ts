@@ -30,7 +30,8 @@ export function focusSession(id: string, hostWindow?: number): void {
   broadcast('ui:focusSession', id)
 }
 
-export type NotifyKind = 'turn' | 'permission' | 'question' | 'goal' | 'automation' | 'job' | 'process' | 'mesh'
+/** `agent`: a session's own notify tool ("tell me when the tests pass"). */
+export type NotifyKind = 'turn' | 'permission' | 'question' | 'goal' | 'automation' | 'job' | 'process' | 'mesh' | 'agent'
 
 export interface NotifyAction {
   label: string
@@ -66,7 +67,7 @@ export function notify(kind: NotifyKind, s: Pick<SessionInfo, 'id' | 'name'> & {
   if (kind === 'question' && !cfg.question) return
   // Failed processes already raise a sticky in-app alert.
   if (kind === 'process' && focused) return
-  if ((kind === 'goal' || kind === 'automation' || kind === 'job' || kind === 'mesh') && focused) {
+  if ((kind === 'goal' || kind === 'automation' || kind === 'job' || kind === 'mesh' || kind === 'agent') && focused) {
     broadcast('toast', { id: String(Date.now()), kind: 'info', text: `${title}: ${truncate(body, 140)}` })
     return
   }
