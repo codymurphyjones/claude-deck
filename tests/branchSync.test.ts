@@ -139,7 +139,8 @@ describe('merging a chat into its target', () => {
     // Checked out (as Claude Deck does in its data folder): merged there, and nothing is pushed.
     const held = path.join(tmp, 'held-release')
     g(repo, 'worktree', 'add', '-q', held, 'release')
-    expect(await mergeIntoTarget('r')).toMatchObject({ status: 'merged', target: 'release', updated: held })
+    // (Compared with git's spelling of the folder: CI's temp dir can be an 8.3 short path, e.g. RUNNER~1.)
+    expect(await mergeIntoTarget('r')).toMatchObject({ status: 'merged', target: 'release', updated: path.normalize(g(held, 'rev-parse', '--show-toplevel')) })
     expect(fs.existsSync(path.join(held, 'fix.txt'))).toBe(true)
     expect(g(origin, 'rev-parse', 'release')).toBe(before)
     // The user's folder (on master) never changed.
