@@ -20,7 +20,10 @@ const TITLES: Record<Exclude<Panel, null>, [string, string]> = {
 export function RightPanel({ panel }: { panel: Exclude<Panel, null> }) {
   const width = useStore((s) => s.rightWidth)
   const session = useStore(() => activeSession())
-  const agentSession = session?.kind === 'agent' ? session : undefined
+  // A chat's terminal pane (e.g. a worktree's setup shell) counts as the chat.
+  const parent = useStore((s) => (session?.kind === 'shell' && session.launch.parentId ? s.sessions[session.launch.parentId] : undefined))
+  const owner = parent ?? session
+  const agentSession = owner?.kind === 'agent' ? owner : undefined
   const startDrag = (e: React.MouseEvent): void => {
     const x0 = e.clientX
     const w0 = width

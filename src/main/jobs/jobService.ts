@@ -31,7 +31,7 @@ import { runtime } from '../runtime'
 import { plainEnv } from '../sessions/launch'
 import { JsonStore } from '../store'
 import { debounce, shortId, truncate } from '../util'
-import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
+import { createWorktree, touchWorktree, worktreeFromCheckout } from '../worktrees/worktreeService'
 import { runHeadless, type HeadlessResult } from '../automations/headless'
 import { migrateSessionRefs } from '@shared/migrate'
 import { applyCommitPrefix } from '@shared/repo'
@@ -332,6 +332,21 @@ export class JobService {
   private async prepareWorkspace(run: JobRun): Promise<void> {
     const o = run.options
     const repo = await toplevel(run.root)
+    // From a conversation: a copy of its worktree as it is now, or that worktree itself.
+    if (o.from) {
+      if (!fs.existsSync(o.from)) throw new Error(`That conversation's worktree is gone: ${o.from}`)
+      if (o.workspace === 'worktree') {
+        const wt = await worktreeFromCheckout(o.from, { name: `${run.source === 'routine' ? 'routine' : 'job'}-${run.slug}` })
+        touchWorktree(wt.id)
+        run.cwd = run.worktreePath = wt.path
+        run.branch = jobRunBranchName(run.slug, run.id)
+        await mustGit(wt.path, ['switch', '-c', run.branch])
+      } else {
+        run.cwd = o.from
+        run.branch = await currentBranch(o.from)
+      }
+      return
+    }
     if (o.workspace === 'worktree') {
       if (!repo) throw new Error('Worktree runs need a Git repository. Choose "Working copy" instead.')
       const wt = await createWorktree({ repoCwd: repo, baseRef: o.branch || undefined, name: `${run.source === 'routine' ? 'routine' : 'job'}-${run.slug}` })

@@ -43,6 +43,11 @@ export type JobBranchMode = 'new' | 'direct'
 export interface JobRunOptions {
   /** Branch to run against (default: the repo's current branch). */
   branch?: string
+  /**
+   * Start from a conversation instead of a branch: the chat's worktree folder. Its changes come
+   * along, committed or not: copied into the run's worktree, or worked on in place ("Working copy").
+   */
+  from?: string
   workspace: JobWorkspace
   /** In a worktree: commit to a new jobs/<slug>-<id> branch, or directly onto `branch`. */
   branchMode: JobBranchMode

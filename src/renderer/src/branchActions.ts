@@ -1,6 +1,8 @@
-import type { ChatMergeResult } from '@shared/types'
+import type { BranchInfo } from '@shared/repo'
+import type { ChatMergeResult, LaunchOptions } from '@shared/types'
 import { api, errMsg } from './api'
-import { get, openInEditor, set, toast } from './store'
+import { get, openInEditor, openSession, set, toast } from './store'
+import { openMenuAt } from './components/ui'
 
 // Branch actions for chats that work in their own worktrees (main: worktrees/branchSync.ts).
 
@@ -136,4 +138,41 @@ export async function switchBranchSafely(root: string, branch: string, doSwitch:
   }
   toast(`Switched to ${branch}`, 'success')
   return true
+}
+
+/**
+ * Start a chat on `branch`. The folder's checked-out branch (or none given) starts the usual way;
+ * any other branch gets a worktree working toward it, so two branches can be worked on at once.
+ * A remote-only branch ("origin/x") gets a local branch tracking it.
+ */
+export function newChatOnBranch(root: string, branch?: string, current?: string, extra: Partial<LaunchOptions> = {}): Promise<unknown> {
+  if (!branch || branch === current) return openSession('agent', { cwd: root, ...extra })
+  return openSession('agent', { cwd: root, ...extra, worktree: { target: branch } })
+}
+
+/** Branches to offer when starting work: local ones by recent use, then remote ones with no local branch. */
+export async function startableBranches(root: string): Promise<{ current?: string; local: string[]; remote: string[] }> {
+  const all = await api.repo.branches(root).catch(() => [] as BranchInfo[])
+  const local = all.filter((b) => !b.remote)
+  const tracked = new Set(local.map((b) => b.upstream).filter(Boolean))
+  const names = new Set(local.map((b) => b.name))
+  return {
+    current: local.find((b) => b.current)?.name,
+    local: local.map((b) => b.name),
+    remote: all.filter((b) => b.remote && !tracked.has(b.name) && !names.has(b.name.slice(b.name.indexOf('/') + 1))).map((b) => b.name)
+  }
+}
+
+/** "New chat" with a branch choice: the checked-out branch first (the default), then the others. */
+export async function newChatMenu(el: HTMLElement, root: string): Promise<void> {
+  const { current, local, remote } = await startableBranches(root)
+  const others = local.filter((b) => b !== current)
+  openMenuAt(el, [
+    { label: current ? `On ${current} (checked out)` : 'New chat', icon: 'plus', onClick: () => newChatOnBranch(root) },
+    ...(others.length || remote.length ? [{ separator: true }] : []),
+    ...others.slice(0, 12).map((b) => ({ label: b, icon: 'branch', hint: 'own worktree', onClick: () => newChatOnBranch(root, b, current) })),
+    ...remote.slice(0, 6).map((b) => ({ label: b, icon: 'globe', hint: 'remote', onClick: () => newChatOnBranch(root, b, current) })),
+    { separator: true },
+    { label: 'More options…', icon: 'more', onClick: () => set({ newSession: { cwd: root } }) }
+  ])
 }

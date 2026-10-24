@@ -22,6 +22,7 @@ import { copyJobCard } from '../jobClipboard'
 import { Icon } from './Icon'
 import { runRoutine } from './Routines'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
+import { useChatWorktrees } from './WorktreeChanges'
 
 /** Repo folders that can hold jobs: project folders, plus whatever the active chat is in. */
 export function useRoots(): string[] {
@@ -394,8 +395,89 @@ async function deleteJob(root: string, j: JobDef): Promise<boolean> {
 }
 
 // ------------------------------------------------------------------ run options
+/**
+ * Where a run starts from: a branch of the repo, or a conversation (a chat's worktree, with its
+ * changes, committed or not). `branch` '' is the checked-out branch.
+ */
+export function BranchOrChatSelect({
+  root,
+  branches,
+  current,
+  branch,
+  from,
+  remote = [],
+  withChats = true,
+  onChange
+}: {
+  root: string
+  branches: string[]
+  current?: string
+  branch: string
+  from?: string
+  remote?: string[]
+  withChats?: boolean
+  onChange: (branch: string | undefined, from: string | undefined) => void
+}) {
+  const all = useChatWorktrees(root)
+  const chats = withChats ? all : []
+  // Chats' own branches are listed as their conversations.
+  const chatBranches = new Set(all.map((c) => c.branch))
+  const value = from ? `c:${from}` : `b:${branch}`
+  return (
+    <select
+      className="select"
+      value={value}
+      onChange={(e) => {
+        const v = e.target.value
+        if (v.startsWith('c:')) onChange(undefined, v.slice(2))
+        else onChange(v.slice(2) || undefined, undefined)
+      }}
+    >
+      <optgroup label="Branches">
+        <option value="b:">{current ? `${current} (checked out)` : 'Current branch'}</option>
+        {branches
+          .filter((b) => b !== current && !chatBranches.has(b))
+          .map((b) => (
+            <option key={b} value={`b:${b}`}>
+              {b}
+            </option>
+          ))}
+        {remote.map((b) => (
+          <option key={b} value={`b:${b}`}>
+            {b} (remote)
+          </option>
+        ))}
+      </optgroup>
+      {chats.length > 0 && (
+        <optgroup label="Conversations">
+          {chats.map((c) => (
+            <option key={c.path} value={`c:${c.path}`}>
+              {c.label}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {/* A conversation picked earlier whose worktree is gone: still shown, so the choice is visible. */}
+      {from && !chats.some((c) => c.path === from) && <option value={`c:${from}`}>{from.split(/[\\/]/).pop()} (gone)</option>}
+    </select>
+  )
+}
+
 /** `root` is the repo the run targets; without one (routine defaults) the branch picker is hidden. */
-export function RunOptionsFields({ root, job, value, onChange }: { root?: string; job?: JobDef; value: Partial<JobRunOptions>; onChange: (v: Partial<JobRunOptions>) => void }) {
+export function RunOptionsFields({
+  root,
+  job,
+  value,
+  onChange,
+  withChats = false
+}: {
+  root?: string
+  job?: JobDef
+  value: Partial<JobRunOptions>
+  onChange: (v: Partial<JobRunOptions>) => void
+  /** Offer conversations to start from (a one-off run; not for saved defaults or schedules). */
+  withChats?: boolean
+}) {
   const [branches, setBranches] = useState<string[]>([])
   const [current, setCurrent] = useState<string>()
   useEffect(() => {
@@ -407,23 +489,19 @@ export function RunOptionsFields({ root, job, value, onChange }: { root?: string
   }, [root])
   const d = job?.defaults ?? {}
   const workspace = value.workspace ?? d.workspace ?? 'worktree'
-  const branchMode = value.branchMode ?? d.branchMode ?? 'new'
+  const from = value.from
+  const fromChat = useChatWorktrees(root ?? '').find((c) => c.path === from)
+  // Starting from a conversation always makes a new branch: the chat's own is checked out in its worktree.
+  const branchMode = from ? 'new' : (value.branchMode ?? d.branchMode ?? 'new')
   const branch = value.branch ?? d.branch ?? ''
   const stepMode = value.onlyStep !== undefined ? 'only' : value.fromStep ? 'from' : 'all'
-  const target = branch || current || 'the current branch'
+  const target = fromChat ? `“${fromChat.label}”` : branch || current || 'the current branch'
   return (
     <>
       {root && (
         <label className="field">
-          Branch
-          <select className="select" value={branch} onChange={(e) => onChange({ ...value, branch: e.target.value || undefined })}>
-            <option value="">Current branch{current ? ` (${current})` : ''}</option>
-            {branches.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
+          {withChats ? 'Branch or conversation' : 'Branch'}
+          <BranchOrChatSelect withChats={withChats} root={root} branches={branches} current={current} branch={branch} from={from} onChange={(b, f) => onChange({ ...value, branch: b, from: f })} />
         </label>
       )}
       <label className="field">
@@ -440,21 +518,31 @@ export function RunOptionsFields({ root, job, value, onChange }: { root?: string
       {workspace === 'worktree' ? (
         <label className="field">
           Commits
-          <Seg
-            value={branchMode}
-            onChange={(m) => onChange({ ...value, branchMode: m })}
-            options={[
-              ['new', `New branch from ${target}`],
-              ['direct', `Directly onto ${target}`]
-            ]}
-          />
-          <span className="muted" style={{ fontSize: 11.5 }}>
-            Each step that passes is committed. {branchMode === 'direct' ? 'The branch must not be checked out elsewhere (e.g. in your working copy).' : 'Review, push or open a PR from the run afterwards.'}
-          </span>
+          {from ? (
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              Starts from a copy of {target} as it is now, including its uncommitted changes, on a new branch. Each step that passes is committed there; the conversation isn’t touched.
+            </span>
+          ) : (
+            <>
+              <Seg
+                value={branchMode}
+                onChange={(m) => onChange({ ...value, branchMode: m })}
+                options={[
+                  ['new', `New branch from ${target}`],
+                  ['direct', `Directly onto ${target}`]
+                ]}
+              />
+              <span className="muted" style={{ fontSize: 11.5 }}>
+                Each step that passes is committed. {branchMode === 'direct' ? 'The branch must not be checked out elsewhere (e.g. in your working copy).' : 'Review, push or open a PR from the run afterwards.'}
+              </span>
+            </>
+          )}
         </label>
       ) : (
         <div className="muted" style={{ fontSize: 11.5 }}>
-          Runs in your working copy{branch && branch !== current ? ` after switching to ${branch} (needs a clean tree)` : ''}. Changes are left uncommitted.
+          {from
+            ? `Runs right in ${target}'s worktree, on top of its changes. Changes are left uncommitted.`
+            : `Runs in your working copy${branch && branch !== current ? ` after switching to ${branch} (needs a clean tree)` : ''}. Changes are left uncommitted.`}
         </div>
       )}
       {job && job.steps.length > 1 && (
@@ -582,7 +670,7 @@ export function JobRunDialog() {
       }
     >
       <div className="modal-body">
-        {job ? <RunOptionsFields root={req.root} job={job} value={opts} onChange={setOpts} /> : <div className="muted">Loading job…</div>}
+        {job ? <RunOptionsFields root={req.root} job={job} value={opts} onChange={setOpts} withChats /> : <div className="muted">Loading job…</div>}
         <label className="field">
           Additional context <span className="muted">(optional)</span>
           <textarea className="textarea" rows={3} value={extra} placeholder="Anything specific to this run: an area to focus on, an issue link, constraints…" onChange={(e) => setExtra(e.target.value)} />

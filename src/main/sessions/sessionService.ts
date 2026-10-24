@@ -24,7 +24,8 @@ import {
   getWorktree,
   handoffToLocal,
   handoffToWorktree,
-  touchWorktree
+  touchWorktree,
+  worktreeFromCheckout
 } from '../worktrees/worktreeService'
 import { plainEnv } from './launch'
 import { adapter, providerOf } from '../agents/registry'
@@ -164,7 +165,7 @@ export class SessionService extends EventEmitter {
       if (repoRoot) L.worktree = { ...L.worktree, ...(target && !L.worktree?.target ? { target } : {}) }
     }
     if (kind === 'agent' && L.worktree) {
-      const wt = await createWorktree({ repoCwd: cwd, ...L.worktree })
+      const wt = L.worktree.from ? await worktreeFromCheckout(L.worktree.from, { onBranch: true }) : await createWorktree({ repoCwd: cwd, ...L.worktree })
       projectFolder = findProjectForFolder(cwd)?.folders[0] ?? wt.repoRoot
       cwd = wt.path
       worktreeId = wt.id

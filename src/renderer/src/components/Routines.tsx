@@ -4,7 +4,8 @@ import { api } from '../api'
 import { attempt, currentProjectRoot, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
 import { copyJobCard } from '../jobClipboard'
-import { AgentSelect, deleteRoutine, designRoutineInChat, efforts, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
+import { startableBranches } from '../branchActions'
+import { AgentSelect, BranchOrChatSelect, deleteRoutine, designRoutineInChat, efforts, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
 // Routines are app-level jobs (~/.claude-deck/routines) that run against any repo,
@@ -134,6 +135,10 @@ export function RoutineRunDialog() {
   const [mode, setMode] = useState<Mode>('background')
   const [opts, setOpts] = useState<Partial<JobRunOptions>>({})
   const [worktree, setWorktree] = useState(false)
+  // Interactive chat: the branch ('' = checked out) or conversation it starts from.
+  const [chatBranch, setChatBranch] = useState('')
+  const [chatFrom, setChatFrom] = useState<string | undefined>()
+  const [repoBranches, setRepoBranches] = useState<{ current?: string; local: string[]; remote: string[] }>({ local: [], remote: [] })
   const [preview, setPreview] = useState(false)
   const [busy, setBusy] = useState(false)
   const job = routines?.find((j) => j.slug === slug)
@@ -145,6 +150,8 @@ export function RoutineRunDialog() {
     setExtra(req.context ?? '')
     setOpts(req.step !== undefined ? { onlyStep: req.step } : {})
     setPreview(false)
+    setChatBranch('')
+    setChatFrom(undefined)
     // Only reset when the dialog is (re)opened.
   }, [req])
   useEffect(() => {
@@ -154,6 +161,18 @@ export function RoutineRunDialog() {
       setWorktree(job.defaults.workspace === 'worktree')
     }
   }, [job?.slug])
+
+  useEffect(() => {
+    setChatBranch('')
+    setChatFrom(undefined)
+    setOpts((o) => ({ ...o, branch: undefined, from: undefined }))
+    if (!cwd) return setRepoBranches({ local: [], remote: [] })
+    let live = true
+    void startableBranches(cwd).then((b) => live && setRepoBranches(b))
+    return () => {
+      live = false
+    }
+  }, [cwd])
 
   if (!req) return null
   const close = (): void => set({ routineRunFor: false })
@@ -179,7 +198,13 @@ export function RoutineRunDialog() {
         model: opts.model ?? d.model,
         effort: opts.effort ?? d.effort,
         permissionMode: opts.permissionMode ?? d.permissionMode,
-        worktree: worktree ? {} : undefined
+        // A conversation: in its worktree, or (fresh worktree) a copy of it that merges back into it.
+        // Another branch than the checked-out one always gets its own worktree.
+        ...(chatFrom
+          ? worktree
+            ? { worktree: { from: chatFrom } }
+            : { cwd: chatFrom }
+          : { worktree: worktree || (chatBranch && chatBranch !== repoBranches.current) ? { target: chatBranch || undefined } : undefined })
       })
     setBusy(false)
     if (s) close()
@@ -251,7 +276,7 @@ export function RoutineRunDialog() {
             ]}
           />
         </label>
-        {job && cwd && mode === 'background' && <RunOptionsFields root={cwd} job={job} value={opts} onChange={setOpts} />}
+        {job && cwd && mode === 'background' && <RunOptionsFields root={cwd} job={job} value={opts} onChange={setOpts} withChats />}
         {job && mode === 'chat' && (
           <>
             <div className="row">
@@ -277,9 +302,30 @@ export function RoutineRunDialog() {
                 <PermissionSelect value={opts.permissionMode} fallback={d.permissionMode} onChange={(permissionMode) => setOpts({ ...opts, permissionMode })} />
               </label>
             </div>
+            <label className="field">
+              Branch or conversation
+              <BranchOrChatSelect
+                root={cwd}
+                branches={repoBranches.local}
+                remote={repoBranches.remote}
+                current={repoBranches.current}
+                branch={chatBranch}
+                from={chatFrom}
+                onChange={(b, f) => {
+                  setChatBranch(b ?? '')
+                  setChatFrom(f)
+                }}
+              />
+            </label>
             <div className="row">
-              <Switch on={worktree} onChange={setWorktree} />
-              <span>Use a fresh worktree</span>
+              <Switch on={worktree || (!chatFrom && !!chatBranch && chatBranch !== repoBranches.current)} onChange={setWorktree} />
+              <span>
+                {chatFrom
+                  ? worktree
+                    ? 'In a copy of the conversation (its changes included), merged back into it'
+                    : 'Off: works right in the conversation’s worktree'
+                  : 'Use a fresh worktree'}
+              </span>
             </div>
           </>
         )}

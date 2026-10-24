@@ -4,6 +4,7 @@ import type { CommitInfo, DiffFile } from '@shared/types'
 import { api, bridge, errMsg } from '../api'
 import { askText, attempt, get, openSession, set, tabProjectRoot, toast, useStore, type RepoDiffSource } from '../store'
 import { Icon } from './Icon'
+import { WorktreeChanges } from './WorktreeChanges'
 import { useRoots } from './Jobs'
 import { DiffList } from './ReviewPane'
 import { cacheGet, cacheSet } from '../viewCache'
@@ -526,6 +527,17 @@ export function RepoView() {
                 ))}
               </Section>
             )}
+
+            {/* Chats edit in their own worktrees; their changes aren't in this folder's status. */}
+            <WorktreeChanges
+              root={root}
+              heading={
+                <div className="section-label repo-section" style={{ cursor: 'default' }}>
+                  <Icon name="branch" size={12} />
+                  <span className="grow">Changes in chat worktrees</span>
+                </div>
+              }
+            />
 
             <Section
               title="Branches"

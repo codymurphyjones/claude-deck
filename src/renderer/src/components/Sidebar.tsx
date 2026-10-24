@@ -5,6 +5,7 @@ import { api, bridge } from '../api'
 import { runCommand } from '../commands'
 import { cacheGet } from '../viewCache'
 import { askText, attempt, focusSessionTab, get, openProjectHome, openSession, QUICK, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
+import { newChatMenu, newChatOnBranch } from '../branchActions'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
@@ -15,16 +16,17 @@ import { isOpenFailure } from '@shared/processes'
 import { ReviewsView } from './Reviews'
 import { openMenu, Seg, shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
 
-const VIEWS: { id: SidebarView; icon: string; title: string }[] = [
+/** Rail icons, top to bottom; `bottom` ones sit in the lower group, by Timeline and Settings. */
+const VIEWS: { id: SidebarView; icon: string; title: string; bottom?: boolean }[] = [
   { id: 'projects', icon: 'message', title: 'Chats: this project’s chats by branch (on Home, every project)' },
-  { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)' },
+  { id: 'team', icon: 'users', title: 'Teams — sessions sharing a folder' },
   { id: 'repo', icon: 'branch', title: 'Repository — changes, commits, branches' },
   { id: 'actions', icon: 'play', title: 'Actions — the project’s package.json scripts and running processes' },
-  { id: 'team', icon: 'users', title: 'Teams — sessions sharing a folder' },
-  { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
   { id: 'routines', icon: 'wand', title: 'Routines — reusable jobs for any repo' },
+  { id: 'jobs', icon: 'layers', title: 'Repo jobs' },
   { id: 'scheduled', icon: 'clock', title: 'Scheduled tasks' },
-  { id: 'reviews', icon: 'pr', title: 'Pull requests' }
+  { id: 'reviews', icon: 'pr', title: 'Pull requests' },
+  { id: 'activity', icon: 'bell', title: 'Activity (Ctrl+Alt+U)', bottom: true }
 ]
 
 export function Sidebar({ open }: { open: boolean }) {
@@ -56,19 +58,22 @@ export function Sidebar({ open }: { open: boolean }) {
     window.addEventListener('mouseup', up)
   }
 
+  const railButton = (v: (typeof VIEWS)[number]) => {
+    const pip = v.id === 'actions' ? actionPip : v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'routines' ? jobsRailPip(jobRuns, 'routine') : v.id === 'team' ? teams : 0
+    return (
+      <button key={v.id} className={`icon-btn ${open && view === v.id ? 'on' : ''}`} title={v.title} onClick={() => showSidebar(v.id)}>
+        <Icon name={v.icon} size={18} />
+        {pip > 0 && <span className="pip">{pip}</span>}
+      </button>
+    )
+  }
+
   return (
     <>
       <div className="rail">
-        {VIEWS.map((v) => {
-          const pip = v.id === 'actions' ? actionPip : v.id === 'activity' ? attention : v.id === 'scheduled' ? unreadRuns : v.id === 'jobs' ? jobsRailPip(jobRuns) : v.id === 'routines' ? jobsRailPip(jobRuns, 'routine') : v.id === 'team' ? teams : 0
-          return (
-            <button key={v.id} className={`icon-btn ${open && view === v.id ? 'on' : ''}`} title={v.title} onClick={() => showSidebar(v.id)}>
-              <Icon name={v.icon} size={18} />
-              {pip > 0 && <span className="pip">{pip}</span>}
-            </button>
-          )
-        })}
+        {VIEWS.filter((v) => !v.bottom).map(railButton)}
         <div className="spacer" />
+        {VIEWS.filter((v) => v.bottom).map(railButton)}
         <button className="icon-btn" title="Cross-session timeline" onClick={() => setRight('timeline')}>
           <Icon name="activity" size={18} />
         </button>
@@ -198,7 +203,7 @@ function ProjectChatsView({ project: p }: { project: Project }) {
     <>
       <div className="sidebar-head">
         <span className="title">Chats</span>
-        <button className="icon-btn sm" title={`New chat in ${p.name}`} onClick={() => openSession('agent', { cwd: root })}>
+        <button className="icon-btn sm" title={`New chat in ${p.name}: pick a branch`} onClick={(e) => void newChatMenu(e.currentTarget, root)}>
           <Icon name="plus" size={15} />
         </button>
         <button className="icon-btn sm" title="Project options" onClick={(e) => projectMenu(e, p)}>
@@ -271,6 +276,15 @@ function ProjectChatsView({ project: p }: { project: Project }) {
               <span className="ellipsis">{branch}</span>
               {branch === checkedOut && <span className="badge accent">checked out</span>}
               <span className="grow" />
+              {branch !== 'No branch' && (
+                <button
+                  className="icon-btn sm"
+                  title={`New chat on ${branch}${branch === checkedOut ? '' : ' (in its own worktree)'}`}
+                  onClick={(e) => (e.stopPropagation(), void newChatOnBranch(root, branch, checkedOut))}
+                >
+                  <Icon name="plus" size={12} />
+                </button>
+              )}
               <span className="sub">{chats.length}</span>
             </div>
             {!folded[branch] &&

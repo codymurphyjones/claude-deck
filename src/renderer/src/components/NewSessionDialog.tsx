@@ -3,6 +3,7 @@ import { PROVIDER_IDS, PROVIDERS, type ProviderId } from '@shared/agent'
 import type { GitInfo, LaunchOptions, MeshRole } from '@shared/types'
 import { api } from '../api'
 import { activeSession, openSession, set, useStore } from '../store'
+import { startableBranches } from '../branchActions'
 import { Icon } from './Icon'
 import { Modal, Seg, Switch } from './ui'
 
@@ -23,6 +24,7 @@ export function NewSessionDialog() {
   const [where, setWhere] = useState<'local' | 'worktree'>('local')
   const [git, setGit] = useState<GitInfo | null>(null)
   const [branches, setBranches] = useState<string[]>([])
+  const [remoteBranches, setRemoteBranches] = useState<string[]>([])
   const [baseRef, setBaseRef] = useState('')
   const [carry, setCarry] = useState(false)
   const [permanent, setPermanent] = useState(false)
@@ -59,7 +61,11 @@ export function NewSessionDialog() {
       setGit(g)
       setBaseRef('')
       if (g.isRepo) {
-        void api.git.branches(cwd).then((b) => live && setBranches(b))
+        void startableBranches(cwd).then((b) => {
+          if (!live) return
+          setBranches(b.local.filter((x) => x !== g.branch))
+          setRemoteBranches(b.remote)
+        })
         if (perChat || pre.worktree) setWhere('worktree')
       } else setWhere('local')
     })
@@ -83,6 +89,7 @@ export function NewSessionDialog() {
 
   if (!pre) return null
   const desc = PROVIDERS[provider]
+  const whereChoice = where
   const pickProvider = (p: ProviderId): void => {
     if (p === provider) return
     setProvider(p)
@@ -93,6 +100,8 @@ export function NewSessionDialog() {
   const close = (): void => set({ newSession: false })
   const create = async (): Promise<void> => {
     if (!cwd) return
+    // The folder stays on its branch; another branch is always worked on in a worktree.
+    const where = baseRef && baseRef !== git?.branch ? 'worktree' : whereChoice
     const launch: LaunchOptions = {
       cwd,
       provider,
@@ -154,7 +163,12 @@ export function NewSessionDialog() {
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <Seg
             value={where}
-            onChange={(w) => git?.isRepo && setWhere(w)}
+            onChange={(w) => {
+              if (!git?.isRepo) return
+              setWhere(w)
+              // Working locally means the folder's own branch.
+              if (w === 'local') setBaseRef('')
+            }}
             options={[
               ['local', 'Local'],
               ['worktree', git?.isRepo === false ? 'Worktree (needs Git)' : 'Worktree']
@@ -175,19 +189,37 @@ export function NewSessionDialog() {
             ]}
           />
         </div>
+        {/* Any branch can be worked on, side by side: one that isn't checked out gets its own worktree. */}
+        {git?.isRepo && (
+          <label className="field">
+            Work on branch
+            <select
+              className="select"
+              value={baseRef}
+              onChange={(e) => {
+                setBaseRef(e.target.value)
+                if (e.target.value && e.target.value !== git.branch) setWhere('worktree')
+              }}
+            >
+              <option value="">{git.branch ? `${git.branch} (checked out)` : 'Current HEAD (detached)'}</option>
+              {branches.map((b) => (
+                <option key={b}>{b}</option>
+              ))}
+              {remoteBranches.length > 0 && (
+                <optgroup label="Remote only">
+                  {remoteBranches.map((b) => (
+                    <option key={b}>{b}</option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </label>
+        )}
         {where === 'worktree' && (
           <div className="card col" style={{ boxShadow: 'none', padding: 12, gap: 10 }}>
-            <label className="field">
-              Work on branch
-              <select className="select" value={baseRef} onChange={(e) => setBaseRef(e.target.value)}>
-                <option value="">{git?.branch ? `${git.branch} (checked out)` : 'Current HEAD (detached)'}</option>
-                {branches.map((b) => (
-                  <option key={b}>{b}</option>
-                ))}
-              </select>
-            </label>
             <div className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>
-              The chat works in its own copy on a branch of its own, then <b>Merge into {baseRef || git?.branch || 'the branch'}</b> brings its work back.{' '}
+              The chat works in its own copy on a branch of its own, then <b>Merge into {(remoteBranches.includes(baseRef) ? baseRef.slice(baseRef.indexOf('/') + 1) : baseRef) || git?.branch || 'the branch'}</b> brings its work back.{' '}
+              {remoteBranches.includes(baseRef) ? 'A local branch tracking it is created first. ' : ''}
               {!baseRef || baseRef === git?.branch ? 'This is the branch your folder has checked out, so your folder updates when you merge.' : 'Your folder isn’t on this branch, so it’s updated and pushed from Claude Deck’s copy.'}
             </div>
             <div className="row">

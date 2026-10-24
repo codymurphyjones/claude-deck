@@ -32,7 +32,11 @@ export interface LaunchOptions {
    * Create a fresh managed worktree for this session. With `target` (a local branch), the chat works
    * on its own sub-branch off it and merges back into it ("Merge into <target>").
    */
-  worktree?: { baseRef?: string; permanent?: boolean; carryChanges?: boolean; target?: string }
+  /**
+   * `from`: start as a copy of another checkout (a chat's worktree), uncommitted changes included,
+   * working toward that checkout's branch.
+   */
+  worktree?: { baseRef?: string; permanent?: boolean; carryChanges?: boolean; target?: string; from?: string }
   /** Work in the folder itself even when chats get their own worktrees by default. */
   inPlace?: boolean
   addDirs?: string[]

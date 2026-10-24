@@ -341,10 +341,30 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   useEffect(() => () => loadRef.current?.cancel(), [])
 
+  // What can be reviewed: this chat's folder, the project's folders, and every chat worktree of the
+  // project (chats work in their own worktrees, so their changes aren't in the project folder).
+  const worktrees = useStore((s) => s.library.worktrees)
+  const chats = useStore((s) => s.library.chats)
+  const sessions = useStore((s) => s.sessions)
   const repos = useMemo(() => {
     const p = projects.find((x) => x.id === session?.projectId)
-    return [...new Set([session?.root, ...(p?.folders ?? [])].filter(Boolean) as string[])]
-  }, [session?.root, session?.projectId, projects])
+    const wts = worktrees.filter((w) => !w.deleted && p && (w.projectId === p.id || p.folders.some((f) => f.toLowerCase() === w.repoRoot.toLowerCase())))
+    const out = new Map<string, string>()
+    const add = (dir: string | undefined, label: string): void => {
+      if (dir && ![...out.keys()].some((k) => k.toLowerCase() === dir.toLowerCase())) out.set(dir, label)
+    }
+    const wtLabel = (dir: string): string | undefined => {
+      const w = wts.find((x) => x.path.toLowerCase() === dir.toLowerCase())
+      if (!w) return undefined
+      const chat = Object.values(sessions).find((s) => s.worktreeId === w.id && s.kind === 'agent')?.name ?? chats.find((c) => c.worktreeId === w.id)?.name
+      return `${chat ?? 'Worktree'} · ${w.branch ?? 'detached'}`
+    }
+    const base = (dir: string): string => dir.split(/[\\/]/).pop() ?? dir
+    if (session?.root) add(session.root, wtLabel(session.root) ?? base(session.root))
+    for (const f of p?.folders ?? []) add(f, base(f))
+    for (const w of wts) add(w.path, wtLabel(w.path)!)
+    return [...out.entries()]
+  }, [session?.root, session?.projectId, projects, worktrees, chats, sessions])
 
   useEffect(() => setRepo(session?.root), [session?.root])
 
@@ -488,6 +508,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   // A worktree starts on a detached HEAD, which can't be pushed. Before the first push, ask for the
   // branch name to put it on; a worktree remembers the branch and is restored onto it from then on.
+  const reviewedWorktree = repo ? worktrees.find((w) => !w.deleted && w.branch && w.target && w.path.toLowerCase() === repo.toLowerCase())?.id : undefined
   const isWorktree = !!session?.worktreeId && !!repo && repo === session.root
   const ensureBranch = async (): Promise<boolean> => {
     if (!repo || info?.branch) return true
@@ -600,21 +621,21 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   return (
     <div data-testid="review-pane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* A chat in its own worktree: its branch, what it merges into, and Merge. */}
-      {session.worktreeId && repo === session.root && <ChatBranchBar worktreeId={session.worktreeId} />}
+      {/* A chat worktree under review: its branch, what it merges into, and Merge. */}
+      {reviewedWorktree && <ChatBranchBar key={reviewedWorktree} worktreeId={reviewedWorktree} />}
       <div className="col" style={{ padding: '8px 10px', gap: 6, borderBottom: '1px solid var(--border)' }}>
         <div className="row" style={{ gap: 6 }}>
           {repos.length > 1 ? (
-            <select className="select" style={{ flex: 1 }} value={repo} onChange={(e) => setRepo(e.target.value)}>
-              {repos.map((r) => (
+            <select className="select" style={{ flex: 1 }} value={repo} title={repo} onChange={(e) => setRepo(e.target.value)}>
+              {repos.map(([r, label]) => (
                 <option key={r} value={r}>
-                  {r.split(/[\\/]/).pop()}
+                  {label}
                 </option>
               ))}
             </select>
           ) : (
             <span className="grow ellipsis mono" style={{ fontSize: 12 }} title={repo}>
-              {repo?.split(/[\\/]/).pop()}
+              {repos[0]?.[1] ?? repo?.split(/[\\/]/).pop()}
             </span>
           )}
           {info?.branch && (

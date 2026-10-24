@@ -81,3 +81,34 @@ describe('a chat worktree', () => {
     expect(fs.readFileSync(path.join(repo, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
   })
 })
+
+describe('starting from another chat or branch', () => {
+  it('copies a chat worktree with its uncommitted changes, without touching it, onto a sub-branch of its branch', async () => {
+    const { createWorktree, worktreeFromCheckout } = await import('../src/main/worktrees/worktreeService')
+    const chat = await createWorktree({ repoCwd: repo, target: 'master' })
+    fs.writeFileSync(path.join(chat.path, 'a.txt'), 'changed\n')
+    fs.writeFileSync(path.join(chat.path, 'new.txt'), 'new\n')
+    g(chat.path, 'add', 'new.txt')
+    const before = g(chat.path, 'status', '--porcelain')
+
+    const copy = await worktreeFromCheckout(chat.path, { onBranch: true })
+    // The copy has the chat's changes, still uncommitted, and works toward the chat's branch.
+    expect(fs.readFileSync(path.join(copy.path, 'a.txt'), 'utf8')).toBe('changed\n')
+    expect(fs.readFileSync(path.join(copy.path, 'new.txt'), 'utf8')).toBe('new\n')
+    expect(g(copy.path, 'rev-parse', 'HEAD')).toBe(g(chat.path, 'rev-parse', 'HEAD'))
+    expect(copy.target).toBe(chat.branch)
+    expect(g(copy.path, 'branch', '--show-current')).toBe(copy.branch)
+    expect(copy.repoRoot).toBe(repo)
+    // The chat's own worktree (and its staging) is left exactly as it was.
+    expect(g(chat.path, 'status', '--porcelain')).toBe(before)
+  })
+
+  it('works toward the local branch for a remote-only one, creating it tracking the remote', async () => {
+    const { localBranchFor } = await import('../src/main/worktrees/worktreeService')
+    g(repo, 'remote', 'add', 'origin', path.join(tmp, 'origin.git'))
+    g(repo, 'update-ref', 'refs/remotes/origin/feature', 'HEAD')
+    expect(await localBranchFor(repo, 'origin/feature')).toBe('feature')
+    expect(g(repo, 'rev-parse', '--abbrev-ref', 'feature@{upstream}')).toBe('origin/feature')
+    expect(await localBranchFor(repo, 'master')).toBe('master')
+  })
+})

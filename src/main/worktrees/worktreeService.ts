@@ -6,7 +6,8 @@ import { settings, state, toast, updateState } from '../context'
 import { mustGit, rawGit as git, headSha, toplevel } from '../git/gitService'
 import { findProjectForFolder, emitLibrary } from '../library'
 import { runtime } from '../runtime'
-import { ensureDir, shortId } from '../util'
+import { ensureDir, run, shortId } from '../util'
+import * as os from 'os'
 
 const worktreeRoot = (): string => ensureDir(settings().worktrees.root || path.join(runtime.userData, 'worktrees'))
 
@@ -149,6 +150,68 @@ function unlinkNodeModules(dir: string): void {
   walk(dir, 0)
 }
 
+/**
+ * A commit of `cwd`'s working tree (tracked and new files; ignored ones aside) on top of its HEAD,
+ * made through a temporary index so the checkout's own index and files are left alone.
+ */
+async function snapshotCommit(cwd: string): Promise<string> {
+  const idx = path.join(os.tmpdir(), `deck-index-${shortId()}`)
+  const env = { ...process.env, GIT_INDEX_FILE: idx }
+  const g = async (args: string[]): Promise<string> => {
+    const r = await run('git', args, { cwd, env, timeout: 120_000 })
+    if (r.code !== 0) throw new Error(r.stderr.trim() || `git ${args[0]} failed`)
+    return r.stdout.trim()
+  }
+  try {
+    await g(['read-tree', 'HEAD'])
+    await g(['add', '-A'])
+    const tree = await g(['write-tree'])
+    return await g(['-c', 'user.name=Claude Deck', '-c', 'user.email=deck@localhost', 'commit-tree', tree, '-p', 'HEAD', '-m', 'Claude Deck: snapshot'])
+  } finally {
+    fs.rmSync(idx, { force: true })
+  }
+}
+
+/**
+ * A new detached worktree holding another checkout's current state (e.g. a chat's worktree): its
+ * commits, with its uncommitted changes as uncommitted changes. The source is not modified.
+ */
+export async function worktreeFromCheckout(from: string, opts: { name?: string; onBranch?: boolean } = {}): Promise<WorktreeRecord> {
+  const snap = await snapshotCommit(from)
+  const repo = state().worktrees.find((w) => !w.deleted && path.resolve(w.path).toLowerCase() === path.resolve(from).toLowerCase())?.repoRoot ?? from
+  const wt = await createWorktree({ repoCwd: repo, baseRef: snap, name: opts.name })
+  await mustGit(wt.path, ['reset', '-q', 'HEAD~1'])
+  const patch: Partial<WorktreeRecord> = { baseRef: (await headSha(wt.path)) ?? wt.baseRef }
+  // Working toward the source's branch, on a sub-branch of its own (as a chat's worktree does).
+  const target = opts.onBranch ? await currentBranchOf(from) : undefined
+  if (target) {
+    patch.branch = `${settings().worktrees.branchPrefix}${target.replace(/[^\w./-]+/g, '-')}-${wt.id}`
+    patch.target = target
+    await mustGit(wt.path, ['switch', '-q', '-c', patch.branch])
+  }
+  touchWorktree(wt.id, patch)
+  emitLibrary()
+  return { ...wt, ...patch }
+}
+
+async function currentBranchOf(cwd: string): Promise<string | undefined> {
+  const r = await git(cwd, ['branch', '--show-current'])
+  return r.stdout.trim() || undefined
+}
+
+/**
+ * The local branch to work toward for `name`. A remote branch ("origin/feature") maps to its local
+ * branch, created tracking it when there isn't one yet, so the chat merges into a real branch.
+ */
+export async function localBranchFor(repoRoot: string, name: string): Promise<string> {
+  const has = async (ref: string): Promise<boolean> => (await git(repoRoot, ['rev-parse', '--verify', '--quiet', ref])).code === 0
+  if (await has(`refs/heads/${name}`)) return name
+  if (!(await has(`refs/remotes/${name}`))) return name
+  const local = name.slice(name.indexOf('/') + 1)
+  if (!(await has(`refs/heads/${local}`))) await mustGit(repoRoot, ['branch', '--track', local, name])
+  return local
+}
+
 export async function createWorktree(opts: {
   repoCwd: string
   baseRef?: string
@@ -161,6 +224,7 @@ export async function createWorktree(opts: {
 }): Promise<WorktreeRecord> {
   const repoRoot = await toplevel(opts.repoCwd)
   if (!repoRoot) throw new Error('Worktrees need a Git repository. This folder is not under version control.')
+  if (opts.target) opts = { ...opts, target: await localBranchFor(repoRoot, opts.target) }
   const id = opts.reuse?.id ?? shortId()
   const dir = opts.reuse?.path ?? path.join(worktreeRoot(), `${path.basename(repoRoot)}-${opts.name ? opts.name.replace(/[^\w.-]+/g, '-') + '-' : ''}${id}`)
   const carried = opts.carryChanges ? await captureChanges(repoRoot) : undefined

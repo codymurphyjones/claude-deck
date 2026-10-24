@@ -6,6 +6,8 @@ import { attempt, focusSessionTab, get, loadJobs, loadScripts, openInEditor, ope
 import { cacheGet, cacheSet } from '../viewCache'
 import { Icon } from './Icon'
 import { ChatBranchBar } from './ChatBranchBar'
+import { WorktreeChanges } from './WorktreeChanges'
+import { newChatMenu } from '../branchActions'
 import { runRoutine } from './Routines'
 import { useRoutines } from './Jobs'
 import { shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
@@ -96,9 +98,16 @@ function Home({ project: p, active }: { project: Project; active: boolean }) {
       </div>
 
       <div className="ph-actions">
-        <button className="btn primary" onClick={() => openSession('agent', { cwd: root })}>
-          <Icon name="plus" size={13} /> New chat
-        </button>
+        <span className="btn-split">
+          <button className="btn primary" title={gi?.branch ? `New chat on ${gi.branch}` : undefined} onClick={() => openSession('agent', { cwd: root })}>
+            <Icon name="plus" size={13} /> New chat{gi?.branch ? ` on ${gi.branch}` : ''}
+          </button>
+          {gi?.isRepo && (
+            <button className="btn primary" title="New chat on another branch" onClick={(e) => void newChatMenu(e.currentTarget, root)}>
+              <Icon name="chevron-down" size={12} />
+            </button>
+          )}
+        </span>
         <button className="btn" disabled={!gi?.isRepo} title={gi?.isRepo ? 'A chat in its own git worktree' : 'Worktrees need a Git repository'} onClick={() => openSession('agent', { cwd: root, worktree: {} })}>
           <Icon name="branch" size={13} /> New worktree chat
         </button>
@@ -215,6 +224,8 @@ function GitCard({ root, git }: { root: string; git?: GitSnapshot }) {
             <span className="grow">{gi.dirty ? `${gi.dirty} uncommitted change${gi.dirty === 1 ? '' : 's'}${gi.staged ? ` (${gi.staged} staged)` : ''}` : 'Working tree clean'}</span>
             {!!gi.dirty && <Icon name="chevron-right" size={12} style={{ color: 'var(--muted)' }} />}
           </div>
+          {/* Chats edit in their own worktrees, which the folder's status above doesn't include. */}
+          <WorktreeChanges root={root} heading={<div className="ph-sub-label">In chat worktrees</div>} />
           {openPr && (
             <div className="list-item" onClick={() => api.shell.openExternal(openPr.url)} title="Open the pull request">
               <Icon name="pr" size={13} style={{ color: 'var(--accent)' }} />
