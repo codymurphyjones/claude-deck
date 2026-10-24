@@ -33,6 +33,7 @@ beforeAll(() => {
   fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n')
   fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
   g(repo, 'init', '-q', '-b', 'master')
+  g(repo, 'config', 'core.autocrlf', 'false')
   g(repo, 'add', '.')
   g(repo, 'commit', '-qm', 'base')
 }, 60_000)

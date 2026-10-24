@@ -37,6 +37,11 @@ beforeEach(() => {
   execFileSync('git', ['init', '-q', '--bare', '-b', 'master', origin])
   fs.mkdirSync(repo)
   g(repo, 'init', '-q', '-b', 'master')
+  // The code under test commits merges itself, so the repo needs an identity of its own (CI machines
+  // have no global one), and no line-ending conversion, so file contents are the same everywhere.
+  g(repo, 'config', 'user.email', 't@t')
+  g(repo, 'config', 'user.name', 'Tester')
+  g(repo, 'config', 'core.autocrlf', 'false')
   write(repo, 'f.txt', 'one\ntwo\nthree\n')
   g(repo, 'add', '.')
   g(repo, 'commit', '-qm', 'base')
