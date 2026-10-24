@@ -15,6 +15,7 @@ import type {
   UpdateState
 } from '@shared/types'
 import type { JobDef, JobRun, JobSource } from '@shared/jobs'
+import type { ProgressEvent } from '@shared/types'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import { api, errMsg, type Library, type LiveSession } from './api'
 
@@ -107,6 +108,8 @@ export interface UiState {
   mesh: Record<string, MeshGroupState>
   timeline: TimelineEvent[]
   toasts: ToastMessage[]
+  /** Long operations in progress (worktrees being made…), shown as toasts with an ETA ring. */
+  progress: ProgressEvent[]
   savedTabs: OpenTabState[]
   pinnedReviews: string[]
   closedStack: { cwd: string; provider?: ProviderId; agentSessionId?: string; name: string }[]
@@ -147,6 +150,7 @@ export interface UiState {
    * Chat merges waiting to update a folder that has uncommitted changes (the user chose "hold and
    * ask"): shown as a banner with Update now / Later.
    */
+  /** `push`: the merge was asked to push the target too. */
   heldMerges: { worktreeId: string; target: string; checkout: string; files: string[]; chat: string }[]
   prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }
   fileToOpen?: { path: string; sessionId?: string }
@@ -192,6 +196,7 @@ export const useStore = create<UiState>(() => ({
   mesh: {},
   timeline: [],
   toasts: [],
+  progress: [],
   savedTabs: [],
   pinnedReviews: [],
   closedStack: [],

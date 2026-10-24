@@ -21,6 +21,7 @@ vi.mock('../src/main/context', () => ({
 }))
 vi.mock('../src/main/library', () => ({ findProjectForFolder: () => undefined, emitLibrary: () => undefined }))
 vi.mock('../src/main/runtime', () => ({ runtime: { userData: os.tmpdir() } }))
+vi.mock('../src/main/progress', () => ({ withProgress: (_key: string, _label: string, fn: (p: unknown) => unknown) => fn({ step: () => undefined, done: () => undefined, fail: () => undefined }) }))
 
 let repo: string
 const g = (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=Tester', ...args], { cwd, encoding: 'utf8' }).trim()
@@ -98,7 +99,10 @@ describe('starting from another chat or branch', () => {
     expect(g(copy.path, 'rev-parse', 'HEAD')).toBe(g(chat.path, 'rev-parse', 'HEAD'))
     expect(copy.target).toBe(chat.branch)
     expect(g(copy.path, 'branch', '--show-current')).toBe(copy.branch)
-    expect(copy.repoRoot).toBe(repo)
+    // It belongs to the repo, not to the chat's worktree. (Compared with what git reported for the
+    // chat: CI's temp dir can be an 8.3 short path, e.g. RUNNER~1, that git spells out in full.)
+    expect(copy.repoRoot).toBe(chat.repoRoot)
+    expect(copy.repoRoot).not.toBe(chat.path)
     // The chat's own worktree (and its staging) is left exactly as it was.
     expect(g(chat.path, 'status', '--porcelain')).toBe(before)
   })
@@ -110,5 +114,34 @@ describe('starting from another chat or branch', () => {
     expect(await localBranchFor(repo, 'origin/feature')).toBe('feature')
     expect(g(repo, 'rev-parse', '--abbrev-ref', 'feature@{upstream}')).toBe('origin/feature')
     expect(await localBranchFor(repo, 'master')).toBe('master')
+  })
+})
+
+describe('active branches held in the data folder', () => {
+  it('checks a branch out in Claude Deck, refuses a second checkout, and releases it keeping the branch', async () => {
+    const { checkoutBranch, releaseBranch } = await import('../src/main/worktrees/worktreeService')
+    g(repo, 'branch', 'topic')
+    const w = await checkoutBranch(repo, 'topic')
+    expect(w).toMatchObject({ holdsBranch: true, permanent: true, branch: 'topic' })
+    expect(g(w.path, 'branch', '--show-current')).toBe('topic')
+    // The folder's own branch, and a branch already held, can't be checked out again.
+    await expect(checkoutBranch(repo, 'master')).rejects.toThrow(/already checked out/)
+    await expect(checkoutBranch(repo, 'topic')).rejects.toThrow(/already checked out/)
+    // Not while chats work toward it, nor with uncommitted changes.
+    await expect(releaseBranch(w.id, ['Some chat'])).rejects.toThrow(/Some chat/)
+    fs.writeFileSync(path.join(w.path, 'wip.txt'), 'wip\n')
+    await expect(releaseBranch(w.id)).rejects.toThrow(/uncommitted/)
+    fs.rmSync(path.join(w.path, 'wip.txt'))
+    await releaseBranch(w.id)
+    expect(fs.existsSync(w.path)).toBe(false)
+    expect(g(repo, 'branch', '--list', 'topic')).toContain('topic')
+  })
+
+  it('creates a new branch off a ref, checked out in Claude Deck', async () => {
+    const { checkoutBranch } = await import('../src/main/worktrees/worktreeService')
+    const w = await checkoutBranch(repo, 'fresh', { from: 'master' })
+    expect(g(w.path, 'branch', '--show-current')).toBe('fresh')
+    expect(g(w.path, 'rev-parse', 'HEAD')).toBe(g(repo, 'rev-parse', 'master'))
+    await expect(checkoutBranch(repo, 'fresh', { from: 'master' })).rejects.toThrow(/already exists/)
   })
 })

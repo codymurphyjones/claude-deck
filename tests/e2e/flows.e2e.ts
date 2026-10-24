@@ -72,6 +72,23 @@ test.describe('with a project folder', () => {
     })
   })
 
+  test('makes a branch active from the Chats view, checked out in the data folder, and lists it with the folder’s branch', async ({ deck }) => {
+    const { page, repo } = deck
+    await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
+    const sidebar = page.locator('.sidebar:not(.collapsed)')
+    await expect(sidebar.locator('.branch-label', { hasText: 'main' }).first()).toContainText('checked out')
+    await sidebar.getByTitle(/^Make a branch active/).click()
+    await page.locator('.menu').getByText(/^New branch off main/).click()
+    await page.locator('.modal input.input').fill('feature-x')
+    await page.locator('.modal').getByRole('button', { name: 'OK' }).click()
+    const group = sidebar.locator('.branch-label', { hasText: 'feature-x' })
+    await expect(group).toContainText('in Claude Deck')
+    // Checked out in the data folder, not in the user's folder (still on main).
+    await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/feature-x')
+    expect(git(repo, 'branch', '--show-current')).toBe('main')
+    expect(logErrors(deck)).toEqual([])
+  })
+
   test('a chat in its own worktree merges into the checked-out branch, waiting while the folder has local changes', async ({ deck }) => {
     const { page, repo } = deck
     await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
@@ -91,6 +108,10 @@ test.describe('with a project folder', () => {
     const bar = page.getByTestId('review-pane').locator('.chat-branch-bar')
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await expect(bar).toContainText('1 to merge')
+    // A worktree's work only leaves by merging: no push or pull request of its own.
+    const review = page.getByTestId('review-pane')
+    await expect(review.getByRole('button', { name: /Merge into main/ }).last()).toBeVisible()
+    await expect(review.getByRole('button', { name: /Commit & push|Create PR|^Push/ })).toHaveCount(0)
     await bar.getByRole('button', { name: /Merge into main/ }).click()
 
     // The folder has an uncommitted edit (notes.txt), so the update waits to be confirmed.
@@ -102,7 +123,8 @@ test.describe('with a project folder', () => {
     expect(git(repo, 'log', '-1', '--format=%s')).toBe('Add feature from chat')
     // The user's own edit survived.
     // (git may rewrite its line endings per core.autocrlf when re-applying it.)
-    expect(fs.readFileSync(path.join(repo, 'notes.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('first line\nsecond line\n')
+    // (It's re-applied just after the fast-forward that brought feature.txt, so wait for it.)
+    await expect.poll(() => fs.readFileSync(path.join(repo, 'notes.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('first line\nsecond line\n')
     expect(logErrors(deck)).toEqual([])
   })
 })

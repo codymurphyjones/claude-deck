@@ -1,4 +1,4 @@
-import type { AuthStatus, Automation, AutomationRun, MeshGroupState, SessionInfo, Settings, TimelineEvent, ToastMessage, UpdateState } from '@shared/types'
+import type { AuthStatus, Automation, AutomationRun, MeshGroupState, ProgressEvent, SessionInfo, Settings, TimelineEvent, ToastMessage, UpdateState } from '@shared/types'
 import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
@@ -185,6 +185,11 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
   bridge.on('mesh:changed', (g: MeshGroupState) => set((st) => ({ mesh: { ...st.mesh, [g.key]: g } })))
   bridge.on('timeline:event', (ev: TimelineEvent) => set((st) => ({ timeline: [...st.timeline.slice(-999), ev] })))
   bridge.on('toast', (t: ToastMessage) => toast(t.text, t.kind))
+  // Long operations: shown while running; a finished one lingers a moment so the full ring is seen.
+  bridge.on('progress', (p: ProgressEvent) => {
+    set((s) => ({ progress: [...s.progress.filter((x) => x.id !== p.id), p] }))
+    if (p.state !== 'running') setTimeout(() => set((s) => ({ progress: s.progress.filter((x) => x.id !== p.id) })), p.state === 'done' ? 900 : 4000)
+  })
   bridge.on('settings:changed', (settings: Settings) => {
     set({ settings })
     applyLook()

@@ -138,7 +138,7 @@ export function RoutineRunDialog() {
   // Interactive chat: the branch ('' = checked out) or conversation it starts from.
   const [chatBranch, setChatBranch] = useState('')
   const [chatFrom, setChatFrom] = useState<string | undefined>()
-  const [repoBranches, setRepoBranches] = useState<{ current?: string; local: string[]; remote: string[] }>({ local: [], remote: [] })
+  const [repoBranches, setRepoBranches] = useState<{ current?: string; held: string[]; local: string[]; remote: string[] }>({ held: [], local: [], remote: [] })
   const [preview, setPreview] = useState(false)
   const [busy, setBusy] = useState(false)
   const job = routines?.find((j) => j.slug === slug)
@@ -166,7 +166,7 @@ export function RoutineRunDialog() {
     setChatBranch('')
     setChatFrom(undefined)
     setOpts((o) => ({ ...o, branch: undefined, from: undefined }))
-    if (!cwd) return setRepoBranches({ local: [], remote: [] })
+    if (!cwd) return setRepoBranches({ held: [], local: [], remote: [] })
     let live = true
     void startableBranches(cwd).then((b) => live && setRepoBranches(b))
     return () => {
@@ -306,7 +306,7 @@ export function RoutineRunDialog() {
               Branch or conversation
               <BranchOrChatSelect
                 root={cwd}
-                branches={repoBranches.local}
+                branches={[...repoBranches.held, ...repoBranches.local]}
                 remote={repoBranches.remote}
                 current={repoBranches.current}
                 branch={chatBranch}

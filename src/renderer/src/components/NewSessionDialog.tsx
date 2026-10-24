@@ -63,7 +63,7 @@ export function NewSessionDialog() {
       if (g.isRepo) {
         void startableBranches(cwd).then((b) => {
           if (!live) return
-          setBranches(b.local.filter((x) => x !== g.branch))
+          setBranches([...b.held, ...b.local].filter((x) => x !== g.branch))
           setRemoteBranches(b.remote)
         })
         if (perChat || pre.worktree) setWhere('worktree')

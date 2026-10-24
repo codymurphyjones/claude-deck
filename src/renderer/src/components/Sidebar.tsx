@@ -4,8 +4,8 @@ import type { ChatRecord, GitInfo, Project, TranscriptSummary, WorktreeRecord } 
 import { api, bridge } from '../api'
 import { runCommand } from '../commands'
 import { cacheGet } from '../viewCache'
-import { askText, attempt, focusSessionTab, get, openProjectHome, openSession, QUICK, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
-import { newChatMenu, newChatOnBranch } from '../branchActions'
+import { askText, attempt, focusSessionTab, get, openInEditor, openProjectHome, openSession, QUICK, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
+import { activateBranchMenu, newChatMenu, newChatOnBranch } from '../branchActions'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
@@ -188,10 +188,58 @@ function ProjectChatsView({ project: p }: { project: Project }) {
     const w = c.worktreeId ? lib.worktrees.find((x) => x.id === c.worktreeId) : undefined
     return w?.target ?? w?.branch ?? c.branch ?? 'No branch'
   }
+  // Active branches: the folder's checked-out one and those held in Claude Deck's data folder. They
+  // always show (even without chats), first; then other branches chats worked on, by recent use.
+  const held = lib.worktrees.filter((w) => w.projectId === p.id && w.holdsBranch && !w.deleted && w.branch)
+  const heldBy = new Map(held.map((w) => [w.branch!, w]))
   const groups = new Map<string, ChatRecord[]>()
+  if (checkedOut && !ql) groups.set(checkedOut, [])
+  if (!ql) for (const w of held) groups.set(w.branch!, [])
   for (const c of shown.filter((x) => !x.pinned).sort((x, y) => y.updatedAt - x.updatedAt)) groups.set(branchOf(c), [...(groups.get(branchOf(c)) ?? []), c])
-  const ordered = [...groups.entries()].sort(([x, cx], [y, cy]) => Number(y === checkedOut) - Number(x === checkedOut) || cy[0].updatedAt - cx[0].updatedAt)
-  const wts = lib.worktrees.filter((w) => w.projectId === p.id && (w.permanent || w.deleted))
+  const rank = (b: string): number => (b === checkedOut ? 0 : heldBy.has(b) ? 1 : 2)
+  const ordered = [...groups.entries()].sort(([x, cx], [y, cy]) => rank(x) - rank(y) || (cy[0]?.updatedAt ?? 0) - (cx[0]?.updatedAt ?? 0))
+  const wts = lib.worktrees.filter((w) => w.projectId === p.id && !w.holdsBranch && (w.permanent || w.deleted))
+
+  // The clean-up for an active branch: its folder in Claude Deck, plus every chat worktree built on it.
+  const deleteHeldBranch = async (w: WorktreeRecord): Promise<void> => {
+    const deps = lib.worktrees.filter((x) => !x.deleted && x.target === w.branch && x.repoRoot.toLowerCase() === w.repoRoot.toLowerCase())
+    const chats = lib.chats.filter((c) => !c.archived && (c.worktreeId === w.id || deps.some((d) => d.id === c.worktreeId)))
+    const c = await api.dialog.confirm(
+      `Delete ${w.branch} from Claude Deck?`,
+      [
+        `Removes ${w.branch}'s folder in Claude Deck's data folder (${w.path}).`,
+        deps.length
+          ? `${deps.length} chat worktree${deps.length === 1 ? ' is' : 's are'} built on it and will break, so ${deps.length === 1 ? 'it is' : 'they are'} deleted too (uncommitted work is kept as a restorable snapshot), and ${chats.length} conversation${chats.length === 1 ? ' is' : 's are'} archived.`
+          : chats.length
+            ? `${chats.length} conversation${chats.length === 1 ? ' is' : 's are'} archived.`
+            : '',
+        `The git branch ${w.branch} itself is kept, so you can make it active again from Branches (+) at any time.`
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      ['Delete from Claude Deck', 'Cancel']
+    )
+    if (c === 0) await attempt(() => api.worktree.releaseBranch(w.id), `${w.branch} was removed from Claude Deck`)
+  }
+
+  const branchMenu = (e: React.MouseEvent, branch: string): void => {
+    e.stopPropagation()
+    const w = heldBy.get(branch)
+    openMenu(e, [
+      { label: `New chat on ${branch}`, icon: 'plus', onClick: () => newChatOnBranch(root, branch, checkedOut) },
+      ...(w
+        ? [
+            { label: 'Open in editor', icon: 'code', onClick: () => openInEditor(w.path, { root: w.path }) },
+            { label: 'Reveal folder', icon: 'folder-open', onClick: () => api.shell.openPath(w.path) },
+            { label: `Push ${branch}`, icon: 'upload', onClick: () => attempt(() => api.branches.push(w.repoRoot, branch), `Pushed ${branch}`) },
+            { separator: true },
+            { label: 'Delete branch from Claude Deck…', icon: 'trash', danger: true, onClick: () => void deleteHeldBranch(w) }
+          ]
+        : branch !== checkedOut && branch !== 'No branch'
+          ? [{ label: 'Make active (check out in Claude Deck)', icon: 'branch', onClick: () => attempt(() => api.worktree.checkoutBranch(root, branch), `${branch} is now active in Claude Deck`) }]
+          : [])
+    ])
+  }
 
   const runSearch = async (): Promise<void> => {
     if (q.trim().length < 2) return setResults(null)
@@ -264,17 +312,25 @@ function ProjectChatsView({ project: p }: { project: Project }) {
           </div>
         )}
         {mine.length > 0 && !shown.length && <div className="empty-note">No chats match.</div>}
+        <div className="section-label branches-head">
+          <span className="grow">Branches</span>
+          <button className="icon-btn sm" title="Make a branch active: check it out in Claude Deck’s data folder, next to your folder’s branch, so chats can work toward it" onClick={(e) => void activateBranchMenu(e.currentTarget, root)}>
+            <Icon name="plus" size={12} />
+          </button>
+        </div>
         {ordered.map(([branch, chats]) => (
           <div key={branch}>
             <div
               className="section-label branch-label"
               onClick={() => setFolded((f) => ({ ...f, [branch]: !f[branch] }))}
-              title={branch === checkedOut ? 'The branch your folder has checked out' : undefined}
+              onContextMenu={(e) => branchMenu(e, branch)}
+              title={branch === checkedOut ? 'The branch your folder has checked out' : heldBy.has(branch) ? `Checked out in Claude Deck: ${heldBy.get(branch)!.path}` : undefined}
             >
               <Icon name={folded[branch] ? 'chevron-right' : 'chevron-down'} size={11} />
               <Icon name="branch" size={11} />
               <span className="ellipsis">{branch}</span>
               {branch === checkedOut && <span className="badge accent">checked out</span>}
+              {heldBy.has(branch) && <span className="badge">in Claude Deck</span>}
               <span className="grow" />
               {branch !== 'No branch' && (
                 <button
@@ -285,8 +341,14 @@ function ProjectChatsView({ project: p }: { project: Project }) {
                   <Icon name="plus" size={12} />
                 </button>
               )}
+              {branch !== 'No branch' && (
+                <button className="icon-btn sm" title="Branch options" onClick={(e) => branchMenu(e, branch)}>
+                  <Icon name="more" size={12} />
+                </button>
+              )}
               <span className="sub">{chats.length}</span>
             </div>
+            {!folded[branch] && !chats.length && <div className="empty-note branch-empty">No chats on {branch} yet.</div>}
             {!folded[branch] &&
               chats.slice(0, 40).map((c) => <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />)}
           </div>

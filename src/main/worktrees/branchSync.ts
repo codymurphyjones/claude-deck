@@ -8,10 +8,11 @@ import { getWorktree, touchWorktree } from './worktreeService'
 // on a sub-branch off a target branch, and "Merge into <target>" brings its work back:
 //  1. the chat's branch first takes in the target's newer commits, in the chat's worktree, so any
 //     conflicts are resolved there (by the user or the chat), never in the user's folder;
-//  2. then the target moves forward to it. If the target is checked out in a folder (normally the
-//     user's own: their "selected" branch), that folder is fast-forwarded right away, unless it has
-//     uncommitted changes: then the update is held until they say so. A target that isn't checked
-//     out anywhere is updated directly and pushed, so switching to it later finds it current.
+//  2. then the target moves forward to it, in the folder that has it checked out: the user's own (their
+//     "selected" branch) or the branch's copy held in Claude Deck's data folder (an active branch). It's
+//     fast-forwarded right away, unless it has uncommitted changes: then the update is held until they
+//     say so. A target that isn't checked out anywhere isn't merged into ('inactive'): it's made
+//     active first. Nothing is pushed here; that's done from the target's folder.
 // Nothing here overwrites a branch that has diverged; that is reported for the user to resolve.
 
 const lines = (s: string): string[] =>
@@ -20,14 +21,13 @@ const lines = (s: string): string[] =>
     .map((l) => l.trim())
     .filter(Boolean)
 const count = async (cwd: string, range: string): Promise<number> => +(await git(cwd, ['rev-list', '--count', range])).stdout.trim() || 0
-const same = (a: string, b: string): boolean => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 
 /** Where each local branch is checked out (from `git worktree list --porcelain`). */
 async function checkouts(repo: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   let at = ''
   for (const l of (await git(repo, ['worktree', 'list', '--porcelain'])).stdout.split('\n')) {
-    if (l.startsWith('worktree ')) at = l.slice(9).trim()
+    if (l.startsWith('worktree ')) at = path.normalize(l.slice(9).trim())
     else if (l.startsWith('branch refs/heads/')) out.set(l.slice(18).trim(), at)
   }
   return out
@@ -67,10 +67,9 @@ export async function chatBranchStatus(id: string): Promise<ChatBranchStatus> {
 /**
  * Merge a chat's worktree branch into its target (see the top of this file). `stashLocal`: the
  * target's checkout has uncommitted changes and the user chose to update anyway (they're stashed
- * and re-applied). `push`: push the target afterwards; by default only when it isn't checked out
- * by the user (their selected branch is theirs to push).
+ * and re-applied).
  */
-export async function mergeIntoTarget(id: string, opts: { stashLocal?: boolean; push?: boolean } = {}): Promise<ChatMergeResult> {
+export async function mergeIntoTarget(id: string, opts: { stashLocal?: boolean } = {}): Promise<ChatMergeResult> {
   let w: ReturnType<typeof needChat>
   try {
     w = needChat(id)
@@ -87,6 +86,9 @@ export async function mergeIntoTarget(id: string, opts: { stashLocal?: boolean; 
   if (dirty.length) return { status: 'uncommitted', files: dirty }
   const ahead = await count(wt, `${target}..${branch}`)
   if (!ahead) return { status: 'nothing', target }
+  // Work is only merged into a local checkout of the target: the user's folder, or the branch held in
+  // Claude Deck's data folder. Pushing is done from there, never straight from a chat's worktree.
+  if (!(await checkouts(repo)).get(target)) return { status: 'inactive', target }
 
   // 2. Take in the target's newer commits here, so conflicts surface in the chat's worktree.
   if (await count(wt, `${branch}..${target}`)) {
@@ -99,47 +101,27 @@ export async function mergeIntoTarget(id: string, opts: { stashLocal?: boolean; 
     }
   }
   const tip = (await git(wt, ['rev-parse', branch])).stdout.trim()
-  const old = (await git(repo, ['rev-parse', `refs/heads/${target}`])).stdout.trim()
 
-  // 3. Move the target forward: in the folder that has it checked out, or the ref itself.
+  // 3. Move the target forward in the folder that has it checked out.
   const where = (await checkouts(repo)).get(target)
-  let updated: string | undefined
+  if (!where) return { status: 'inactive', target }
   let stashConflict = false
-  if (where) {
-    const local = await trackedChanges(where)
-    if (local.length && !opts.stashLocal) return { status: 'held', target, checkout: where, files: local }
-    let stashed = false
-    if (local.length) {
-      const st = await git(where, ['stash', 'push', '-m', `claude-deck: local changes before merging ${branch}`])
-      stashed = st.code === 0 && !/No local changes/i.test(st.stdout)
-    }
-    const ff = await git(where, ['merge', '--ff-only', tip])
-    if (ff.code !== 0) {
-      if (stashed) await git(where, ['stash', 'pop'])
-      return { status: 'error', message: ff.stderr.trim() || `Couldn't fast-forward ${target}.` }
-    }
-    if (stashed && (await git(where, ['stash', 'pop'])).code !== 0) stashConflict = true
-    updated = where
-  } else {
-    const u = await git(repo, ['update-ref', `refs/heads/${target}`, tip, old])
-    if (u.code !== 0) return { status: 'error', message: u.stderr.trim() || `${target} moved while merging; try again.` }
+  const local = await trackedChanges(where)
+  if (local.length && !opts.stashLocal) return { status: 'held', target, checkout: where, files: local }
+  let stashed = false
+  if (local.length) {
+    const st = await git(where, ['stash', 'push', '-m', `claude-deck: local changes before merging ${branch}`])
+    stashed = st.code === 0 && !/No local changes/i.test(st.stdout)
   }
-
-  // 4. Push a branch the user isn't on, so switching to it later finds it current.
-  let pushed: boolean | undefined
-  let pushError: string | undefined
-  const userFolder = where && !same(where, wt) ? where : undefined
-  if (opts.push ?? !userFolder) {
-    const remote = (await git(repo, ['config', `branch.${target}.remote`])).stdout.trim() || ((await git(repo, ['remote'])).stdout.split('\n')[0] ?? '').trim()
-    if (remote) {
-      const p = await git(repo, ['push', remote, `refs/heads/${target}:refs/heads/${target}`], undefined, 120_000)
-      pushed = p.code === 0
-      if (!pushed) pushError = p.stderr.trim()
-    }
+  const ff = await git(where, ['merge', '--ff-only', tip])
+  if (ff.code !== 0) {
+    if (stashed) await git(where, ['stash', 'pop'])
+    return { status: 'error', message: ff.stderr.trim() || `Couldn't fast-forward ${target}.` }
   }
+  if (stashed && (await git(where, ['stash', 'pop'])).code !== 0) stashConflict = true
   touchWorktree(id)
   broadcast('branches:changed', { repo, branch: target })
-  return { status: 'merged', target, commits: ahead, updated, pushed, pushError, stashConflict }
+  return { status: 'merged', target, commits: ahead, updated: where, stashConflict }
 }
 
 /** Push one local branch (not necessarily the checked-out one) to its remote. */

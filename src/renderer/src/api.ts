@@ -199,11 +199,13 @@ export const api = {
     restore: c<WorktreeRecord, [string]>('worktree.restore'),
     createBranch: c<string, [string, string, boolean?]>('worktree.createBranch'),
     createPermanent: c<WorktreeRecord, [string, string?]>('worktree.createPermanent'),
-    forget: c<void, [string]>('worktree.forget')
+    forget: c<void, [string]>('worktree.forget'),
+    checkoutBranch: c<WorktreeRecord, [string, string, { from?: string }?]>('worktree.checkoutBranch'),
+    releaseBranch: c<void, [string]>('worktree.releaseBranch')
   },
   branches: {
     status: c<ChatBranchStatus, [string]>('branches.status'),
-    merge: c<ChatMergeResult, [string, { stashLocal?: boolean; push?: boolean }?]>('branches.merge'),
+    merge: c<ChatMergeResult, [string, { stashLocal?: boolean }?]>('branches.merge'),
     vsRemote: c<BranchVsRemote, [string, string]>('branches.vsRemote'),
     push: c<void, [string, string]>('branches.push')
   },

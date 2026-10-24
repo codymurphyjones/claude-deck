@@ -141,6 +141,11 @@ export interface WorktreeRecord {
   branch?: string
   /** The branch this worktree's branch merges into (a chat's sub-branch is made off it). */
   target?: string
+  /**
+   * Holds `branch` checked out in Claude Deck's data folder, so it's an active branch of the project
+   * next to the folder's own: chats can work toward it, and merges update it here (and push it).
+   */
+  holdsBranch?: boolean
   permanent: boolean
   createdAt: number
   lastUsed: number
@@ -148,6 +153,18 @@ export interface WorktreeRecord {
   snapshot?: string
   snapshotHead?: string
   deleted?: boolean
+}
+
+/** A long operation in progress (shown as a toast with a ring filling toward its ETA). */
+export interface ProgressEvent {
+  id: string
+  label: string
+  /** The current step. */
+  detail?: string
+  startedAt: number
+  /** How long it's expected to take, learned from recent runs. */
+  expectedMs: number
+  state: 'running' | 'done' | 'error'
 }
 
 /** Where a worktree chat stands relative to the branch it merges into. */
@@ -168,11 +185,13 @@ export interface ChatBranchStatus {
 
 /** What "Merge into <target>" did. */
 export type ChatMergeResult =
-  | { status: 'merged'; target: string; commits: number; updated?: string; pushed?: boolean; pushError?: string; stashConflict?: boolean }
+  | { status: 'merged'; target: string; commits: number; updated?: string; stashConflict?: boolean }
   | { status: 'nothing'; target: string }
   | { status: 'uncommitted'; files: string[] }
   | { status: 'conflicts'; target: string; files: string[] }
   | { status: 'held'; target: string; checkout: string; files: string[] }
+  /** The target isn't checked out locally (neither the user's folder nor Claude Deck's): make it active first. */
+  | { status: 'inactive'; target: string }
   | { status: 'error'; message: string }
 
 /** A local branch compared with its copy on the remote (before switching to it). */

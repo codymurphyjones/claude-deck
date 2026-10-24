@@ -1,7 +1,7 @@
-import type { BranchInfo } from '@shared/repo'
+import { refNameError, type BranchInfo } from '@shared/repo'
 import type { ChatMergeResult, LaunchOptions } from '@shared/types'
 import { api, errMsg } from './api'
-import { get, openInEditor, openSession, set, toast } from './store'
+import { askText, attempt, get, openInEditor, openSession, set, toast } from './store'
 import { openMenuAt } from './components/ui'
 
 // Branch actions for chats that work in their own worktrees (main: worktrees/branchSync.ts).
@@ -31,9 +31,8 @@ export async function mergeChat(worktreeId: string, opts: { stashLocal?: boolean
   set((s) => ({ heldMerges: s.heldMerges.filter((h) => h.worktreeId !== worktreeId) }))
   switch (r.status) {
     case 'merged': {
-      const where = r.updated ? ' Your folder is up to date.' : r.pushed ? ' and pushed it.' : ''
-      toast(`Merged ${plural(r.commits, 'commit')} into ${r.target}.${where}`, 'success')
-      if (r.pushError) toast(`Merged into ${r.target}, but pushing it failed: ${r.pushError.split('\n')[0]}`, 'error')
+      const inDeck = !!r.updated && get().library.worktrees.some((x) => x.holdsBranch && x.path.toLowerCase() === r.updated!.toLowerCase())
+      toast(`Merged ${plural(r.commits, 'commit')} into ${r.target}. ${inDeck ? `Push it from ${r.target}'s branch options when ready.` : 'Your folder is up to date.'}`, 'success')
       if (r.stashConflict) toast(`Your uncommitted changes conflicted when re-applied on top of ${r.target}; they're kept in git stash.`, 'error')
       break
     }
@@ -73,6 +72,17 @@ export async function mergeChat(worktreeId: string, opts: { stashLocal?: boolean
     case 'held':
       set((s) => ({ heldMerges: [...s.heldMerges, { worktreeId, target: r.target, checkout: r.checkout, files: r.files, chat: chat?.name ?? w?.branch ?? 'a chat' }] }))
       break
+    case 'inactive': {
+      // Only merged into a local checkout: offer to check the branch out in Claude Deck first.
+      const c = await api.dialog.confirm(
+        `${r.target} isn't checked out locally`,
+        `Chats merge into a branch's local folder: yours, or a copy in Claude Deck's data folder. Check ${r.target} out in Claude Deck (an active branch on the Chats page) and merge?`,
+        [`Check out ${r.target} and merge`, 'Cancel']
+      )
+      if (c !== 0 || !w) break
+      if ((await attempt(() => api.worktree.checkoutBranch(w.repoRoot, r.target), `${r.target} is now active in Claude Deck`)) === undefined) break
+      return mergeChat(worktreeId, opts)
+    }
     case 'error':
       toast(r.message, 'error')
       break
@@ -150,29 +160,63 @@ export function newChatOnBranch(root: string, branch?: string, current?: string,
   return openSession('agent', { cwd: root, ...extra, worktree: { target: branch } })
 }
 
-/** Branches to offer when starting work: local ones by recent use, then remote ones with no local branch. */
-export async function startableBranches(root: string): Promise<{ current?: string; local: string[]; remote: string[] }> {
+/**
+ * The repo's branches for starting work: the folder's checked-out one, the ones held in Claude Deck's
+ * data folder (active branches), other local ones by recent use, and remote ones with no local branch.
+ * Chats' own sub-branches aren't listed: they're reached through their chats.
+ */
+export async function startableBranches(root: string): Promise<{ current?: string; held: string[]; local: string[]; remote: string[] }> {
   const all = await api.repo.branches(root).catch(() => [] as BranchInfo[])
-  const local = all.filter((b) => !b.remote)
+  const wts = get().library.worktrees.filter((w) => !w.deleted)
+  const chatBranches = new Set(wts.filter((w) => w.target).map((w) => w.branch))
+  const local = all.filter((b) => !b.remote && !chatBranches.has(b.name))
   const tracked = new Set(local.map((b) => b.upstream).filter(Boolean))
   const names = new Set(local.map((b) => b.name))
+  const current = all.find((b) => !b.remote && b.current)?.name
+  const heldSet = new Set(wts.filter((w) => w.holdsBranch && w.branch).map((w) => w.branch!))
   return {
-    current: local.find((b) => b.current)?.name,
-    local: local.map((b) => b.name),
+    current,
+    held: local.filter((b) => heldSet.has(b.name)).map((b) => b.name),
+    local: local.map((b) => b.name).filter((b) => b !== current && !heldSet.has(b)),
     remote: all.filter((b) => b.remote && !tracked.has(b.name) && !names.has(b.name.slice(b.name.indexOf('/') + 1))).map((b) => b.name)
   }
 }
 
-/** "New chat" with a branch choice: the checked-out branch first (the default), then the others. */
+/** "New chat" with a branch choice: the checked-out branch first (the default), then the active ones, then the rest. */
 export async function newChatMenu(el: HTMLElement, root: string): Promise<void> {
-  const { current, local, remote } = await startableBranches(root)
-  const others = local.filter((b) => b !== current)
+  const { current, held, local, remote } = await startableBranches(root)
   openMenuAt(el, [
     { label: current ? `On ${current} (checked out)` : 'New chat', icon: 'plus', onClick: () => newChatOnBranch(root) },
-    ...(others.length || remote.length ? [{ separator: true }] : []),
-    ...others.slice(0, 12).map((b) => ({ label: b, icon: 'branch', hint: 'own worktree', onClick: () => newChatOnBranch(root, b, current) })),
+    ...held.map((b) => ({ label: `On ${b}`, icon: 'branch', hint: 'active', onClick: () => newChatOnBranch(root, b, current) })),
+    ...(local.length || remote.length ? [{ separator: true }] : []),
+    ...local.slice(0, 10).map((b) => ({ label: b, icon: 'branch', onClick: () => newChatOnBranch(root, b, current) })),
     ...remote.slice(0, 6).map((b) => ({ label: b, icon: 'globe', hint: 'remote', onClick: () => newChatOnBranch(root, b, current) })),
     { separator: true },
     { label: 'More options…', icon: 'more', onClick: () => set({ newSession: { cwd: root } }) }
+  ])
+}
+
+/**
+ * Make a branch active: check it out in Claude Deck's data folder, next to the folder's own branch,
+ * so chats can be pointed at it. Lists branches that aren't active yet, plus "New branch…".
+ */
+export async function activateBranchMenu(el: HTMLElement, root: string): Promise<void> {
+  const { current, local, remote } = await startableBranches(root)
+  const activate = (b: string, from?: string): Promise<unknown> => attempt(() => api.worktree.checkoutBranch(root, b, from ? { from } : undefined), `${b} is now active in Claude Deck`)
+  openMenuAt(el, [
+    {
+      label: `New branch off ${current ?? 'HEAD'}…`,
+      icon: 'plus',
+      onClick: async () => {
+        const name = (await askText(`New branch off ${current ?? 'HEAD'}, checked out in Claude Deck`, ''))?.trim()
+        if (!name) return
+        const bad = refNameError(name)
+        if (bad) return toast(bad, 'error')
+        await activate(name, current ?? 'HEAD')
+      }
+    },
+    ...(local.length || remote.length ? [{ separator: true }] : []),
+    ...local.slice(0, 15).map((b) => ({ label: b, icon: 'branch', onClick: () => activate(b) })),
+    ...remote.slice(0, 8).map((b) => ({ label: b, icon: 'globe', hint: 'remote', onClick: () => activate(b) }))
   ])
 }

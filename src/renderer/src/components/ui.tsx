@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
+import type { ProgressEvent } from '@shared/types'
+import { progressFraction } from '@shared/progress'
 import { useStore } from '../store'
 import { Icon } from './Icon'
 
@@ -140,12 +142,42 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
   )
 }
 
+/** A long operation: a ring filling toward its ETA (learned from earlier runs), and what it's doing. */
+function ProgressToast({ p }: { p: ProgressEvent }) {
+  const now = useNow(200)
+  const elapsed = now - p.startedAt
+  // Quick operations finish before they'd be worth showing.
+  if (p.state === 'running' && elapsed < 500) return null
+  const f = p.state === 'done' ? 1 : progressFraction(elapsed, p.expectedMs)
+  const left = Math.ceil((p.expectedMs - elapsed) / 1000)
+  const R = 9
+  const C = 2 * Math.PI * R
+  return (
+    <div className={`toast progress-toast ${p.state === 'error' ? 'error' : ''}`} data-testid="progress-toast">
+      <svg width="24" height="24" viewBox="0 0 24 24" className="progress-ring" aria-label={`${Math.round(f * 100)}%`}>
+        <circle cx="12" cy="12" r={R} className="track" />
+        <circle cx="12" cy="12" r={R} className="fill" strokeDasharray={C} strokeDashoffset={C * (1 - f)} transform="rotate(-90 12 12)" />
+      </svg>
+      <div className="grow" style={{ minWidth: 0 }}>
+        <div className="ellipsis">{p.label}</div>
+        <div className="sub ellipsis">
+          {p.state === 'done' ? 'Ready' : p.state === 'error' ? 'Failed' : `${p.detail ?? 'Working…'} · ${left > 0 ? `about ${left}s left` : 'taking longer than usual…'}`}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** Transient toasts; `children` (sticky alerts) stack above them. */
 export function Toasts({ children }: { children?: ReactNode }) {
   const toasts = useStore((s) => s.toasts)
+  const progress = useStore((s) => s.progress)
   return (
     <div className="toasts">
       {children}
+      {progress.map((p) => (
+        <ProgressToast key={p.id} p={p} />
+      ))}
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.kind}`}>
           <Icon name={t.kind === 'error' ? 'x' : t.kind === 'success' ? 'check' : 'bell'} size={15} style={{ marginTop: 1, color: t.kind === 'error' ? 'var(--danger)' : t.kind === 'success' ? 'var(--success)' : 'var(--accent)' }} />

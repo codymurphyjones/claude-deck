@@ -7,6 +7,7 @@ import { mustGit, rawGit as git, headSha, toplevel } from '../git/gitService'
 import { findProjectForFolder, emitLibrary } from '../library'
 import { runtime } from '../runtime'
 import { ensureDir, run, shortId } from '../util'
+import { withProgress, type Progress } from '../progress'
 import * as os from 'os'
 
 const worktreeRoot = (): string => ensureDir(settings().worktrees.root || path.join(runtime.userData, 'worktrees'))
@@ -212,7 +213,103 @@ export async function localBranchFor(repoRoot: string, name: string): Promise<st
   return local
 }
 
-export async function createWorktree(opts: {
+/** The folder that has local branch `name` checked out ('' if git doesn't say where), or undefined. */
+export async function checkedOutAt(repoRoot: string, name: string): Promise<string | undefined> {
+  for (const block of (await git(repoRoot, ['worktree', 'list', '--porcelain'])).stdout.replace(/\r/g, '').split(/\n\s*\n/)) {
+    if (block.split('\n').includes(`branch refs/heads/${name}`)) return /^worktree (.+)$/m.exec(block)?.[1]?.trim() ?? ''
+  }
+  return undefined
+}
+
+/**
+ * A chat working toward `target` merges into its local checkout, so make sure there is one: a
+ * branch not checked out anywhere is checked out in Claude Deck (made active). Returns the local
+ * branch name (a remote branch maps to its local one).
+ */
+export async function ensureActiveBranch(repoCwd: string, target: string): Promise<string> {
+  const repoRoot = (await toplevel(repoCwd)) ?? repoCwd
+  const name = await localBranchFor(repoRoot, target)
+  if ((await checkedOutAt(repoRoot, name)) === undefined) await checkoutBranch(repoRoot, name)
+  return name
+}
+
+/**
+ * Make `branch` an active branch of the repo by checking it out in Claude Deck's data folder (a
+ * permanent worktree that holds it). A remote branch gets a local branch tracking it; with `from`,
+ * a new branch is created off that ref. Fails if the branch is already checked out somewhere.
+ */
+export async function checkoutBranch(repoCwd: string, branch: string, opts: { from?: string } = {}): Promise<WorktreeRecord> {
+  const repoRoot = state().worktrees.find((w) => !w.deleted && path.resolve(w.path).toLowerCase() === path.resolve(repoCwd).toLowerCase())?.repoRoot ?? (await toplevel(repoCwd))
+  if (!repoRoot) throw new Error('This folder is not a Git repository.')
+  const exists = async (ref: string): Promise<boolean> => (await git(repoRoot, ['rev-parse', '--verify', '--quiet', ref])).code === 0
+  let name = branch
+  if (opts.from) {
+    if (await exists(`refs/heads/${branch}`)) throw new Error(`A branch named ${branch} already exists.`)
+  } else name = await localBranchFor(repoRoot, branch)
+  // A branch can only be checked out in one place.
+  const at = await checkedOutAt(repoRoot, name)
+  if (at !== undefined) throw new Error(`${name} is already checked out${at ? ` in ${at}` : ''}.`)
+  const id = shortId()
+  const dir = path.join(worktreeRoot(), `${path.basename(repoRoot)}-${name.replace(/[^\w.-]+/g, '-')}-${id}`)
+  await withProgress(`worktree:${repoRoot.toLowerCase()}`, `Checking out ${name} in Claude Deck`, async (p) => {
+    p.step('Checking out files…')
+    await mustGit(repoRoot, opts.from ? ['worktree', 'add', '-b', name, dir, opts.from] : ['worktree', 'add', dir, name])
+    p.step('Copying local files (.worktreeinclude)…')
+    await copyIncluded(repoRoot, dir)
+    if (settings().worktrees.linkNodeModules) {
+      p.step('Linking node_modules…')
+      await linkNodeModules(repoRoot, dir)
+    }
+  })
+  const rec: WorktreeRecord = {
+    id,
+    path: dir,
+    repoRoot,
+    projectId: findProjectForFolder(repoRoot)?.id,
+    baseRef: (await headSha(dir)) ?? name,
+    permanent: true,
+    holdsBranch: true,
+    branch: name,
+    createdAt: Date.now(),
+    lastUsed: Date.now()
+  }
+  updateState((s) => {
+    s.worktrees.unshift(rec)
+  })
+  emitLibrary()
+  return rec
+}
+
+/**
+ * Stop holding a branch in the data folder: removes its checkout there; the branch itself stays.
+ * Refuses while it has uncommitted changes, or while chats work toward it (`inUse`), unless `force`:
+ * then uncommitted changes are kept as a snapshot ref (refs/claude-deck/snapshots/<id>).
+ */
+export async function releaseBranch(id: string, inUse: string[] = [], opts: { force?: boolean } = {}): Promise<void> {
+  const w = getWorktree(id)
+  if (!w || !w.holdsBranch) throw new Error('That branch is no longer held in Claude Deck.')
+  if (inUse.length && !opts.force) throw new Error(`${inUse.length} chat${inUse.length === 1 ? ' works' : 's work'} toward ${w.branch}: ${inUse.join(', ')}. Merge or close them first.`)
+  if (fs.existsSync(w.path)) {
+    if ((await git(w.path, ['status', '--porcelain'])).stdout.trim()) {
+      if (!opts.force) throw new Error(`${w.branch} has uncommitted changes in Claude Deck's copy (${w.path}). Commit or discard them first.`)
+      const snap = await captureChanges(w.path)
+      if (snap) {
+        await git(w.repoRoot, ['update-ref', `refs/claude-deck/snapshots/${w.id}`, snap])
+        toast(`${w.branch}'s uncommitted changes in Claude Deck were kept: git stash apply refs/claude-deck/snapshots/${w.id}`, 'info')
+      }
+    }
+    unlinkNodeModules(w.path)
+  }
+  await git(w.repoRoot, ['worktree', 'remove', '--force', w.path])
+  if (fs.existsSync(w.path)) fs.rmSync(w.path, { recursive: true, force: true })
+  await git(w.repoRoot, ['worktree', 'prune'])
+  updateState((s) => {
+    s.worktrees = s.worktrees.filter((x) => x.id !== id)
+  })
+  emitLibrary()
+}
+
+interface CreateOpts {
   repoCwd: string
   baseRef?: string
   permanent?: boolean
@@ -221,10 +318,18 @@ export async function createWorktree(opts: {
   reuse?: WorktreeRecord
   /** Work toward this local branch: the worktree gets its own sub-branch off it. */
   target?: string
-}): Promise<WorktreeRecord> {
+}
+
+/** A new worktree, with progress (and an ETA learned per repo) shown while it's made. */
+export async function createWorktree(opts: CreateOpts): Promise<WorktreeRecord> {
   const repoRoot = await toplevel(opts.repoCwd)
   if (!repoRoot) throw new Error('Worktrees need a Git repository. This folder is not under version control.')
+  return withProgress(`worktree:${repoRoot.toLowerCase()}`, `Preparing a worktree of ${path.basename(repoRoot)}`, (p) => makeWorktree(repoRoot, opts, p))
+}
+
+async function makeWorktree(repoRoot: string, opts: CreateOpts, p: Progress): Promise<WorktreeRecord> {
   if (opts.target) opts = { ...opts, target: await localBranchFor(repoRoot, opts.target) }
+  p.step('Checking out files…')
   const id = opts.reuse?.id ?? shortId()
   const dir = opts.reuse?.path ?? path.join(worktreeRoot(), `${path.basename(repoRoot)}-${opts.name ? opts.name.replace(/[^\w.-]+/g, '-') + '-' : ''}${id}`)
   const carried = opts.carryChanges ? await captureChanges(repoRoot) : undefined
@@ -242,8 +347,12 @@ export async function createWorktree(opts: {
     if (r.code === 0) await git(dir, ['reset', '-q'])
     else toast('Could not carry local changes into the worktree: ' + r.stderr.trim(), 'error')
   }
+  p.step('Copying local files (.worktreeinclude)…')
   const copied = await copyIncluded(repoRoot, dir)
-  if (settings().worktrees.linkNodeModules) await linkNodeModules(repoRoot, dir)
+  if (settings().worktrees.linkNodeModules) {
+    p.step('Linking node_modules…')
+    await linkNodeModules(repoRoot, dir)
+  }
   const rec: WorktreeRecord = {
     id,
     path: dir,
@@ -345,14 +454,21 @@ export async function restoreWorktree(id: string): Promise<WorktreeRecord> {
   const w = getWorktree(id)
   if (!w) throw new Error('Unknown worktree')
   if (!w.deleted) return w
-  // Once the worktree has a branch, restore that branch rather than the snapshot.
-  if (!(await addOnBranch(w))) {
-    const target = w.snapshot || w.baseRef
-    await mustGit(w.repoRoot, ['worktree', 'add', '--detach', w.path, target])
-    if (w.snapshot && w.snapshotHead && w.snapshot !== w.snapshotHead) await git(w.path, ['reset', '-q', w.snapshotHead])
-  }
-  await copyIncluded(w.repoRoot, w.path)
-  if (settings().worktrees.linkNodeModules) await linkNodeModules(w.repoRoot, w.path)
+  await withProgress(`worktree:${w.repoRoot.toLowerCase()}`, `Restoring ${w.branch ?? path.basename(w.path)}`, async (p) => {
+    p.step('Checking out files…')
+    // Once the worktree has a branch, restore that branch rather than the snapshot.
+    if (!(await addOnBranch(w))) {
+      const target = w.snapshot || w.baseRef
+      await mustGit(w.repoRoot, ['worktree', 'add', '--detach', w.path, target])
+      if (w.snapshot && w.snapshotHead && w.snapshot !== w.snapshotHead) await git(w.path, ['reset', '-q', w.snapshotHead])
+    }
+    p.step('Copying local files (.worktreeinclude)…')
+    await copyIncluded(w.repoRoot, w.path)
+    if (settings().worktrees.linkNodeModules) {
+      p.step('Linking node_modules…')
+      await linkNodeModules(w.repoRoot, w.path)
+    }
+  })
   touchWorktree(id, { deleted: false })
   return getWorktree(id)!
 }

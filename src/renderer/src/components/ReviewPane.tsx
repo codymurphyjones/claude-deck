@@ -6,6 +6,7 @@ import { api, bridge, errMsg, type LiveSession } from '../api'
 import { askText, attempt, openInEditor, set, toast, useStore, type AgentNote } from '../store'
 import { Icon } from './Icon'
 import { ChatBranchBar } from './ChatBranchBar'
+import { mergeChat } from '../branchActions'
 import { Seg, useExclusive } from './ui'
 import { useFind } from './FindBar'
 import { loadProgressive, type ProgressiveLoad } from '../progressive'
@@ -508,7 +509,26 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   // A worktree starts on a detached HEAD, which can't be pushed. Before the first push, ask for the
   // branch name to put it on; a worktree remembers the branch and is restored onto it from then on.
-  const reviewedWorktree = repo ? worktrees.find((w) => !w.deleted && w.branch && w.target && w.path.toLowerCase() === repo.toLowerCase())?.id : undefined
+  const reviewedWt = repo ? worktrees.find((w) => !w.deleted && w.branch && w.target && w.path.toLowerCase() === repo.toLowerCase()) : undefined
+  const reviewedWorktree = reviewedWt?.id
+  // A chat worktree's work only leaves it by merging into its target branch's local folder: it's
+  // committed and merged, never pushed or PR'd on its own (pushing is done from the target's folder).
+  const commitAndMerge = async (): Promise<void> => {
+    if (!reviewedWt) return
+    if (canCommit) {
+      if (!amend && !msg.trim()) return toast('Write a commit message first', 'error')
+      setBusy('commit')
+      const ok = await attempt(() => api.git.commit(repo!, msg, { amend }), amend ? 'Commit amended' : 'Committed')
+      setBusy('')
+      if (ok === undefined) return void load()
+      setMsg('')
+      setAmend(false)
+    }
+    setBusy('merge')
+    await mergeChat(reviewedWt.id)
+    setBusy('')
+    void load()
+  }
   const isWorktree = !!session?.worktreeId && !!repo && repo === session.root
   const ensureBranch = async (): Promise<boolean> => {
     if (!repo || info?.branch) return true
@@ -568,7 +588,8 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   // undefined = not known yet, so neither Create PR nor the PR link shows.
   const [pr, setPr] = useState<CurrentPr | null | undefined>(undefined)
   const prReq = useRef(0)
-  const prKey = info?.isRepo && info.ghAvailable && info.hasRemote && info.branch ? `${repo}\n${info.branch}` : ''
+  // (Not for a chat worktree: its branch never gets a PR of its own.)
+  const prKey = !reviewedWt && info?.isRepo && info.ghAvailable && info.hasRemote && info.branch ? `${repo}\n${info.branch}` : ''
   const loadPr = useCallback(async () => {
     const n = ++prReq.current
     if (!repo || !prKey) return setPr(null)
@@ -645,9 +666,12 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
               {info.behind ? ` ↓${info.behind}` : ''}
             </span>
           )}
-          <button className="icon-btn sm" title="Pull (rebase)" onClick={() => repo && attempt(() => api.git.pull(repo), 'Pulled').then(load)}>
-            <Icon name="download" size={14} />
-          </button>
+          {/* A chat worktree's branch has no remote of its own; it takes in its target when merging. */}
+          {!reviewedWt && (
+            <button className="icon-btn sm" title="Pull (rebase)" onClick={() => repo && attempt(() => api.git.pull(repo), 'Pulled').then(load)}>
+              <Icon name="download" size={14} />
+            </button>
+          )}
           <button className={`icon-btn sm ${refreshing ? 'spinning' : ''}`} title={refreshing ? 'Refreshing…' : 'Refresh'} onClick={load}>
             <Icon name="refresh" size={14} />
           </button>
@@ -774,7 +798,23 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
             <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} /> Amend
           </label>
           <span className="grow" />
-          {pushReady ? (
+          {reviewedWt ? (
+            <>
+              <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit' : `Commit ${info?.staged} staged file(s)`}>
+                {amend ? 'Amend' : 'Commit'}
+              </button>
+              <button
+                className="btn sm primary"
+                style={{ maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}
+                onClick={() => void commitAndMerge()}
+                disabled={!!busy}
+                title={`${canCommit ? 'Commit the staged files, then merge' : 'Merge'} this chat's commits into ${reviewedWt.target}'s local folder`}
+              >
+                <Icon name="fork" size={12} style={{ flex: 'none' }} />
+                <span className="ellipsis">{busy === 'merge' ? 'Merging…' : `${canCommit ? 'Commit & merge' : 'Merge'} into ${reviewedWt.target}`}</span>
+              </button>
+            </>
+          ) : pushReady ? (
             <button className="btn sm primary" onClick={doPush} disabled={!!busy} title={info?.upstream ? `Push ${info.ahead} commit(s) to ${info.upstream}` : `Publish ${info?.branch}`}>
               <Icon name="upload" size={12} /> {busy === 'push' ? 'Pushing…' : `Push${info?.ahead ? ` ↑${info.ahead}` : ''}`}
             </button>
@@ -783,10 +823,12 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
               {amend ? 'Amend' : 'Commit'}
             </button>
           )}
-          <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit and force-push (with lease)' : `Commit ${info?.staged} staged file(s) and push`}>
-            <Icon name="upload" size={12} /> {amend ? 'Amend & force push' : 'Commit & push'}
-          </button>
-          {openPr ? (
+          {!reviewedWt && (
+            <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit and force-push (with lease)' : `Commit ${info?.staged} staged file(s) and push`}>
+              <Icon name="upload" size={12} /> {amend ? 'Amend & force push' : 'Commit & push'}
+            </button>
+          )}
+          {reviewedWt ? null : openPr ? (
             <button className="btn sm" onClick={() => api.shell.openExternal(openPr.url)} title={`Open pull request #${openPr.number}: ${openPr.title}`}>
               <Icon name="pr" size={12} /> PR #{openPr.number}
               {openPr.isDraft ? ' (draft)' : ''}

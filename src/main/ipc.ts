@@ -31,6 +31,7 @@ import * as branchSync from './worktrees/branchSync'
 import type { WindowManager } from './windows'
 import * as updater from './updater'
 import { diagLogDir, diagLogFile, logDiag, recentDiag } from './diagnostics'
+import { withProgress } from './progress'
 import type { DiagLevel } from '@shared/diagnostics'
 import type { ReleaseInfo } from '@shared/types'
 
@@ -363,10 +364,34 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'worktree.createBranch': (_e, id: string, name: string, exact?: boolean) => wt.createBranchHere(id, name, exact),
     // Chats on their own worktree branches (see worktrees/branchSync.ts).
     'branches.status': (_e, worktreeId: string) => branchSync.chatBranchStatus(worktreeId),
-    'branches.merge': (_e, worktreeId: string, opts?: { stashLocal?: boolean; push?: boolean }) => branchSync.mergeIntoTarget(worktreeId, opts),
+    'branches.merge': (_e, worktreeId: string, opts?: { stashLocal?: boolean }) => branchSync.mergeIntoTarget(worktreeId, opts),
     'branches.vsRemote': (_e, cwd: string, branch: string) => git.toplevel(cwd).then((root) => branchSync.branchVsRemote(root ?? cwd, branch)),
     'branches.push': (_e, cwd: string, branch: string) => git.toplevel(cwd).then((root) => branchSync.pushBranch(root ?? cwd, branch)),
     'worktree.createPermanent': (_e, cwd: string, name?: string) => wt.createWorktree({ repoCwd: cwd, permanent: true, name }),
+    // Active branches held in the data folder (Chats view).
+    'worktree.checkoutBranch': (_e, cwd: string, branch: string, opts?: { from?: string }) => wt.checkoutBranch(cwd, branch, opts),
+    // "Delete branch from Claude Deck": the clean-up. Chat worktrees built on the branch are closed,
+    // removed (their work kept as snapshots, restorable) and their chats archived; then the branch's
+    // folder in the data folder goes. The git branch itself stays, so it's easy to make active again.
+    'worktree.releaseBranch': async (_e, id: string) => {
+      const w = state().worktrees.find((x) => x.id === id)
+      if (!w?.branch) throw new Error('That branch is no longer held in Claude Deck.')
+      const deps = state().worktrees.filter((x) => !x.deleted && x.target === w.branch && x.repoRoot.toLowerCase() === w.repoRoot.toLowerCase())
+      await withProgress(`cleanup:${w.repoRoot.toLowerCase()}`, `Removing ${w.branch} from Claude Deck`, async (p) => {
+        for (const [i, d] of deps.entries()) {
+          p.step(`Removing chat worktree ${i + 1} of ${deps.length}…`)
+          for (const s of sessions.list()) if (s.worktreeId === d.id && s.status !== 'exited') await sessions.close(s.id)
+          for (const c of state().chats) if (c.worktreeId === d.id && !c.archived) updateChat(c.agentSessionId, { archived: true })
+          await wt.deleteWorktree(d.id)
+        }
+        // Sessions working right in the branch's folder are closed too.
+        p.step(`Removing ${w.branch}'s folder…`)
+        for (const s of sessions.list()) if (s.worktreeId === id && s.status !== 'exited') await sessions.close(s.id)
+        for (const c of state().chats) if (c.worktreeId === id && !c.archived) updateChat(c.agentSessionId, { archived: true })
+        await wt.releaseBranch(id, [], { force: true })
+      })
+      emitLibrary()
+    },
     'worktree.forget': (_e, id: string) => {
       updateState((s) => (s.worktrees = s.worktrees.filter((w) => w.id !== id)))
       emitLibrary()

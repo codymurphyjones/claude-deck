@@ -24,6 +24,7 @@ import {
   getWorktree,
   handoffToLocal,
   handoffToWorktree,
+  ensureActiveBranch,
   touchWorktree,
   worktreeFromCheckout
 } from '../worktrees/worktreeService'
@@ -165,7 +166,9 @@ export class SessionService extends EventEmitter {
       if (repoRoot) L.worktree = { ...L.worktree, ...(target && !L.worktree?.target ? { target } : {}) }
     }
     if (kind === 'agent' && L.worktree) {
-      const wt = L.worktree.from ? await worktreeFromCheckout(L.worktree.from, { onBranch: true }) : await createWorktree({ repoCwd: cwd, ...L.worktree })
+      // The branch the chat merges into must be checked out locally (the user's folder, or Claude Deck's).
+      if (L.worktree.target && !L.worktree.from) L.worktree = { ...L.worktree, target: await ensureActiveBranch(cwd, L.worktree.target) }
+      const wt =L.worktree.from ? await worktreeFromCheckout(L.worktree.from, { onBranch: true }) : await createWorktree({ repoCwd: cwd, ...L.worktree })
       projectFolder = findProjectForFolder(cwd)?.folders[0] ?? wt.repoRoot
       cwd = wt.path
       worktreeId = wt.id

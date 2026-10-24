@@ -11,7 +11,7 @@ import type { WorktreeRecord } from '@shared/types'
 vi.setConfig({ testTimeout: 60_000 })
 vi.mock('electron', () => ({}))
 const records = new Map<string, WorktreeRecord>()
-vi.mock('../src/main/worktrees/worktreeService', () => ({ getWorktree: (id: string) => records.get(id), touchWorktree: () => undefined }))
+vi.mock('../src/main/worktrees/worktreeService', () => ({ getWorktree: (id: string) => records.get(id), touchWorktree: () => undefined, findWorktreeByPath: () => undefined }))
 vi.mock('../src/main/context', () => ({ broadcast: () => undefined }))
 
 let tmp: string
@@ -73,7 +73,7 @@ describe('merging a chat into its target', () => {
     const { mergeIntoTarget, chatBranchStatus } = await sync()
     expect(await chatBranchStatus('a')).toMatchObject({ ahead: 1, behind: 0, dirty: 0 })
     const r = await mergeIntoTarget('a')
-    expect(r).toMatchObject({ status: 'merged', target: 'master', commits: 1, pushed: undefined })
+    expect(r).toMatchObject({ status: 'merged', target: 'master', commits: 1 })
     expect(read(repo, 'new.txt')).toBe('from chat\n')
     expect(g(repo, 'status', '--porcelain')).toBe('')
     expect(g(repo, 'rev-parse', 'origin/master')).not.toBe(g(repo, 'rev-parse', 'master'))
@@ -127,14 +127,21 @@ describe('merging a chat into its target', () => {
     expect(read(repo, 'f.txt')).toBe('one\ntwo\nthree\nmy local edit\n')
   })
 
-  it('updates and pushes a branch the user isn’t on, entirely outside their folder', async () => {
+  it('merges only into a local checkout: a branch checked out nowhere is reported inactive, and then merged where it is checked out, unpushed', async () => {
     const wt = chat('r', 'release')
     write(wt, 'fix.txt', 'release fix\n')
     g(wt, 'add', '.')
     g(wt, 'commit', '-qm', 'release fix')
+    const before = g(repo, 'rev-parse', 'release')
     const { mergeIntoTarget } = await sync()
-    expect(await mergeIntoTarget('r')).toMatchObject({ status: 'merged', target: 'release', pushed: true, updated: undefined })
-    expect(g(repo, 'rev-parse', 'release')).toBe(g(origin, 'rev-parse', 'release'))
+    expect(await mergeIntoTarget('r')).toEqual({ status: 'inactive', target: 'release' })
+    expect(g(repo, 'rev-parse', 'release')).toBe(before)
+    // Checked out (as Claude Deck does in its data folder): merged there, and nothing is pushed.
+    const held = path.join(tmp, 'held-release')
+    g(repo, 'worktree', 'add', '-q', held, 'release')
+    expect(await mergeIntoTarget('r')).toMatchObject({ status: 'merged', target: 'release', updated: held })
+    expect(fs.existsSync(path.join(held, 'fix.txt'))).toBe(true)
+    expect(g(origin, 'rev-parse', 'release')).toBe(before)
     // The user's folder (on master) never changed.
     expect(fs.existsSync(path.join(repo, 'fix.txt'))).toBe(false)
     expect(g(repo, 'branch', '--show-current')).toBe('master')

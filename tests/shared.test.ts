@@ -141,3 +141,15 @@ describe('versions', () => {
     expect(compareVersions('v1.0.0', '1.0.0')).toBe(0)
   })
 })
+
+describe('progress toward an ETA', () => {
+  it('follows elapsed time, then slows near the end without reaching full', async () => {
+    const { progressFraction } = await import('@shared/progress')
+    expect(progressFraction(0, 1000)).toBe(0)
+    expect(progressFraction(500, 1000)).toBeCloseTo(0.5)
+    expect(progressFraction(1000, 1000)).toBeGreaterThan(0.85)
+    expect(progressFraction(1000, 1000)).toBeLessThan(0.99)
+    expect(progressFraction(60_000, 1000)).toBeLessThan(1)
+    expect(progressFraction(2000, 1000)).toBeGreaterThan(progressFraction(1500, 1000))
+  })
+})
