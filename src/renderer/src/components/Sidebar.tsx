@@ -5,7 +5,8 @@ import { api, bridge } from '../api'
 import { runCommand } from '../commands'
 import { cacheGet } from '../viewCache'
 import { askText, attempt, focusSessionTab, get, openInEditor, openProjectHome, openSession, QUICK, resumeChat, set, setRight, showSidebar, useStore, type SidebarView } from '../store'
-import { activateBranchMenu, newChatMenu, newChatOnBranch } from '../branchActions'
+import { newChatInWorktree, newChatMenu } from '../branchActions'
+import { BranchPicker } from './BranchPicker'
 import { Icon } from './Icon'
 import { ScheduledView } from './Automations'
 import { JobsView, jobsRailPip, openJobsFor } from './Jobs'
@@ -163,6 +164,7 @@ function ProjectChatsView({ project: p }: { project: Project }) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<{ agentSessionId: string; snippet: string }[] | null>(null)
   const [folded, setFolded] = useState<Record<string, boolean>>({})
+  const [picking, setPicking] = useState(false)
   const [checkedOut, setCheckedOut] = useState<string | undefined>(() => cacheGet<GitInfo>(`homecard:${root}`)?.branch)
   const liveByChat = useLiveByChat()
   useNow()
@@ -200,44 +202,82 @@ function ProjectChatsView({ project: p }: { project: Project }) {
   const ordered = [...groups.entries()].sort(([x, cx], [y, cy]) => rank(x) - rank(y) || (cy[0]?.updatedAt ?? 0) - (cx[0]?.updatedAt ?? 0))
   const wts = lib.worktrees.filter((w) => w.projectId === p.id && !w.holdsBranch && (w.permanent || w.deleted))
 
-  // The clean-up for an active branch: its folder in Claude Deck, plus every chat worktree built on it.
-  const deleteHeldBranch = async (w: WorktreeRecord): Promise<void> => {
-    const deps = lib.worktrees.filter((x) => !x.deleted && x.target === w.branch && x.repoRoot.toLowerCase() === w.repoRoot.toLowerCase())
-    const chats = lib.chats.filter((c) => !c.archived && (c.worktreeId === w.id || deps.some((d) => d.id === c.worktreeId)))
+  // Deleting a branch from Claude Deck: every worktree made for its chats, its copy held in Claude
+  // Deck (if any), and all its chats archived. The user's folder and the git branch itself stay.
+  const deleteBranch = async (branch: string, chats: ChatRecord[]): Promise<void> => {
+    const w = heldBy.get(branch)
+    const deps = lib.worktrees.filter((x) => !x.deleted && !x.holdsBranch && x.target === branch && x.projectId === p.id)
+    const all = lib.chats.filter((c) => !c.archived && c.projectId === p.id && (branchOf(c) === branch || (w && c.worktreeId === w.id)))
+    const n = Math.max(all.length, chats.length)
     const c = await api.dialog.confirm(
-      `Delete ${w.branch} from Claude Deck?`,
+      `Delete ${branch} from Claude Deck?`,
       [
-        `Removes ${w.branch}'s folder in Claude Deck's data folder (${w.path}).`,
-        deps.length
-          ? `${deps.length} chat worktree${deps.length === 1 ? ' is' : 's are'} built on it and will break, so ${deps.length === 1 ? 'it is' : 'they are'} deleted too (uncommitted work is kept as a restorable snapshot), and ${chats.length} conversation${chats.length === 1 ? ' is' : 's are'} archived.`
-          : chats.length
-            ? `${chats.length} conversation${chats.length === 1 ? ' is' : 's are'} archived.`
-            : '',
-        `The git branch ${w.branch} itself is kept, so you can make it active again from Branches (+) at any time.`
+        deps.length ? `Removes the ${deps.length} worktree${deps.length === 1 ? '' : 's'} made for its chats (uncommitted work is kept as a snapshot you can restore from Worktrees).` : '',
+        w ? `Removes ${branch}'s folder in Claude Deck (${w.path}).` : '',
+        n ? `Archives its ${n} chat${n === 1 ? '' : 's'}; open chats on it are closed.` : '',
+        branch === checkedOut ? 'Your own folder stays on this branch, untouched.' : '',
+        `The git branch ${branch} itself is kept, so it's easy to pick up again.`
       ]
         .filter(Boolean)
         .join('\n\n'),
       ['Delete from Claude Deck', 'Cancel']
     )
-    if (c === 0) await attempt(() => api.worktree.releaseBranch(w.id), `${w.branch} was removed from Claude Deck`)
+    if (c === 0) await attempt(() => api.branches.remove(p.id, branch), `${branch} was deleted from Claude Deck`)
   }
 
-  const branchMenu = (e: React.MouseEvent, branch: string): void => {
+  // Working on a branch directly (no worktree of its own): in the folder that has it checked out,
+  // yours or Claude Deck's; a branch checked out nowhere is checked out in Claude Deck first.
+  const openOnBranch = async (branch: string): Promise<void> => {
+    if (branch === checkedOut) return void openSession('agent', { cwd: root, inPlace: true })
+    const w = heldBy.get(branch) ?? (await attempt(() => api.worktree.checkoutBranch(root, branch), `${branch} is now active in Claude Deck`))
+    if (w) await openSession('agent', { cwd: w.path, inPlace: true })
+  }
+
+  // The branch's folder (yours for the checked-out branch, else its copy in Claude Deck), if it has one.
+  const folderOf = (branch: string): string | undefined => (branch === checkedOut ? root : heldBy.get(branch)?.path)
+  const sameDir = (a: string, b: string): boolean => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
+  /**
+   * Clicking a branch's name: a direct line into its folder. The chat open there gets focus; else the
+   * latest chat that worked there is resumed; else a new one starts there (no worktree).
+   */
+  const goToBranch = (branch: string): void => {
+    const dir = folderOf(branch)
+    if (!dir) return
+    const live = Object.values(get().sessions).find((x) => x.kind === 'agent' && x.status !== 'exited' && sameDir(x.cwd, dir))
+    if (live) return focusSessionTab(live.id)
+    const past = mine.filter((c) => sameDir(c.cwd, dir)).sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    if (past) return void resumeChat(past.agentSessionId)
+    void openSession('agent', { cwd: dir, inPlace: true })
+  }
+
+  const branchMenu = (e: React.MouseEvent, branch: string, chats: ChatRecord[]): void => {
+    e.preventDefault()
     e.stopPropagation()
     const w = heldBy.get(branch)
+    const real = branch !== 'No branch'
     openMenu(e, [
-      { label: `New chat on ${branch}`, icon: 'plus', onClick: () => newChatOnBranch(root, branch, checkedOut) },
+      ...(real
+        ? [
+            { label: 'New chat in a worktree', icon: 'plus', onClick: () => newChatInWorktree(root, branch) },
+            {
+              label: `Open chat on ${branch} directly`,
+              icon: 'message',
+              hint: branch === checkedOut ? 'your folder' : w ? 'Claude Deck' : 'checks it out',
+              onClick: () => void openOnBranch(branch)
+            }
+          ]
+        : []),
       ...(w
         ? [
+            { separator: true },
             { label: 'Open in editor', icon: 'code', onClick: () => openInEditor(w.path, { root: w.path }) },
             { label: 'Reveal folder', icon: 'folder-open', onClick: () => api.shell.openPath(w.path) },
-            { label: `Push ${branch}`, icon: 'upload', onClick: () => attempt(() => api.branches.push(w.repoRoot, branch), `Pushed ${branch}`) },
-            { separator: true },
-            { label: 'Delete branch from Claude Deck…', icon: 'trash', danger: true, onClick: () => void deleteHeldBranch(w) }
+            { label: `Push ${branch}`, icon: 'upload', onClick: () => attempt(() => api.branches.push(w.repoRoot, branch), `Pushed ${branch}`) }
           ]
-        : branch !== checkedOut && branch !== 'No branch'
+        : real && branch !== checkedOut
           ? [{ label: 'Make active (check out in Claude Deck)', icon: 'branch', onClick: () => attempt(() => api.worktree.checkoutBranch(root, branch), `${branch} is now active in Claude Deck`) }]
-          : [])
+          : []),
+      ...(real ? [{ separator: true }, { label: 'Delete branch from Claude Deck…', icon: 'trash', danger: true, onClick: () => void deleteBranch(branch, chats) }] : [])
     ])
   }
 
@@ -274,6 +314,7 @@ function ProjectChatsView({ project: p }: { project: Project }) {
           onKeyDown={(e) => e.key === 'Enter' && void runSearch()}
         />
       </div>
+      {picking && <BranchPicker root={root} onClose={() => setPicking(false)} />}
       <div className="sidebar-body">
         {results && (
           <>
@@ -314,7 +355,7 @@ function ProjectChatsView({ project: p }: { project: Project }) {
         {mine.length > 0 && !shown.length && <div className="empty-note">No chats match.</div>}
         <div className="section-label branches-head">
           <span className="grow">Branches</span>
-          <button className="icon-btn sm" title="Make a branch active: check it out in Claude Deck’s data folder, next to your folder’s branch, so chats can work toward it" onClick={(e) => void activateBranchMenu(e.currentTarget, root)}>
+          <button className="icon-btn sm" title="Make a branch active: check it out in Claude Deck’s data folder, next to your folder’s branch, so chats can work toward it" onClick={() => setPicking(true)}>
             <Icon name="plus" size={12} />
           </button>
         </div>
@@ -323,26 +364,42 @@ function ProjectChatsView({ project: p }: { project: Project }) {
             <div
               className="section-label branch-label"
               onClick={() => setFolded((f) => ({ ...f, [branch]: !f[branch] }))}
-              onContextMenu={(e) => branchMenu(e, branch)}
+              onContextMenu={(e) => branchMenu(e, branch, chats)}
               title={branch === checkedOut ? 'The branch your folder has checked out' : heldBy.has(branch) ? `Checked out in Claude Deck: ${heldBy.get(branch)!.path}` : undefined}
             >
-              <Icon name={folded[branch] ? 'chevron-right' : 'chevron-down'} size={11} />
+              <span
+                className="fold"
+                title={folded[branch] ? 'Show its chats' : 'Hide its chats'}
+                onClick={(e) => (e.stopPropagation(), setFolded((f) => ({ ...f, [branch]: !f[branch] })))}
+              >
+                <Icon name={folded[branch] ? 'chevron-right' : 'chevron-down'} size={11} />
+              </span>
               <Icon name="branch" size={11} />
-              <span className="ellipsis">{branch}</span>
+              {folderOf(branch) ? (
+                <span
+                  className="ellipsis branch-name"
+                  title={`Open a chat right in ${branch === checkedOut ? 'your folder' : "its folder in Claude Deck"} (${folderOf(branch)})`}
+                  onClick={(e) => (e.stopPropagation(), goToBranch(branch))}
+                >
+                  {branch}
+                </span>
+              ) : (
+                <span className="ellipsis">{branch}</span>
+              )}
               {branch === checkedOut && <span className="badge accent">checked out</span>}
               {heldBy.has(branch) && <span className="badge">in Claude Deck</span>}
               <span className="grow" />
               {branch !== 'No branch' && (
                 <button
                   className="icon-btn sm"
-                  title={`New chat on ${branch}${branch === checkedOut ? '' : ' (in its own worktree)'}`}
-                  onClick={(e) => (e.stopPropagation(), void newChatOnBranch(root, branch, checkedOut))}
+                  title={`New chat on ${branch}, in its own worktree (right-click the branch to open a chat on it directly)`}
+                  onClick={(e) => (e.stopPropagation(), void newChatInWorktree(root, branch))}
                 >
                   <Icon name="plus" size={12} />
                 </button>
               )}
               {branch !== 'No branch' && (
-                <button className="icon-btn sm" title="Branch options" onClick={(e) => branchMenu(e, branch)}>
+                <button className="icon-btn sm" title="Branch options" onClick={(e) => branchMenu(e, branch, chats)}>
                   <Icon name="more" size={12} />
                 </button>
               )}
@@ -636,6 +693,26 @@ async function resumeTranscript(id: string): Promise<void> {
   if (t) await openSession('agent', { cwd: t.cwd, provider: t.provider, resumeId: id, name: t.title.slice(0, 40) })
 }
 
+/**
+ * Delete a chat: the worktree(s) Claude Deck made for it are removed (uncommitted work kept as a
+ * snapshot) and it's archived. Archive alone just archives it; it's erased for good from
+ * Settings → Archived chats.
+ */
+async function deleteChat(c: ChatRecord): Promise<void> {
+  const w = get().library.worktrees.find((x) => !x.deleted && !x.holdsBranch && !x.permanent && (x.id === c.worktreeId || x.chatId === c.agentSessionId))
+  const r = await api.dialog.confirm(
+    `Delete “${c.name}”?`,
+    [
+      w ? `Removes the worktree made for it (${w.branch ?? w.path}); uncommitted work is kept as a snapshot you can restore from Worktrees. Commits not merged yet are kept with it too.` : '',
+      'The chat is archived (erase it for good from Settings → Archived chats).'
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    ['Delete', 'Cancel']
+  )
+  if (r === 0) await attempt(() => api.library.deleteChat(c.agentSessionId), 'Chat deleted')
+}
+
 function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnType<typeof get>['sessions'][string]; indent: boolean }) {
   const active = useStore((s) => {
     const t = s.tabs.find((x) => x.id === s.activeTabId)
@@ -666,7 +743,8 @@ function ChatItem({ chat: c, live, indent }: { chat: ChatRecord; live?: ReturnTy
           },
           { label: 'Copy session id', icon: 'copy', onClick: () => api.clipboard.writeText(c.agentSessionId) },
           { separator: true },
-          { label: 'Archive', icon: 'archive', onClick: () => api.library.updateChat(c.agentSessionId, { archived: true }) }
+          { label: 'Archive', icon: 'archive', onClick: () => api.library.updateChat(c.agentSessionId, { archived: true }) },
+          { label: 'Delete…', icon: 'trash', danger: true, onClick: () => void deleteChat(c) }
         ])
       }
     >

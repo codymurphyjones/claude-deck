@@ -77,15 +77,77 @@ test.describe('with a project folder', () => {
     await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
     const sidebar = page.locator('.sidebar:not(.collapsed)')
     await expect(sidebar.locator('.branch-label', { hasText: 'main' }).first()).toContainText('checked out')
+    // A branch that only exists on origin: found by searching, pulled down when picked.
+    const origin = path.join(path.dirname(repo), 'origin.git')
+    git(path.dirname(repo), 'init', '-q', '--bare', '-b', 'main', origin)
+    git(repo, 'remote', 'add', 'origin', origin)
+    git(repo, 'push', '-q', 'origin', 'main:main', 'main:refs/heads/from-origin')
     await sidebar.getByTitle(/^Make a branch active/).click()
-    await page.locator('.menu').getByText(/^New branch off main/).click()
-    await page.locator('.modal input.input').fill('feature-x')
-    await page.locator('.modal').getByRole('button', { name: 'OK' }).click()
+    const picker = page.locator('.modal .branch-picker')
+    await picker.locator('input').fill('from-origin')
+    await picker.getByRole('button', { name: 'origin/from-origin' }).click()
+    await expect(sidebar.locator('.branch-label', { hasText: 'from-origin' })).toContainText('in Claude Deck')
+    expect(git(repo, 'rev-parse', '--abbrev-ref', 'from-origin@{upstream}')).toBe('origin/from-origin')
+
+    // A new branch, typed into the same search.
+    await sidebar.getByTitle(/^Make a branch active/).click()
+    await picker.locator('input').fill('feature-x')
+    await picker.getByRole('button', { name: /New branch feature-x off main/ }).click()
     const group = sidebar.locator('.branch-label', { hasText: 'feature-x' })
     await expect(group).toContainText('in Claude Deck')
     // Checked out in the data folder, not in the user's folder (still on main).
     await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/feature-x')
     expect(git(repo, 'branch', '--show-current')).toBe('main')
+    expect(logErrors(deck)).toEqual([])
+  })
+
+  test('deletes a branch from Claude Deck: its chats’ worktrees go and its chats are archived; the folder stays', async ({ deck }) => {
+    const { app, page, repo } = deck
+    const sidebar = page.locator('.sidebar:not(.collapsed)')
+    // The chat opened with the folder works in its own worktree toward main.
+    await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/claude/main-')
+    const main = sidebar.locator('.branch-label', { hasText: 'main' }).first()
+    await expect(main.locator('.sub')).toHaveText('1')
+    // Answer the confirmation with its first button ("Delete from Claude Deck").
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
+    })
+    await main.click({ button: 'right' })
+    await page.locator('.menu').getByText('Delete branch from Claude Deck…').click()
+    await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).not.toContain('claude/main-')
+    // (The chat's own branch goes right after its worktree.)
+    await expect.poll(() => git(repo, 'branch', '--list', 'claude/*')).toBe('')
+    await expect(main.locator('.sub')).toHaveText('0')
+    // The user's folder and branch are untouched.
+    expect(git(repo, 'branch', '--show-current')).toBe('main')
+    expect(logErrors(deck)).toEqual([])
+  })
+
+  test('deleting a chat removes the worktree made for it and archives it', async ({ deck }) => {
+    const { app, page, repo } = deck
+    const sidebar = page.locator('.sidebar:not(.collapsed)')
+    await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/claude/main-')
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
+    })
+    // The first chat in the main branch's group.
+    await sidebar.locator('.branch-label', { hasText: 'main' }).first().locator('xpath=..').locator('.list-item').first().click({ button: 'right' })
+    await page.locator('.menu').getByText('Delete…').click()
+    await expect.poll(() => git(repo, 'worktree', 'list', '--porcelain')).not.toContain('claude/main-')
+    const main = sidebar.locator('.branch-label', { hasText: 'main' }).first()
+    await expect(main.locator('.sub')).toHaveText('0')
+    // Clicking the branch's name opens a chat right in the project folder: no worktree this time.
+    await main.locator('.branch-name').click()
+    await expect(main.locator('.sub')).toHaveText('1')
+    await expect(page.locator('.session-tab, [data-testid="chat-view"], .tab').filter({ hasText: path.basename(repo) }).first()).toBeVisible()
+    expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain('claude/main-')
+    // A second click goes back to that same chat rather than starting another.
+    await main.locator('.branch-name').click()
+    await expect(main.locator('.sub')).toHaveText('1')
+    // It's archived, not erased.
+    await page.keyboard.press('Control+,')
+    await page.locator('.settings-nav').getByText('Archived chats', { exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Unarchive' })).toHaveCount(1)
     expect(logErrors(deck)).toEqual([])
   })
 

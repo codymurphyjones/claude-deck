@@ -370,27 +370,51 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'worktree.createPermanent': (_e, cwd: string, name?: string) => wt.createWorktree({ repoCwd: cwd, permanent: true, name }),
     // Active branches held in the data folder (Chats view).
     'worktree.checkoutBranch': (_e, cwd: string, branch: string, opts?: { from?: string }) => wt.checkoutBranch(cwd, branch, opts),
-    // "Delete branch from Claude Deck": the clean-up. Chat worktrees built on the branch are closed,
-    // removed (their work kept as snapshots, restorable) and their chats archived; then the branch's
-    // folder in the data folder goes. The git branch itself stays, so it's easy to make active again.
-    'worktree.releaseBranch': async (_e, id: string) => {
-      const w = state().worktrees.find((x) => x.id === id)
-      if (!w?.branch) throw new Error('That branch is no longer held in Claude Deck.')
-      const deps = state().worktrees.filter((x) => !x.deleted && x.target === w.branch && x.repoRoot.toLowerCase() === w.repoRoot.toLowerCase())
-      await withProgress(`cleanup:${w.repoRoot.toLowerCase()}`, `Removing ${w.branch} from Claude Deck`, async (p) => {
-        for (const [i, d] of deps.entries()) {
-          p.step(`Removing chat worktree ${i + 1} of ${deps.length}…`)
-          for (const s of sessions.list()) if (s.worktreeId === d.id && s.status !== 'exited') await sessions.close(s.id)
-          for (const c of state().chats) if (c.worktreeId === d.id && !c.archived) updateChat(c.agentSessionId, { archived: true })
-          await wt.deleteWorktree(d.id)
+    // Deleting from Claude Deck (Chats page). Worktrees the app made for chats are closed and removed:
+    // uncommitted work is kept as a snapshot ref, and their branch's commits stay reachable from it,
+    // so a deleted worktree can be restored from the Worktrees list. Chats are archived, not erased.
+    //
+    // A chat: the worktree(s) made to serve it go, and it's archived.
+    'chat.delete': async (_e, chatId: string) => {
+      const c = state().chats.find((x) => x.agentSessionId === chatId)
+      if (!c) throw new Error('That chat no longer exists.')
+      const own = state().worktrees.filter((w) => !w.deleted && !w.holdsBranch && !w.permanent && (w.id === c.worktreeId || w.chatId === chatId))
+      for (const s of sessions.list()) if (s.agentSessionId === chatId && s.status !== 'exited') await sessions.close(s.id)
+      await withProgress(`cleanup:${(own[0]?.repoRoot ?? c.cwd).toLowerCase()}`, `Deleting ${c.name}`, async (p) => {
+        for (const w of own) {
+          p.step(`Removing its worktree (${w.branch ?? path.basename(w.path)})…`)
+          await removeChatWorktree(w.id)
         }
-        // Sessions working right in the branch's folder are closed too.
-        p.step(`Removing ${w.branch}'s folder…`)
-        for (const s of sessions.list()) if (s.worktreeId === id && s.status !== 'exited') await sessions.close(s.id)
-        for (const c of state().chats) if (c.worktreeId === id && !c.archived) updateChat(c.agentSessionId, { archived: true })
-        await wt.releaseBranch(id, [], { force: true })
       })
+      updateChat(chatId, { archived: true })
       emitLibrary()
+    },
+    // A branch (a group on the Chats page): every worktree made for its chats, its copy held in Claude
+    // Deck (if any), and all its chats archived. The user's own folder and the git branch itself stay.
+    'branches.remove': async (_e, projectId: string, branch: string) => {
+      const project = state().projects.find((p) => p.id === projectId)
+      if (!project) throw new Error('That project no longer exists.')
+      const repo = ((await git.toplevel(project.folders[0])) ?? project.folders[0]).toLowerCase()
+      const sameRepo = (r: string): boolean => path.resolve(r).toLowerCase() === path.resolve(repo).toLowerCase()
+      const deps = state().worktrees.filter((w) => !w.deleted && !w.holdsBranch && w.target === branch && sameRepo(w.repoRoot))
+      const held = state().worktrees.find((w) => !w.deleted && w.holdsBranch && w.branch === branch && sameRepo(w.repoRoot))
+      const ids = new Set([...deps.map((w) => w.id), ...(held ? [held.id] : [])])
+      const chats = state().chats.filter((c) => !c.archived && c.projectId === projectId && (ids.has(c.worktreeId ?? '') || (!c.worktreeId && c.branch === branch)))
+      await withProgress(`cleanup:${repo}`, `Deleting ${branch} from Claude Deck`, async (p) => {
+        const chatIds = new Set(chats.map((c) => c.agentSessionId))
+        for (const s of sessions.list()) if (s.status !== 'exited' && ((s.worktreeId && ids.has(s.worktreeId)) || (s.agentSessionId && chatIds.has(s.agentSessionId)))) await sessions.close(s.id)
+        for (const [i, w] of deps.entries()) {
+          p.step(`Removing chat worktree ${i + 1} of ${deps.length}…`)
+          await removeChatWorktree(w.id)
+        }
+        if (held) {
+          p.step(`Removing ${branch}'s folder…`)
+          await wt.releaseBranch(held.id, [], { force: true })
+        }
+      })
+      for (const c of chats) updateChat(c.agentSessionId, { archived: true })
+      emitLibrary()
+      return { worktrees: deps.length, chats: chats.length, held: !!held }
     },
     'worktree.forget': (_e, id: string) => {
       updateState((s) => (s.worktrees = s.worktrees.filter((w) => w.id !== id)))
@@ -553,4 +577,15 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
   // Hot paths: fire-and-forget, no promise round-trip.
   ipcMain.on('deck:write', (_e, id: string, data: string) => sessions.write(id, data))
   ipcMain.on('deck:resize', (_e, id: string, cols: number, rows: number) => sessions.resize(id, cols, rows))
+}
+
+/**
+ * Remove a worktree made for a chat (its work kept as a snapshot ref, restorable), and its own
+ * sub-branch: the snapshot keeps that branch's commits reachable.
+ */
+async function removeChatWorktree(id: string): Promise<void> {
+  const w = state().worktrees.find((x) => x.id === id)
+  if (!w || w.deleted) return
+  await wt.deleteWorktree(id)
+  if (w.target && w.branch) await git.rawGit(w.repoRoot, ['branch', '-D', w.branch])
 }

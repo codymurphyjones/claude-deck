@@ -74,17 +74,18 @@ export function sessionBrief(s: SessionInfo): string {
 }
 
 /**
- * A chat in its own worktree, working toward a branch: where it is, and that bringing the work into
- * the target is the user's step ("Merge into"), so the agent commits rather than merging or switching.
+ * A chat in its own worktree, working toward a branch: where it is, and that committing and bringing
+ * the work into the target are the user's steps (Review pane, "Merge into"): the agent leaves its
+ * changes uncommitted, and doesn't merge, switch branches or push.
  */
 function worktreeBrief(s: SessionInfo): string {
   const w = s.worktreeId ? getWorktree(s.worktreeId) : undefined
   if (!w?.branch || !w.target) return ''
   return [
     `You are working in your own git worktree (${w.path}) on branch ${w.branch}, made from ${w.target}. The user's own folder and other chats are separate, so your edits don't disturb them.`,
-    `When a piece of work is done, commit it on ${w.branch} with a clear message. The user brings it into ${w.target} with Claude Deck's "Merge into ${w.target}", which also takes in ${w.target}'s newer commits first. Don't switch branches, and don't merge into ${w.target} yourself.`,
+    `Leave your changes uncommitted in the working tree and tell the user when they're ready: the user reviews, commits and merges them into ${w.target} with Claude Deck (Review pane, "Merge into ${w.target}"). Don't commit unless the user asks you to, don't switch branches, and don't merge into ${w.target} yourself.`,
     `Never push and never open a pull request: not ${w.branch} (it stays on this machine) and not ${w.target} (it's pushed from its own folder). \`git push\` and \`gh pr create\` are blocked here.`,
-    'If asked to resolve conflicts from merging the target into your branch, resolve them here, then `git add` the files and `git commit --no-edit`.'
+    'If asked to resolve conflicts from merging the target into your branch, resolve them here and `git add` the files, then tell the user: they finish the merge commit themselves.'
   ].join(' ')
 }
 

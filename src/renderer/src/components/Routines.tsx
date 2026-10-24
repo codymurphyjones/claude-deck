@@ -140,7 +140,6 @@ export function RoutineRunDialog() {
   const [chatFrom, setChatFrom] = useState<string | undefined>()
   const [repoBranches, setRepoBranches] = useState<{ current?: string; held: string[]; local: string[]; remote: string[] }>({ held: [], local: [], remote: [] })
   const [preview, setPreview] = useState(false)
-  const [busy, setBusy] = useState(false)
   const job = routines?.find((j) => j.slug === slug)
 
   useEffect(() => {
@@ -182,15 +181,16 @@ export function RoutineRunDialog() {
   const run = async (): Promise<void> => {
     if (!job || !cwd) return
     localStorage.setItem(LAST_CWD_KEY, cwd)
-    setBusy(true)
+    // The dialog closes right away: progress toasts show the setup (worktrees…), and any failure
+    // is toasted, so there's nothing to wait for here.
     if (mode === 'background') {
-      const ok = await startRun(cwd, job.slug, opts, extra, 'routine')
-      setBusy(false)
-      if (ok) close()
+      close()
+      await startRun(cwd, job.slug, opts, extra, 'routine')
       return
     }
     const project = projects.find((p) => p.folders.some((f) => f.toLowerCase() === cwd.toLowerCase()))?.name ?? cwd.split(/[\\/]/).filter(Boolean).pop()
-    const s = await openSession('agent', {
+    close()
+    await openSession('agent', {
         cwd,
         name: routineRunName(job.name, project),
         provider: opts.provider ?? d.provider,
@@ -206,8 +206,6 @@ export function RoutineRunDialog() {
             : { cwd: chatFrom }
           : { worktree: worktree || (chatBranch && chatBranch !== repoBranches.current) ? { target: chatBranch || undefined } : undefined })
       })
-    setBusy(false)
-    if (s) close()
   }
 
   return (
@@ -220,8 +218,8 @@ export function RoutineRunDialog() {
           <button className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="btn primary" disabled={busy || !job || !cwd} onClick={() => void run()}>
-            {busy ? 'Starting…' : mode === 'chat' ? 'Open chat' : 'Run'}
+          <button className="btn primary" disabled={!job || !cwd} onClick={() => void run()}>
+            {mode === 'chat' ? 'Open chat' : 'Run'}
           </button>
         </>
       }

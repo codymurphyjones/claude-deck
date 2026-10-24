@@ -636,7 +636,6 @@ export function JobRunDialog() {
   const jobs = useJobs(req ? req.root : undefined)
   const [opts, setOpts] = useState<Partial<JobRunOptions>>({})
   const [extra, setExtra] = useState('')
-  const [busy, setBusy] = useState(false)
   useEffect(() => {
     setOpts(req && req.step !== undefined ? { onlyStep: req.step } : {})
     setExtra('')
@@ -656,15 +655,14 @@ export function JobRunDialog() {
           </button>
           <button
             className="btn primary"
-            disabled={busy || !job}
-            onClick={async () => {
-              setBusy(true)
-              const ok = await startRun(req.root, req.slug, opts, extra)
-              setBusy(false)
-              if (ok) close()
+            disabled={!job}
+            onClick={() => {
+              // Closes right away: progress and any failure are shown as toasts.
+              close()
+              void startRun(req.root, req.slug, opts, extra)
             }}
           >
-            {busy ? 'Starting…' : 'Run'}
+            Run
           </button>
         </>
       }

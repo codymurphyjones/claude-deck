@@ -1,7 +1,7 @@
-import { refNameError, type BranchInfo } from '@shared/repo'
+import type { BranchInfo } from '@shared/repo'
 import type { ChatMergeResult, LaunchOptions } from '@shared/types'
 import { api, errMsg } from './api'
-import { askText, attempt, get, openInEditor, openSession, set, toast } from './store'
+import { attempt, focusSessionTab, get, openInEditor, openSession, set, toast } from './store'
 import { openMenuAt } from './components/ui'
 
 // Branch actions for chats that work in their own worktrees (main: worktrees/branchSync.ts).
@@ -40,17 +40,17 @@ export async function mergeChat(worktreeId: string, opts: { stashLocal?: boolean
       toast(`Nothing to merge: this chat has no commits that ${r.target} doesn't have.`, 'info')
       break
     case 'uncommitted': {
-      if (!chat) return (void toast(`This worktree has ${plural(r.files.length, 'uncommitted file')}. Commit them first.`, 'error'), r)
+      // Committing is the user's step: open the Review pane on the chat, where Commit & merge does both.
+      if (!chat) return (void toast(`This worktree has ${plural(r.files.length, 'uncommitted file')}. Commit them in its Review pane first.`, 'error'), r)
       const c = await api.dialog.confirm(
         `${chat.name} has ${plural(r.files.length, 'uncommitted file')}`,
-        `Only committed work is merged. Ask ${chat.name} to commit it?\n\n${r.files.slice(0, 12).join('\n')}${r.files.length > 12 ? '\n…' : ''}`,
-        ['Ask to commit', 'Cancel']
+        `Only committed work is merged. Review and commit it in the Review pane ("Commit & merge into ${w?.target ?? 'the branch'}" does both).\n\n${r.files.slice(0, 12).join('\n')}${r.files.length > 12 ? '\n…' : ''}`,
+        ['Open Review', 'Cancel']
       )
-      if (c === 0)
-        await api.session.sendPrompt(
-          chat.id,
-          `Please commit your current work on this branch${w?.branch ? ` (${w.branch})` : ''} with a clear commit message, so it can be merged into ${w?.target ?? 'its target branch'}. Uncommitted files: ${r.files.join(', ')}.`
-        )
+      if (c === 0) {
+        focusSessionTab(chat.id)
+        set({ rightPanel: 'review' })
+      }
       break
     }
     case 'conflicts': {
@@ -64,7 +64,7 @@ export async function mergeChat(worktreeId: string, opts: { stashLocal?: boolean
       if (ask)
         await api.session.sendPrompt(
           chat.id,
-          `Merging ${r.target} into your branch${w?.branch ? ` ${w.branch}` : ''} left conflicts in: ${r.files.join(', ')}. Resolve each one in this worktree, keeping the intent of both sides (ask me if a conflict needs a decision), then \`git add\` the files and \`git commit --no-edit\` to finish the merge, and tell me when it's done so I can merge into ${r.target}.`
+          `Merging ${r.target} into your branch${w?.branch ? ` ${w.branch}` : ''} left conflicts in: ${r.files.join(', ')}. Resolve each one in this worktree, keeping the intent of both sides (ask me if a conflict needs a decision), then \`git add\` the files and tell me when they're ready. Don't commit: I'll finish the merge commit myself before merging into ${r.target}.`
         )
       if (self && w) openInEditor(`${w.path}/${r.files[0]}`)
       break
@@ -161,6 +161,14 @@ export function newChatOnBranch(root: string, branch?: string, current?: string,
 }
 
 /**
+ * A chat on `branch` in its own worktree, always (even for the folder's checked-out branch): it works
+ * on a sub-branch and merges back. The branch is checked out in Claude Deck first if it's nowhere.
+ */
+export function newChatInWorktree(root: string, branch: string): Promise<unknown> {
+  return openSession('agent', { cwd: root, worktree: { target: branch } })
+}
+
+/**
  * The repo's branches for starting work: the folder's checked-out one, the ones held in Claude Deck's
  * data folder (active branches), other local ones by recent use, and remote ones with no local branch.
  * Chats' own sub-branches aren't listed: they're reached through their chats.
@@ -193,30 +201,5 @@ export async function newChatMenu(el: HTMLElement, root: string): Promise<void> 
     ...remote.slice(0, 6).map((b) => ({ label: b, icon: 'globe', hint: 'remote', onClick: () => newChatOnBranch(root, b, current) })),
     { separator: true },
     { label: 'More options…', icon: 'more', onClick: () => set({ newSession: { cwd: root } }) }
-  ])
-}
-
-/**
- * Make a branch active: check it out in Claude Deck's data folder, next to the folder's own branch,
- * so chats can be pointed at it. Lists branches that aren't active yet, plus "New branch…".
- */
-export async function activateBranchMenu(el: HTMLElement, root: string): Promise<void> {
-  const { current, local, remote } = await startableBranches(root)
-  const activate = (b: string, from?: string): Promise<unknown> => attempt(() => api.worktree.checkoutBranch(root, b, from ? { from } : undefined), `${b} is now active in Claude Deck`)
-  openMenuAt(el, [
-    {
-      label: `New branch off ${current ?? 'HEAD'}…`,
-      icon: 'plus',
-      onClick: async () => {
-        const name = (await askText(`New branch off ${current ?? 'HEAD'}, checked out in Claude Deck`, ''))?.trim()
-        if (!name) return
-        const bad = refNameError(name)
-        if (bad) return toast(bad, 'error')
-        await activate(name, current ?? 'HEAD')
-      }
-    },
-    ...(local.length || remote.length ? [{ separator: true }] : []),
-    ...local.slice(0, 15).map((b) => ({ label: b, icon: 'branch', onClick: () => activate(b) })),
-    ...remote.slice(0, 8).map((b) => ({ label: b, icon: 'globe', hint: 'remote', onClick: () => activate(b) }))
   ])
 }

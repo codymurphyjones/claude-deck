@@ -165,6 +165,8 @@ export const api = {
     updateChat: c<void, [string, Partial<ChatRecord>]>('library.updateChat'),
     archiveProjectChats: c<void, [string]>('library.archiveProjectChats'),
     removeChat: c<void, [string]>('library.removeChat'),
+    /** Remove the worktree(s) made for a chat and archive it. */
+    deleteChat: c<void, [string]>('chat.delete'),
     addFolderToProject: c<void, [string, string]>('library.addFolderToProject'),
     makePrimary: c<void, [string, string]>('library.makePrimary'),
     transcripts: c<TranscriptSummary[]>('library.transcripts'),
@@ -200,14 +202,15 @@ export const api = {
     createBranch: c<string, [string, string, boolean?]>('worktree.createBranch'),
     createPermanent: c<WorktreeRecord, [string, string?]>('worktree.createPermanent'),
     forget: c<void, [string]>('worktree.forget'),
-    checkoutBranch: c<WorktreeRecord, [string, string, { from?: string }?]>('worktree.checkoutBranch'),
-    releaseBranch: c<void, [string]>('worktree.releaseBranch')
+    checkoutBranch: c<WorktreeRecord, [string, string, { from?: string }?]>('worktree.checkoutBranch')
   },
   branches: {
     status: c<ChatBranchStatus, [string]>('branches.status'),
     merge: c<ChatMergeResult, [string, { stashLocal?: boolean }?]>('branches.merge'),
     vsRemote: c<BranchVsRemote, [string, string]>('branches.vsRemote'),
-    push: c<void, [string, string]>('branches.push')
+    push: c<void, [string, string]>('branches.push'),
+    /** Delete a branch from Claude Deck: its chats' worktrees, its held copy; its chats archived. */
+    remove: c<{ worktrees: number; chats: number; held: boolean }, [string, string]>('branches.remove')
   },
   env: {
     load: c<EnvironmentConfig, [string]>('env.load'),

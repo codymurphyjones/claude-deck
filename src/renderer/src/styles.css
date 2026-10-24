@@ -551,6 +551,20 @@ label.check {
   font-weight: 500;
   flex: none;
 }
+/* The chevron folds the group; the name opens a chat right in the branch's folder. */
+.section-label.branch-label .fold {
+  display: inline-flex;
+  padding: 2px;
+  margin: -2px;
+  border-radius: 4px;
+}
+.section-label.branch-label .fold:hover {
+  background: var(--hover);
+}
+.section-label.branch-label .branch-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 /* Per-branch buttons show on hover, like list actions. */
 .section-label.branch-label .icon-btn {
   opacity: 0;
@@ -558,6 +572,19 @@ label.check {
 }
 .section-label.branch-label:hover .icon-btn {
   opacity: 1;
+}
+.branch-picker-list {
+  max-height: 46vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.branch-picker-list button.list-item {
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  width: 100%;
 }
 .section-label.branches-head {
   display: flex;
