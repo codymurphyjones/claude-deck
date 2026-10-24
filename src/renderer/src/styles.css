@@ -498,6 +498,10 @@ label.check {
   place-items: center;
   padding: 0 3px;
 }
+/* Hidden by clicking the selected rail icon again; kept mounted so it reopens unchanged. */
+.sidebar.collapsed {
+  display: none;
+}
 .sidebar {
   flex: none;
   display: flex;

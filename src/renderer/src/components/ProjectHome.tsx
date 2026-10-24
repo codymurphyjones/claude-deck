@@ -48,7 +48,7 @@ function Home({ project: p, active }: { project: Project; active: boolean }) {
       setGit((cur) => ({ ...base, pr: cur?.pr ?? null, reviewPrs: cur?.reviewPrs ?? null }))
       // Network lookups fill in as they arrive.
       if (info.isRepo && info.ghAvailable && info.hasRemote) {
-        const [pr, reviewPrs] = await Promise.all([info.branch ? api.repo.currentPr(root).catch(() => null) : null, api.gh.list(root, 'review').catch(() => null)])
+        const [pr, reviewPrs] = await Promise.all([info.branch ? api.repo.currentPr(root).catch(() => null) : null, api.gh.list(root, 'all').catch(() => null)])
         base.pr = pr
         base.reviewPrs = reviewPrs
         setGit({ ...base })
@@ -326,14 +326,21 @@ function RoutinesCard({ root }: { root: string }) {
 }
 
 // ------------------------------------------------------------------ pull requests
+/** GitHub's review decision, as a short label and badge style. */
+const REVIEW_BADGE: Record<string, [string, string]> = {
+  APPROVED: ['approved', 'ok'],
+  CHANGES_REQUESTED: ['changes requested', 'err'],
+  REVIEW_REQUIRED: ['needs review', 'warn']
+}
+
 function PullRequestsCard({ git }: { git?: GitSnapshot }) {
   const gi = git?.info
   const prs = git?.reviewPrs
   return (
-    <Card title="Pull requests for you" icon="pr" link={{ label: 'Pull requests', onClick: () => showView('reviews') }}>
+    <Card title={prs?.length ? `Open pull requests (${prs.length})` : 'Open pull requests'} icon="pr" link={{ label: prs && prs.length > 6 ? `All ${prs.length}` : 'Pull requests', onClick: () => showView('reviews') }}>
       {gi && (!gi.ghAvailable || !gi.hasRemote) && <div className="empty-note">{!gi.hasRemote ? 'No remote configured.' : 'Install the GitHub CLI (gh) to see pull requests.'}</div>}
       {gi?.ghAvailable && gi.hasRemote && prs === null && <div className="empty-note">Loading…</div>}
-      {prs && !prs.length && <div className="empty-note">Nothing waiting for your review.</div>}
+      {prs && !prs.length && <div className="empty-note">No open pull requests.</div>}
       {prs?.slice(0, 6).map((pr) => (
         <div key={pr.number} className="list-item" title="Open in Pull requests" onClick={() => showView('reviews')}>
           <Icon name="pr" size={13} style={{ color: 'var(--muted)' }} />
@@ -346,6 +353,7 @@ function PullRequestsCard({ git }: { git?: GitSnapshot }) {
             </div>
           </div>
           {pr.isDraft && <span className="badge">draft</span>}
+          {!pr.isDraft && pr.reviewDecision && <span className={`badge ${REVIEW_BADGE[pr.reviewDecision]?.[1] ?? ''}`}>{REVIEW_BADGE[pr.reviewDecision]?.[0] ?? pr.reviewDecision.toLowerCase()}</span>}
         </div>
       ))}
     </Card>

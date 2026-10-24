@@ -76,8 +76,9 @@ export function Sidebar({ open }: { open: boolean }) {
           <Icon name="settings" size={18} />
         </button>
       </div>
-      {open && (
-        <div className="sidebar" style={{ width }}>
+      {/* Clicking the selected rail icon hides the panel; it stays mounted so it comes back as it was
+          (search text, scroll, collapsed groups, loaded data). */}
+      <div className={`sidebar ${open ? '' : 'collapsed'}`} style={{ width }} aria-hidden={!open}>
           {view === 'projects' && <ProjectsView />}
           {view === 'activity' && <ActivityView />}
           {view === 'team' && <TeamsView />}
@@ -89,7 +90,6 @@ export function Sidebar({ open }: { open: boolean }) {
           {view === 'reviews' && <ReviewsView />}
           <div className="resizer right" onMouseDown={startDrag} />
         </div>
-      )}
     </>
   )
 }

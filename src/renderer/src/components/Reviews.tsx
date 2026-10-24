@@ -11,12 +11,28 @@ import { Modal, Seg, timeAgo } from './ui'
 
 const usePr = create<{ cwd: string; number: number } | null>(() => null)
 
+type PrFilter = 'review' | 'assigned' | 'authored' | 'all'
+const FILTER_KEY = 'deck.prFilter'
+const FILTER_LABEL: Record<PrFilter, string> = { all: 'All', authored: 'Mine', review: 'For me', assigned: 'Assigned' }
+/** What an empty filtered list means, in words. */
+const FILTER_EMPTY: Record<Exclude<PrFilter, 'all'>, string> = { authored: 'by you', review: 'requesting your review', assigned: 'assigned to you' }
+
 export function ReviewsView() {
   const projects = useStore((s) => s.library.projects)
   const pinned = useStore((s) => s.pinnedReviews)
   // Follows the selected tab's project, like the Repository view.
   const cwd = useStore(tabProjectRoot) ?? projects[0]?.folders[0] ?? ''
-  const [filter, setFilter] = useState<'review' | 'assigned' | 'authored' | 'all'>('review')
+  // All open PRs by default (on a solo repo "requested from me" is usually empty); the last choice sticks.
+  const [filter, setFilterState] = useState<PrFilter>(() => {
+    const saved = localStorage.getItem(FILTER_KEY)
+    return saved && FILTER_LABEL[saved as PrFilter] ? (saved as PrFilter) : 'all'
+  })
+  const setFilter = (f: PrFilter): void => {
+    setFilterState(f)
+    localStorage.setItem(FILTER_KEY, f)
+  }
+  // With a filter that finds nothing: how many open PRs there are in all, to say so.
+  const [allCount, setAllCount] = useState<number | null>(null)
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null)
   const [err, setErr] = useState('')
   const [link, setLink] = useState('')
@@ -35,6 +51,12 @@ export function ReviewsView() {
       const list = await api.gh.list(cwd, filter)
       cacheSet(key, list)
       if (n === req.current) setPrs(list)
+      if (n === req.current) setAllCount(null)
+      if (!list.length && filter !== 'all') {
+        const all = await api.gh.list(cwd, 'all').catch(() => [])
+        cacheSet(`prs:${cwd}|all`, all)
+        if (n === req.current) setAllCount(all.length)
+      }
     } catch (e) {
       if (n !== req.current) return
       setErr(errMsg(e))
@@ -70,19 +92,25 @@ export function ReviewsView() {
         <Seg
           value={filter}
           onChange={setFilter}
-          options={[
-            ['review', 'For me'],
-            ['assigned', 'Assigned'],
-            ['authored', 'Mine'],
-            ['all', 'All']
-          ]}
+          options={(['all', 'authored', 'review', 'assigned'] as PrFilter[]).map((f) => [f, FILTER_LABEL[f]])}
         />
         <input className="input" placeholder="Paste a PR link or number…" value={link} onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && openLink()} />
       </div>
       <div className="sidebar-body">
         {err && <div className="empty-note">{err}</div>}
         {prs === null && <div className="empty-note">Loading pull requests…</div>}
-        {prs && !prs.length && !err && <div className="empty-note">No pull requests here.</div>}
+        {prs && !prs.length && !err && (
+          <div className="empty-note">
+            {filter === 'all' ? 'No open pull requests.' : `No open pull requests ${FILTER_EMPTY[filter]}.`}
+            {filter !== 'all' && !!allCount && (
+              <div style={{ marginTop: 8 }}>
+                <button className="btn sm" onClick={() => setFilter('all')}>
+                  Show all {allCount} open
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {prs &&
           [...prs]
             .sort((a, b) => Number(pinned.includes(`${b.repo}#${b.number}`)) - Number(pinned.includes(`${a.repo}#${a.number}`)))
