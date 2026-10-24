@@ -20,6 +20,7 @@ import { api } from '../api'
 import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, toast, useStore } from '../store'
 import { copyJobCard } from '../jobClipboard'
 import { Icon } from './Icon'
+import { runRoutine } from './Routines'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 
 /** Repo folders that can hold jobs: project folders, plus whatever the active chat is in. */
@@ -736,7 +737,10 @@ export function JobDesigner({ scope = 'repo' }: { scope?: JobSource }) {
               const s = dirty ? await save() : job
               const step = typeof sel === 'number' ? sel : undefined
               if (!s) return
-              if (isRoutine) set({ routineEdit: false, routineRunFor: { slug: s.slug, step } })
+              if (isRoutine) {
+                set({ routineEdit: false })
+                runRoutine(s.slug, undefined, step)
+              }
               else set({ jobEdit: false, jobRunFor: { root: root!, slug: s.slug, step } })
             }}
           >

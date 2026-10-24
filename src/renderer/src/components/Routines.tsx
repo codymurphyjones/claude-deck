@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { buildRoutineChatPrompt, buildStepPrompt, newJob, stepsToRun, type JobRunOptions } from '@shared/jobs'
 import { api } from '../api'
-import { activeSession, attempt, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
+import { attempt, currentProjectRoot, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
 import { copyJobCard } from '../jobClipboard'
 import { AgentSelect, deleteRoutine, designRoutineInChat, efforts, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
@@ -76,7 +76,7 @@ export function RoutinesView() {
                 openMenu(e, [
                   { label: 'Run…', icon: 'play', onClick: () => runRoutine(j.slug) },
                   { label: 'Edit…', icon: 'edit', onClick: () => set({ routineEdit: { slug: j.slug } }) },
-                  { label: 'Schedule…', icon: 'clock', onClick: () => scheduleRoutine(j, activeSession()?.root) },
+                  { label: 'Schedule…', icon: 'clock', onClick: () => scheduleRoutine(j, currentProjectRoot()) },
                   { label: 'Copy', icon: 'copy', hint: 'Ctrl+C', onClick: () => void copyJobCard('routine', j) },
                   { separator: true },
                   { label: 'Delete', icon: 'trash', danger: true, onClick: () => void deleteRoutine(j) }
@@ -161,6 +161,7 @@ export function RoutineRunDialog() {
 
   const run = async (): Promise<void> => {
     if (!job || !cwd) return
+    localStorage.setItem(LAST_CWD_KEY, cwd)
     setBusy(true)
     if (mode === 'background') {
       const ok = await startRun(cwd, job.slug, opts, extra, 'routine')
@@ -307,6 +308,9 @@ export function openRoutines(): void {
   showSidebar('routines')
 }
 
-export function runRoutine(slug?: string, cwd = activeSession()?.root): void {
-  set({ routineRunFor: { slug, cwd } })
+const LAST_CWD_KEY = 'deck.routineCwd'
+
+/** Opens the run dialog targeting `cwd`, else the project being worked in, else the last folder used. */
+export function runRoutine(slug?: string, cwd = currentProjectRoot() ?? localStorage.getItem(LAST_CWD_KEY) ?? undefined, step?: number): void {
+  set({ routineRunFor: { slug, cwd, step } })
 }

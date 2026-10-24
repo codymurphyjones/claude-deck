@@ -237,6 +237,20 @@ export function activeSession(): LiveSession | undefined {
   return id ? get().sessions[id] : undefined
 }
 
+/**
+ * The project folder the user is working in: the focused chat's repo (a terminal pane counts as
+ * its chat's), else the repo open in the Repository / Jobs sidebar view.
+ */
+export function currentProjectRoot(): string | undefined {
+  const s = get()
+  const a = activeSession()
+  const owner = a?.kind === 'shell' && a.launch.parentId ? s.sessions[a.launch.parentId] : a
+  if (owner?.kind === 'agent' && (owner.root || owner.cwd)) return owner.root || owner.cwd
+  if (s.sidebarOpen && s.sidebarView === 'repo' && s.repoRoot) return s.repoRoot
+  if (s.sidebarOpen && s.sidebarView === 'jobs' && s.jobsRoot) return s.jobsRoot
+  return a?.root
+}
+
 function persistTabs(): void {
   const s = get()
   if (s.popoutSessionId) return
