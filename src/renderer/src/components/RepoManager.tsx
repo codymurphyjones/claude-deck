@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { refNameError, type BranchInfo, type CurrentPr, type RemoteInfo, type RepoStatus, type StashInfo, type TagInfo } from '@shared/repo'
+import { isOpenPr, refNameError, type BranchInfo, type CurrentPr, type RemoteInfo, type RepoStatus, type StashInfo, type TagInfo } from '@shared/repo'
 import type { CommitInfo, DiffFile } from '@shared/types'
 import { api, bridge, errMsg } from '../api'
 import { activeSession, askText, attempt, openSession, set, toast, useStore, type RepoDiffSource } from '../store'
@@ -507,20 +507,22 @@ export function RepoView() {
                   <span className="ellipsis grow">
                     #{data.pr.number} {data.pr.title}
                   </span>
+                  {!isOpenPr(data.pr) && <span className="badge">{data.pr.state.toLowerCase()}</span>}
                   {data.pr.isDraft && <span className="badge">draft</span>}
                   {data.pr.checks !== 'none' && <span className={`badge ${data.pr.checks === 'pass' ? 'ok' : data.pr.checks === 'fail' ? 'err' : 'warn'}`}>checks {data.pr.checks}</span>}
                   {data.pr.reviewDecision && <span className="badge">{data.pr.reviewDecision.toLowerCase().replace(/_/g, ' ')}</span>}
                 </div>
-              ) : (
-                gi.ghAvailable &&
+              ) : null}
+              {/* A merged or closed PR still shows above, but new work on the branch can get a new PR. */}
+              {gi.ghAvailable &&
                 gi.hasRemote &&
-                data.pr === null &&
+                data.pr !== undefined &&
+                !isOpenPr(data.pr) &&
                 gi.branch && (
                   <button className="btn sm ghost" style={{ alignSelf: 'flex-start' }} disabled={!!busy} onClick={() => void createPr()}>
                     <Icon name="pr" size={12} /> {busy === 'pr' ? 'Creating…' : 'Create pull request'}
                   </button>
-                )
-              )}
+                )}
               {st?.operation && (
                 <div className="repo-op">
                   <div>

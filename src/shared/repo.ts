@@ -61,6 +61,9 @@ export interface CurrentPr {
   checks: ChecksState
 }
 
+/** An open PR blocks creating another for the branch; a merged or closed one doesn't. */
+export const isOpenPr = (pr: CurrentPr | null | undefined): boolean => !!pr && pr.state.toUpperCase() === 'OPEN'
+
 export type CommitAction = 'checkout' | 'cherry-pick' | 'revert' | 'reset-soft' | 'reset-mixed' | 'reset-hard'
 export type StashAction = 'apply' | 'pop' | 'drop'
 

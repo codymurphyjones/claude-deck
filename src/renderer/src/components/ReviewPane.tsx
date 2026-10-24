@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { numberHunkLines } from '@shared/diff'
+import { isOpenPr, type CurrentPr } from '@shared/repo'
 import type { CommitInfo, DiffFile, DiffView, GitInfo } from '@shared/types'
 import { api, bridge, errMsg, type LiveSession } from '../api'
 import { askText, attempt, set, toast, useStore } from '../store'
@@ -447,6 +448,27 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
     setBusy('')
   }
 
+  // The branch's PR, looked up with gh over the network: only when the repo or branch changes, when
+  // Claude finishes a turn (it may have opened one), and after creating one; not on every reload.
+  // undefined = not known yet, so neither Create PR nor the PR link shows.
+  const [pr, setPr] = useState<CurrentPr | null | undefined>(undefined)
+  const prReq = useRef(0)
+  const prKey = info?.isRepo && info.ghAvailable && info.hasRemote && info.branch ? `${repo}\n${info.branch}` : ''
+  const loadPr = useCallback(async () => {
+    const n = ++prReq.current
+    if (!repo || !prKey) return setPr(null)
+    const r = await api.repo.currentPr(repo).catch(() => null)
+    if (n === prReq.current) setPr(r)
+  }, [repo, prKey])
+  useEffect(() => {
+    setPr(undefined)
+    void loadPr()
+  }, [loadPr])
+  useEffect(() => {
+    if (session?.status === 'idle') void loadPr()
+  }, [session?.status])
+  const openPr = pr && isOpenPr(pr) ? pr : undefined
+
   const createPr = async (): Promise<void> => {
     if (!repo) return
     setBusy('pr')
@@ -463,6 +485,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
       void api.shell.openExternal(url)
     }
     void load()
+    void loadPr()
   }
 
   if (!session) return <div className="empty-note">Open a session to review its changes.</div>
@@ -614,9 +637,22 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !canCommit} title={!canCommit ? 'Stage changes to commit them' : amend ? 'Amend the last commit and force-push (with lease)' : `Commit ${info?.staged} staged file(s) and push`}>
             <Icon name="upload" size={12} /> {amend ? 'Amend & force push' : 'Commit & push'}
           </button>
-          <button className="btn sm primary" onClick={createPr} disabled={!!busy || !info?.ghAvailable || !info?.hasRemote} title={info?.ghAvailable ? 'Push and open a pull request' : 'Install the GitHub CLI (gh) to create PRs'}>
-            <Icon name="pr" size={12} /> {busy === 'pr' ? 'Creating…' : 'Create PR'}
-          </button>
+          {openPr ? (
+            <button className="btn sm" onClick={() => api.shell.openExternal(openPr.url)} title={`Open pull request #${openPr.number}: ${openPr.title}`}>
+              <Icon name="pr" size={12} /> PR #{openPr.number}
+              {openPr.isDraft ? ' (draft)' : ''}
+            </button>
+          ) : (
+            <button
+              className="btn sm primary"
+              onClick={createPr}
+              // Wait until the lookup says there's no open PR (gh missing or no remote resolves to null at once).
+              disabled={!!busy || !info?.ghAvailable || !info?.hasRemote || pr === undefined}
+              title={!info?.ghAvailable ? 'Install the GitHub CLI (gh) to create PRs' : pr === undefined ? 'Checking for an existing pull request…' : 'Push and open a pull request'}
+            >
+              <Icon name="pr" size={12} /> {busy === 'pr' ? 'Creating…' : 'Create PR'}
+            </button>
+          )}
         </div>
       </div>
     </div>
