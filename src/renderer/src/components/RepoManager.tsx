@@ -187,8 +187,9 @@ export function RepoView() {
 
   const commit = async (push: boolean): Promise<void> => {
     if (!msg.trim()) return toast('Write a commit message first', 'error')
-    if (!staged.length && !unstaged.length && !amend) return toast('Nothing to commit', 'error')
-    const ok = await run('commit', () => api.git.commit(root, msg, { all: !staged.length, amend }), amend ? 'Commit amended' : 'Committed')
+    // Only what's staged is committed; nothing is staged automatically. (Amend may just reword.)
+    if (!staged.length && !amend) return toast('Stage the changes to commit first', 'error')
+    const ok = await run('commit', () => api.git.commit(root, msg, { amend }), amend ? 'Commit amended' : 'Committed')
     if (ok === undefined) return
     setMsg('')
     setAmend(false)

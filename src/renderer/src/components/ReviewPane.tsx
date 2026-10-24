@@ -410,9 +410,10 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   const doCommit = async (push: boolean): Promise<void> => {
     if (!repo || !msg.trim()) return toast('Write a commit message first', 'error')
+    // Only what's staged is committed; nothing is staged automatically.
+    if (!info?.staged) return toast('Stage the changes to commit first', 'error')
     setBusy(push ? 'push' : 'commit')
-    const staged = view === 'staged' ? files?.length : (await api.git.diff(repo, 'staged', {})).length
-    const ok = await attempt(() => api.git.commit(repo, msg, { all: !staged }), 'Committed')
+    const ok = await attempt(() => api.git.commit(repo, msg, {}), 'Committed')
     if (ok !== undefined && push) await attempt(() => api.git.push(repo), 'Pushed')
     if (ok !== undefined) setMsg('')
     setBusy('')
@@ -595,11 +596,11 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
               <Icon name="upload" size={12} /> {busy === 'push' ? 'Pushing…' : `Push${info?.ahead ? ` ↑${info.ahead}` : ''}`}
             </button>
           ) : (
-            <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy}>
+            <button className="btn sm" onClick={() => doCommit(false)} disabled={!!busy || !info?.staged} title={info?.staged ? `Commit ${info.staged} staged file(s)` : 'Stage changes to commit them'}>
               Commit
             </button>
           )}
-          <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote}>
+          <button className="btn sm" onClick={() => doCommit(true)} disabled={!!busy || !info?.hasRemote || !info?.staged} title={info?.staged ? `Commit ${info.staged} staged file(s) and push` : 'Stage changes to commit them'}>
             <Icon name="upload" size={12} /> Commit & push
           </button>
           <button className="btn sm primary" onClick={createPr} disabled={!!busy || !info?.ghAvailable || !info?.hasRemote} title={info?.ghAvailable ? 'Push and open a pull request' : 'Install the GitHub CLI (gh) to create PRs'}>

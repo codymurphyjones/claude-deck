@@ -45,8 +45,11 @@ export async function info(cwd: string): Promise<GitInfo> {
   let behind = 0
   let dirty = 0
   let tracked = 0
+  let staged = 0
   for (const line of st.stdout.split('\n')) {
     if (/^[12u] /.test(line)) tracked++
+    // "1 XY …" / "2 XY …": X is the index (staged) side, "." when unchanged.
+    if (/^[12] [^.]/.test(line)) staged++
     if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim()
     else if (line.startsWith('# branch.ab ')) {
       const m = /\+(\d+) -(\d+)/.exec(line)
@@ -70,6 +73,7 @@ export async function info(cwd: string): Promise<GitInfo> {
     behind,
     dirty,
     tracked,
+    staged,
     defaultBranch,
     hasRemote: remotes.stdout.trim().length > 0,
     ghAvailable: !!ghPath()
