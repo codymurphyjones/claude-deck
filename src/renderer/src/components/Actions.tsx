@@ -6,6 +6,8 @@ import { attempt, get, loadScripts, openProcessTab, retargetProcessTab, set, use
 import { attach, detach, focusTerminal, hydrate, refit } from '../terminal/registry'
 import { Icon } from './Icon'
 import { openMenu, useNow } from './ui'
+import { buildCommand, validateValues, type ActionDef, type ToolSet } from '@shared/actions'
+import { lastValues, openActionForm, runAction } from './ActionRunDialog'
 
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -43,6 +45,7 @@ export function ProjectActions({ project, embedded = false }: { project: Project
   }, [focus, project.id])
   const [q, setQ] = useState('')
   const pkgs = useStore((s) => s.scripts[project.id])
+  const tools = useStore((s) => s.tools[project.id])
   const procs = useStore((s) => s.processes).filter((p) => p.projectId === project.id)
   // Active list: what's running plus failures nobody has looked at. Successes go away quietly.
   const active = procs.filter((p) => p.status === 'running' || isOpenFailure(p))
@@ -53,7 +56,7 @@ export function ProjectActions({ project, embedded = false }: { project: Project
     if (open && !get().scripts[project.id]) void loadScripts(project.id)
   }, [open, project.id])
 
-  const total = pkgs?.reduce((n, p) => n + Object.keys(p.scripts).length, 0) ?? 0
+  const total = (pkgs?.reduce((n, p) => n + Object.keys(p.scripts).length, 0) ?? 0) + (tools?.reduce((n, t) => n + t.actions.length, 0) ?? 0)
   const ql = q.trim().toLowerCase()
   // Root package first, then sub-packages by path.
   const shown = [...(pkgs ?? [])]
@@ -109,6 +112,13 @@ export function ProjectActions({ project, embedded = false }: { project: Project
           {shown.map(({ pkg, names }) => (
             <PackageFolder key={pkg.dir} projectId={project.id} pkg={pkg} names={names} procs={procs} defaultOpen={shown.length === 1} forceOpen={!!ql} />
           ))}
+          {/* Command folders: .mono, and the package manager's own commands. */}
+          {tools
+            ?.map((t) => ({ t, actions: t.actions.filter((a) => !ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) }))
+            .filter((x) => x.actions.length)
+            .map(({ t, actions }) => (
+              <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} />
+            ))}
         </div>
       )}
     </>
@@ -219,6 +229,97 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen }:
             </div>
           )
         })}
+    </>
+  )
+}
+
+/**
+ * A command folder: a project's `.mono` commands, or its package manager's. Click an action for its
+ * run form (every option); ▶ runs it with the values it last ran with (else its defaults).
+ */
+function ToolFolder({ projectId, toolset: t, actions, procs, defaultOpen, forceOpen }: { projectId: string; toolset: ToolSet; actions: ActionDef[]; procs: ProcessInfo[]; defaultOpen: boolean; forceOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const expanded = open || forceOpen
+  const runsOf = (a: ActionDef): ProcessInfo[] => procs.filter((p) => p.action?.toolset === t.id && p.action.id === a.id)
+  const states = actions.map((a) => scriptState(runsOf(a)).state)
+  const running = states.filter((x) => x === 'running').length
+  const failed = states.filter((x) => x === 'failed').length
+  const groups = [...new Set(actions.map((a) => a.group))]
+  const quickRun = (a: ActionDef): void => {
+    const v = lastValues(projectId, t.id, a)
+    // Missing a required value (or a destructive command): the form instead.
+    if (validateValues(a, v) || a.danger) return openActionForm(projectId, t.id, a.id)
+    void runAction(projectId, t, a, v)
+  }
+  const menu = (e: React.MouseEvent, a: ActionDef): void => {
+    const latest = scriptState(runsOf(a)).latest
+    openMenu(e, [
+      { label: 'Run…', icon: 'play', onClick: () => openActionForm(projectId, t.id, a.id) },
+      { label: a.danger ? 'Run with last values… (asks first)' : 'Run with last values', icon: 'zap', onClick: () => quickRun(a) },
+      {
+        label: 'Copy command',
+        icon: 'copy',
+        onClick: () => {
+          try {
+            return attempt(() => api.clipboard.writeText(buildCommand(a, lastValues(projectId, t.id, a))), 'Command copied')
+          } catch (err) {
+            return openActionForm(projectId, t.id, a.id)
+          }
+        }
+      },
+      { label: 'Show last output', icon: 'terminal', disabled: !latest, onClick: () => latest && openProcessTab(latest.id) }
+    ])
+  }
+  return (
+    <>
+      <div
+        className={`list-item proj-folder tool-folder ${running ? 'running' : failed ? 'failed' : ''}`}
+        title={`${t.title} · ${t.actions.length} command${t.actions.length === 1 ? '' : 's'}\n${t.dir}`}
+        onClick={() => setOpen(!expanded)}
+      >
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
+        <Icon name={t.kind === 'mono' ? 'layers' : 'zap'} size={13} />
+        <span className="grow ellipsis">
+          {t.title}
+          {t.rel && <span className="muted"> · {t.rel}</span>}
+        </span>
+        {running > 0 && <span className="sub proj-count running">{running} running</span>}
+        {failed > 0 && <span className="sub proj-count failed">{failed} failed</span>}
+        {!running && !failed && <span className="sub">{actions.length}</span>}
+      </div>
+      {expanded &&
+        groups.map((g) => (
+          <div key={g}>
+            {groups.length > 1 && <div className="action-group-label">{g}</div>}
+            {actions
+              .filter((a) => a.group === g)
+              .map((a) => {
+                const { state: st, latest, live } = scriptState(runsOf(a))
+                return (
+                  <div
+                    key={a.id}
+                    className={`list-item proj-script tool-action ${st}`}
+                    title={`${a.title}${a.description ? `\n${a.description}` : ''}\n\nClick for its options · ▶ runs with the last values${latest ? ' · right-click for more' : ''}`}
+                    onClick={() => openActionForm(projectId, t.id, a.id)}
+                    onContextMenu={(e) => menu(e, a)}
+                    data-testid={`action-${a.id}`}
+                  >
+                    <Icon name={st === 'failed' ? 'x' : st === 'success' ? 'check' : st === 'running' ? 'play' : a.danger ? 'shield' : 'play'} size={11} />
+                    <span className="grow ellipsis">
+                      {a.name}
+                      <span className="muted"> {a.title !== a.name ? a.title : ''}</span>
+                    </span>
+                    {live > 1 && <span className="sub">×{live}</span>}
+                    <span className="actions">
+                      <button className="icon-btn sm" title={a.danger ? 'Run (asks first)' : 'Run with the last values'} onClick={(e) => (e.stopPropagation(), quickRun(a))}>
+                        <Icon name="play" size={11} />
+                      </button>
+                    </span>
+                  </div>
+                )
+              })}
+          </div>
+        ))}
     </>
   )
 }

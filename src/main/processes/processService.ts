@@ -6,6 +6,8 @@ import type { PtyService } from '../pty/ptyService'
 import { plainEnv } from '../sessions/launch'
 import { run, shortId, truncate } from '../util'
 import { scanScripts } from './scan'
+import { scanTools } from './tools'
+import { buildCommand, type ActionValues, type ToolSet } from '@shared/actions'
 
 /** Finished runs kept (newest per script) so their output can still be reviewed. */
 const MAX_FINISHED = 40
@@ -15,6 +17,7 @@ export class ProcessService {
   private procs = new Map<string, ProcessInfo>()
   private stopping = new Set<string>()
   private scans = new Map<string, ScriptPackage[]>()
+  private toolScans = new Map<string, ToolSet[]>()
   /** Callbacks waiting for a run to finish (waitForExit). */
   private exitWaiters = new Map<string, Set<() => void>>()
 
@@ -55,10 +58,46 @@ export class ProcessService {
     return all
   }
 
+  /**
+   * The project's command folders besides its scripts: `.mono` commands and its package manager's
+   * (tools.ts), per folder; cached until `refresh`.
+   */
+  async tools(projectId: string, refresh = false): Promise<ToolSet[]> {
+    const cached = this.toolScans.get(projectId)
+    if (cached && !refresh) return cached
+    const p = this.project(projectId)
+    const pkgs = await this.scan(projectId, refresh)
+    const multi = p.folders.length > 1
+    const all: ToolSet[] = []
+    for (const f of p.folders) {
+      const base = f.split(/[\\/]/).pop() ?? f
+      const inside = pkgs.filter((x) => x.dir.toLowerCase().startsWith(f.toLowerCase()))
+      all.push(...(await scanTools(f, inside, multi ? base : '')))
+    }
+    this.toolScans.set(projectId, all)
+    return all
+  }
+
+  /**
+   * Run a tool set's action with `values` (a form's): the command is built here from the definition
+   * the scan found, so only those commands can run.
+   */
+  async runAction(projectId: string, toolsetId: string, actionId: string, values: ActionValues): Promise<ProcessInfo> {
+    const set = (await this.tools(projectId)).find((t) => t.id === toolsetId)
+    const def = set?.actions.find((a) => a.id === actionId)
+    if (!set || !def) throw new Error("That action is no longer available — reload the project's actions")
+    const command = buildCommand(def, values)
+    const label = set.kind === 'mono' ? `mono ${def.name}` : `${def.base[0]} ${def.name}`
+    return this.spawn(projectId, set.dir, set.rel, label, command, { toolset: toolsetId, id: actionId, values })
+  }
+
   start(projectId: string, cwd: string, script: string): ProcessInfo {
     const pkg = this.scans.get(projectId)?.find((x) => x.dir === cwd)
     if (!pkg || !(script in pkg.scripts)) throw new Error(`Script "${script}" not found — reload the project's actions`)
-    const command = scriptCommand(pkg.pm, script)
+    return this.spawn(projectId, cwd, pkg.rel, script, scriptCommand(pkg.pm, script))
+  }
+
+  private spawn(projectId: string, cwd: string, rel: string, script: string, command: string, action?: ProcessInfo['action']): ProcessInfo {
     const id = 'proc:' + shortId()
     const isWin = process.platform === 'win32'
     const file = isWin ? process.env.ComSpec || 'cmd.exe' : '/bin/sh'
@@ -66,7 +105,7 @@ export class ProcessService {
     // Only the latest run of a script is kept for review; drop earlier finished ones.
     for (const old of this.list()) if (old.cwd === cwd && old.script === script && old.status !== 'running') this.forget(old.id, false)
     const pid = this.pty.spawn(id, file, args, { cwd, env: { ...plainEnv(cwd), FORCE_COLOR: '1' } })
-    const p: ProcessInfo = { id, projectId, cwd, rel: pkg.rel, script, command, status: 'running', pid, startedAt: Date.now() }
+    const p: ProcessInfo = { id, projectId, cwd, rel, script, command, status: 'running', pid, startedAt: Date.now(), ...(action ? { action } : {}) }
     this.procs.set(id, p)
     this.prune()
     this.emit()
@@ -147,7 +186,7 @@ export class ProcessService {
     const p = this.procs.get(id)
     if (!p) throw new Error('Process not found')
     await this.stopAndWait(id)
-    return this.start(p.projectId, p.cwd, p.script)
+    return p.action ? this.runAction(p.projectId, p.action.toolset, p.action.id, p.action.values) : this.start(p.projectId, p.cwd, p.script)
   }
 
   private async stopAndWait(id: string): Promise<void> {

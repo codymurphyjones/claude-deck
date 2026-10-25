@@ -34,6 +34,7 @@ import { diagLogDir, diagLogFile, logDiag, recentDiag } from './diagnostics'
 import { withProgress } from './progress'
 import type { DiagLevel } from '@shared/diagnostics'
 import type { ReleaseInfo } from '@shared/types'
+import type { ActionValues } from '@shared/actions'
 
 type Handler = (e: IpcMainInvokeEvent, ...args: never[]) => unknown
 
@@ -458,6 +459,9 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'processes.scan': (_e, projectId: string, refresh?: boolean) => processes.scan(projectId, refresh),
     'processes.list': () => processes.list(),
     'processes.start': (_e, projectId: string, cwd: string, script: string) => processes.start(projectId, cwd, script),
+    // .mono commands and package-manager commands (shared/actions.ts), run from their forms.
+    'processes.tools': (_e, projectId: string, refresh?: boolean) => processes.tools(projectId, refresh),
+    'processes.runAction': (_e, projectId: string, toolset: string, actionId: string, values: ActionValues) => processes.runAction(projectId, toolset, actionId, values),
     'processes.stop': (_e, id: string) => processes.stop(id),
     'processes.restart': (_e, id: string) => processes.restart(id),
     'processes.dismiss': (_e, id: string) => processes.dismiss(id),

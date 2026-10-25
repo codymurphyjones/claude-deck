@@ -35,6 +35,7 @@ import type { ChatItem, ChatMeta } from '@shared/chat'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import type { BranchInfo, CommitAction, CurrentPr, RemoteInfo, RepoStatus, StashAction, StashInfo, TagInfo } from '@shared/repo'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
+import type { ActionValues, ToolSet } from '@shared/actions'
 import type { LoadResult } from '@shared/progressive'
 import type { DiagEntry, DiagLevel } from '@shared/diagnostics'
 
@@ -246,6 +247,8 @@ export const api = {
   },
   processes: {
     scan: c<ScriptPackage[], [string, boolean?]>('processes.scan'),
+    tools: c<ToolSet[], [string, boolean?]>('processes.tools'),
+    runAction: c<ProcessInfo, [string, string, string, ActionValues]>('processes.runAction'),
     list: c<ProcessInfo[]>('processes.list'),
     start: c<ProcessInfo, [string, string, string]>('processes.start'),
     stop: c<void, [string]>('processes.stop'),

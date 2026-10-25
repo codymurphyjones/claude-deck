@@ -155,6 +155,48 @@ test.describe('with a project folder', () => {
     expect(logErrors(deck)).toEqual([])
   })
 
+  test('lists .mono commands in Actions and runs one from its form with every option', async ({ deck }) => {
+    const { page, repo } = deck
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'fixture', packageManager: 'yarn@4.5.0', scripts: { hello: 'node -e "1"' } }))
+    fs.mkdirSync(path.join(repo, '.mono'))
+    fs.writeFileSync(path.join(repo, '.mono', 'config.json'), JSON.stringify({ prodFlag: 'live' }))
+    fs.writeFileSync(
+      path.join(repo, '.mono', 'deploy.json'),
+      JSON.stringify({
+        name: 'Deploy Stacks',
+        description: 'Deploys the stacks',
+        preactions: ['cp .env out/.env'],
+        actions: ['cdk deploy -c owner=${arg}'],
+        argument: { type: 'string', default: 'dev', options: ['dev', 'stage'] },
+        options: { region: { type: 'string', shortcut: 'r', default: 'us-east-2' }, fresh: { description: 'Drop the database first' } },
+        environments: { dev: { API_URL: 'http://localhost' }, prod: { API_URL: 'https://api.example.com' } }
+      })
+    )
+    await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
+    await page.getByTitle(/^Actions — /).click()
+    // The .mono folder starts open, with its command.
+    const action = page.getByTestId('action-mono:deploy')
+    await expect(action).toBeVisible()
+    await action.click()
+    const form = page.locator('.modal .action-form')
+    const command = page.getByTestId('action-command')
+    await expect(command).toContainText('yarn mono deploy dev')
+    // Every option of the file is a control: the argument's choices, the text option, the flag, the environment.
+    await form.locator('.seg button', { hasText: 'stage' }).click()
+    await form.locator('.action-row', { hasText: 'region' }).locator('input').fill('eu-west-1')
+    await form.locator('.action-flag', { hasText: 'fresh' }).locator('input').check()
+    await form.locator('.seg button', { hasText: /^Production/ }).click()
+    await expect(form.locator('.action-env')).toContainText('API_URL=https://api.example.com')
+    await expect(command).toContainText('yarn mono deploy stage --region eu-west-1 --fresh --live')
+    await page.locator('.modal').getByRole('button', { name: /Run/ }).click()
+    // It runs as a project process with exactly that command (mono itself isn't installed here).
+    const ran = await page.evaluate(async () => {
+      const bridge = (window as unknown as { deckBridge: { call: (m: string) => Promise<{ command: string; action?: unknown }[]> } }).deckBridge
+      return (await bridge.call('processes.list')).map((p) => p.command)
+    })
+    expect(ran).toContain('yarn mono deploy stage --region eu-west-1 --fresh --live')
+  })
+
   test('follows a branch switch made outside the app in the Chats view', async ({ deck }) => {
     const { page, repo } = deck
     const sidebar = page.locator('.sidebar:not(.collapsed)')

@@ -32,6 +32,8 @@ export interface ProcessInfo {
   tail?: string
   /** Failure acknowledged: no alert, but still the script's last run. */
   dismissed?: boolean
+  /** Started from a tool set's action (shared/actions.ts) rather than a script: run again the same way. */
+  action?: { toolset: string; id: string; values: Record<string, string | boolean> }
 }
 
 /** Failures that still need attention (alerts, the active list). */

@@ -18,6 +18,7 @@ import type { JobDef, JobRun, JobSource } from '@shared/jobs'
 import type { ProgressEvent } from '@shared/types'
 import { etaKey, runningLabel } from '@shared/progress'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
+import type { ToolSet } from '@shared/actions'
 import { api, errMsg, type Library, type LiveSession } from './api'
 
 /**
@@ -104,6 +105,10 @@ export interface UiState {
   processes: ProcessInfo[]
   /** package.json scripts per project id (scanned on demand). */
   scripts: Record<string, ScriptPackage[]>
+  /** Per project: its .mono and package-manager command folders (shared/actions.ts). */
+  tools: Record<string, ToolSet[]>
+  /** The action whose run form is open. */
+  actionRun?: { projectId: string; toolset: string; actionId: string }
   /** Project whose Actions section should open (from the command palette). */
   actionsFocus?: string
   mesh: Record<string, MeshGroupState>
@@ -194,6 +199,7 @@ export const useStore = create<UiState>(() => ({
   jobDefs: {},
   processes: [],
   scripts: {},
+  tools: {},
   mesh: {},
   timeline: [],
   toasts: [],
@@ -821,5 +827,8 @@ export async function loadRoutines(): Promise<JobDef[]> {
 export async function loadScripts(projectId: string, refresh = false): Promise<ScriptPackage[]> {
   const pkgs = (await attempt(() => api.processes.scan(projectId, refresh))) ?? []
   set((s) => ({ scripts: { ...s.scripts, [projectId]: pkgs } }))
+  // Its command folders (.mono, the package manager's) come from the same scan.
+  const tools = (await attempt(() => api.processes.tools(projectId, refresh))) ?? []
+  set((s) => ({ tools: { ...s.tools, [projectId]: tools } }))
   return pkgs
 }
