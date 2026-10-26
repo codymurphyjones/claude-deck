@@ -1227,3 +1227,42 @@ li.task.done > div {
 .cp-item .mono {
   flex: none;
 }
+/* A pick list in a reply (PickList.tsx): one item per row, a checkbox and its markdown. */
+.pick-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.q-opt.pick-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text);
+}
+.q-opt .pick-box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.q-opt.on .pick-box {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pick-body {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+}
+.pick-body > :first-child {
+  margin-top: 0;
+}
+.pick-body > :last-child {
+  margin-bottom: 0;
+}

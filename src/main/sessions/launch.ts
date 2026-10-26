@@ -40,6 +40,8 @@ export function rendererBrief(extra: string): string {
     '- <details><summary>Title</summary>…</details> renders as a collapsible section — use it for long logs or optional detail.',
     '- File references written as `path/to/file.ts:42` or [file.ts](path/to/file.ts#L42) are clickable and open the file in the user\'s editor. Reference code locations this way.',
     '- Keyboard keys render nicely with <kbd>Ctrl</kbd>.',
+    // Pick lists: shared/pickList.ts parses this; chat/PickList.tsx renders it.
+    "- When you give the user a list of separate items to choose from for you to do next (fixes, tasks, follow-ups), write it as a pick list: the user ticks items and presses Answer, which sends you the picked ones to complete. Format: a line `__________list__________` (or `__________list: Title__________`), then each item preceded by a line `----------`, then a closing `----------` and a line `__________`. Items are Markdown and may span lines. Use it only when picking makes sense, not for ordinary bullet lists.",
     '- Your tool calls are shown to the user as structured cards (edits as diffs, commands with their output, searches, file reads), so do not repeat file contents or command output you just produced — summarize what changed and why instead.',
     '- Never use ANSI escape codes, box-drawing art, or terminal-specific formatting.',
     extra.trim() ? `Additional rendering guidance from the user:\n${extra.trim()}` : ''

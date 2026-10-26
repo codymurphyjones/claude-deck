@@ -11,6 +11,8 @@ import { resolveTheme } from '../theme'
 import { ensureChat, useChat } from './chatStore'
 import { ChatComposer } from './ChatComposer'
 import { Markdown } from './Markdown'
+import { PickList } from './PickList'
+import { hasPickList, splitPickLists } from '@shared/pickList'
 import { selectionToMarkdown } from './selectionMarkdown'
 import { summarizeTools, ToolCard, type ToolItem } from './ToolCards'
 
@@ -261,7 +263,18 @@ const BlockView = memo(function BlockView({
     case 'text':
       return (
         <div className="msg-assistant">
-          <Markdown text={b.item.text} streaming={b.item.streaming} cwd={s.cwd} dark={dark} />
+          {hasPickList(b.item.text) ? (
+            // Pick lists in the reply become selectable cards (chat/PickList.tsx); the rest stays markdown.
+            splitPickLists(b.item.text).map((seg, i) =>
+              seg.kind === 'text' ? (
+                <Markdown key={i} text={seg.text} streaming={b.item.streaming} cwd={s.cwd} dark={dark} />
+              ) : (
+                <PickList key={i} sessionId={s.id} sessionKey={s.agentSessionId ?? s.id} id={`${b.item.id}:${i}`} title={seg.title} items={seg.items} complete={seg.complete && !b.item.streaming} cwd={s.cwd} dark={dark} />
+              )
+            )
+          ) : (
+            <Markdown text={b.item.text} streaming={b.item.streaming} cwd={s.cwd} dark={dark} />
+          )}
           {!b.item.streaming && (
             <div className="msg-actions">
               <button className="icon-btn sm" title="Copy markdown" onClick={() => api.clipboard.writeText(b.item.text)}>
