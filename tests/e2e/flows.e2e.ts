@@ -61,6 +61,14 @@ test.describe('with a project folder', () => {
       await review.getByRole('button', { name: 'Stage all' }).click()
       await expect.poll(() => git(repo, 'diff', '--cached', '--name-only')).toBe('notes.txt')
       await review.getByPlaceholder('Commit message').fill('Add a second line')
+      // The message box can fill the whole panel for long messages, and comes back with Esc.
+      await review.getByTitle(/^Expand the commit message/).click()
+      await expect(review.getByText('notes.txt')).toBeHidden()
+      const box = await review.getByPlaceholder('Commit message').boundingBox()
+      const pane = await review.boundingBox()
+      expect(box!.height).toBeGreaterThan(pane!.height * 0.6)
+      await review.getByPlaceholder('Commit message').press('Escape')
+      await expect(review.getByText('notes.txt')).toBeVisible()
       // `.btn`: the commit button, not the "Commit" view tab.
       const commit = review.locator('button.btn', { hasText: /^Commit$/ })
       await expect(commit).toBeEnabled()

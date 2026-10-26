@@ -2765,3 +2765,41 @@ html.buddy-page body {
   font-weight: 400;
   font-size: 12px;
 }
+/* Review pane: the commit message box, and its full-panel mode (expand toggle). */
+.commit-msg-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.commit-msg-wrap .textarea {
+  padding-right: 28px;
+}
+.commit-msg-expand {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0.7;
+}
+.commit-msg-expand:hover {
+  opacity: 1;
+}
+.review-pane.msg-full > :not(.commit-box) {
+  display: none;
+}
+.review-pane.msg-full > .commit-box {
+  flex: 1;
+  min-height: 0;
+  border-top: none !important;
+}
+.review-pane.msg-full .commit-msg-wrap {
+  flex: 1;
+  min-height: 0;
+}
+.review-pane.msg-full .commit-msg-wrap .textarea {
+  flex: 1;
+  height: 100%;
+  resize: none;
+  font-family: var(--code-font);
+  font-size: 12.5px;
+  line-height: 1.5;
+}

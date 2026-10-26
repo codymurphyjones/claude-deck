@@ -333,6 +333,8 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const [comments, setComments] = useState<Comment[]>([])
   const [msg, setMsg] = useState('')
   const [amend, setAmend] = useState(false)
+  /** The commit message box fills the panel (the expand toggle). */
+  const [msgFull, setMsgFull] = useState(false)
   const branchPrefix = useStore((s) => s.settings.worktrees.branchPrefix)
   const commitPrefix = useStore((s) => s.settings.git.commitPrefix)
   const [busy, setBusy] = useState('')
@@ -643,7 +645,7 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
   const totalDel = files?.reduce((n, f) => n + f.deletions, 0) ?? 0
 
   return (
-    <div data-testid="review-pane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div data-testid="review-pane" className={`review-pane ${msgFull ? 'msg-full' : ''}`} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* A chat worktree under review: its branch, what it merges into, and Merge. */}
       {reviewedWorktree && <ChatBranchBar key={reviewedWorktree} worktreeId={reviewedWorktree} />}
       <div className="col" style={{ padding: '8px 10px', gap: 6, borderBottom: '1px solid var(--border)' }}>
@@ -793,8 +795,29 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
           </button>
         </div>
       )}
-      <div className="col" style={{ padding: 10, borderTop: '1px solid var(--border)', gap: 6 }}>
-        <textarea className="textarea" rows={2} style={{ minHeight: 54 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={amend ? "Leave empty to keep the last commit's message" : commitPrefix.trim() ? `Commit message (committed as "${commitPrefix.trim()} …")` : 'Commit message'} onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && void doCommit(false)} />
+      <div className="col commit-box" style={{ padding: 10, borderTop: '1px solid var(--border)', gap: 6 }}>
+        <div className="commit-msg-wrap">
+          <textarea
+            className="textarea"
+            rows={2}
+            style={{ minHeight: 54 }}
+            value={msg}
+            onChange={(e) => setMsg(e.target.value)}
+            placeholder={amend ? "Leave empty to keep the last commit's message" : commitPrefix.trim() ? `Commit message (committed as "${commitPrefix.trim()} …")` : 'Commit message'}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.ctrlKey) void doCommit(false)
+              else if (e.key === 'Escape' && msgFull) (e.stopPropagation(), setMsgFull(false))
+            }}
+          />
+          {/* Full height: the message fills the Review panel, for reading and editing long ones. */}
+          <button
+            className="icon-btn sm commit-msg-expand"
+            title={msgFull ? 'Back to the changes (Esc)' : 'Expand the commit message to the whole panel'}
+            onClick={() => setMsgFull((v) => !v)}
+          >
+            <Icon name={msgFull ? 'minus' : 'popout'} size={12} />
+          </button>
+        </div>
         <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
           <button className="btn sm" onClick={generate} disabled={!!busy}>
             <Icon name="wand" size={12} /> {busy === 'gen' ? 'Drafting…' : 'Draft'}
