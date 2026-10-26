@@ -360,8 +360,24 @@ const REVIEW_BADGE: Record<string, [string, string]> = {
  * newest commit isn't yours), with your latest review on each. Nothing shows when there are none.
  */
 function ApprovalsStrip({ root, prs }: { root: string; prs: PullRequestSummary[] | null }) {
-  if (!prs?.length) return null
+  // Not known (loading, no remote or gh): nothing. Known and empty: say so, so nobody waits on you unseen.
+  if (!prs) return null
   const waiting = prs.filter((p) => p.myReview !== 'APPROVED')
+  if (!waiting.length)
+    return (
+      <section className="ph-approvals clear" data-testid="approvals">
+        <div className="ph-approvals-head">
+          <Icon name="check" size={14} style={{ color: 'var(--success)' }} />
+          <span className="grow">
+            No pull requests are waiting on your approval
+            <span className="muted"> · no colleague is blocked by you{prs.length ? ` (you've approved ${prs.length === 1 ? 'the 1 open one' : `all ${prs.length} open ones`} you can)` : ''}</span>
+          </span>
+          <button className="btn sm ghost" onClick={() => showView('reviews')}>
+            Pull requests <Icon name="chevron-right" size={12} />
+          </button>
+        </div>
+      </section>
+    )
   return (
     <section className="ph-approvals" data-testid="approvals">
       <div className="ph-approvals-head">
