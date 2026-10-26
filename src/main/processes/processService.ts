@@ -6,7 +6,7 @@ import type { PtyService } from '../pty/ptyService'
 import { plainEnv } from '../sessions/launch'
 import { run, shortId, truncate } from '../util'
 import { scanScripts } from './scan'
-import { scanTools } from './tools'
+import { scanTools, withMono } from './tools'
 import { buildCommand, type ActionValues, type ToolSet } from '@shared/actions'
 
 /** Finished runs kept (newest per script) so their output can still be reviewed. */
@@ -52,7 +52,8 @@ export class ProcessService {
     const all: ScriptPackage[] = []
     for (const f of p.folders) {
       const base = f.split(/[\\/]/).pop() ?? f
-      for (const pkg of await scanScripts(f)) all.push(multi ? { ...pkg, rel: pkg.rel ? `${base}/${pkg.rel}` : base } : pkg)
+      // With .mono, workspace scripts run through mono (its aliases and environment): tools.withMono.
+      for (const pkg of await withMono(f, await scanScripts(f))) all.push(multi ? { ...pkg, rel: pkg.rel ? `${base}/${pkg.rel}` : base } : pkg)
     }
     this.scans.set(projectId, all)
     return all
@@ -94,7 +95,7 @@ export class ProcessService {
   start(projectId: string, cwd: string, script: string): ProcessInfo {
     const pkg = this.scans.get(projectId)?.find((x) => x.dir === cwd)
     if (!pkg || !(script in pkg.scripts)) throw new Error(`Script "${script}" not found — reload the project's actions`)
-    return this.spawn(projectId, cwd, pkg.rel, script, scriptCommand(pkg.pm, script))
+    return this.spawn(projectId, cwd, pkg.rel, script, scriptCommand(pkg.pm, script, pkg.mono && { ...pkg.mono, name: pkg.name }))
   }
 
   private spawn(projectId: string, cwd: string, rel: string, script: string, command: string, action?: ProcessInfo['action']): ProcessInfo {

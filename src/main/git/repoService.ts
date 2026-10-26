@@ -25,8 +25,7 @@ import {
 } from '@shared/repo'
 import type { CommitInfo, DiffFile } from '@shared/types'
 import { run } from '../util'
-import { currentBranch, diff, ghPath, info, mustGit, rawGit as git, toplevel } from './gitService'
-import { assertPushable } from './pushGuard'
+import { checkPushable, diff, ghPath, info, mustGit, rawGit as git, toplevel } from './gitService'
 
 // Repo manager: the git/GitHub operations behind the Repository view. Every call
 // resolves the repo root from `cwd`, so any folder inside a repo works.
@@ -84,7 +83,7 @@ export async function pull(cwd: string, mode: 'rebase' | 'merge' = 'rebase'): Pr
 export async function push(cwd: string, opts: { force?: boolean; tags?: boolean } = {}): Promise<string> {
   const root = await rootOf(cwd)
   if (opts.tags) return netGit(root, ['push', '--tags'])
-  assertPushable(root, await currentBranch(root))
+  await checkPushable(root)
   const up = await git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
   const args = up.code === 0 ? ['push'] : ['push', '-u', 'origin', 'HEAD']
   if (opts.force) args.push('--force-with-lease')

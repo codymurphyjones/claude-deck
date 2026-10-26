@@ -3,7 +3,7 @@ import type { BranchVsRemote, ChatBranchStatus, ChatMergeResult, WorktreeRecord 
 import { broadcast } from '../context'
 import { rawGit as git } from '../git/gitService'
 import { getWorktree, touchWorktree } from './worktreeService'
-import { assertPushable } from '../git/pushGuard'
+import { checkPushable } from '../git/gitService'
 
 // Branches worked on in parallel. Each chat works in its own worktree (in Claude Deck's data folder)
 // on a sub-branch off a target branch, and "Merge into <target>" brings its work back:
@@ -127,7 +127,7 @@ export async function mergeIntoTarget(id: string, opts: { stashLocal?: boolean }
 
 /** Push one local branch (not necessarily the checked-out one) to its remote. */
 export async function pushBranch(repo: string, branch: string): Promise<void> {
-  assertPushable(repo, branch)
+  await checkPushable(repo, branch)
   const remote = (await git(repo, ['config', `branch.${branch}.remote`])).stdout.trim() || ((await git(repo, ['remote'])).stdout.split('\n')[0] ?? '').trim()
   if (!remote) throw new Error('This repository has no remote to push to.')
   const p = await git(repo, ['push', remote, `refs/heads/${branch}:refs/heads/${branch}`], undefined, 120_000)

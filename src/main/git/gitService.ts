@@ -307,9 +307,19 @@ export async function commit(cwd: string, message: string, opts: { all?: boolean
   return mustGit(root, args, message)
 }
 
+/**
+ * Refuse to push a chat's worktree branch (git/pushGuard.ts): checked against the app's records and
+ * the branch's own marker in git config (its pushRemote), which exists from the moment it's made.
+ */
+export async function checkPushable(root: string, branch?: string): Promise<void> {
+  const b = branch ?? (await currentBranch(root))
+  const pushRemote = b ? (await git(root, ['config', '--get', `branch.${b}.pushRemote`])).stdout.trim() : undefined
+  assertPushable(root, b, pushRemote)
+}
+
 export async function push(cwd: string): Promise<string> {
   const root = (await toplevel(cwd)) ?? cwd
-  assertPushable(root, await currentBranch(root))
+  await checkPushable(root)
   const up = await git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
   const r = up.code === 0 ? await git(root, ['push'], undefined, 180_000) : await git(root, ['push', '-u', 'origin', 'HEAD'], undefined, 180_000)
   if (r.code !== 0) throw new Error(r.stderr.trim() || 'push failed')
@@ -336,7 +346,7 @@ export async function createPr(cwd: string, opts: { title?: string; body?: strin
   if (!gh) throw new Error('GitHub CLI (gh) is not installed')
   const root = (await toplevel(cwd)) ?? cwd
   // (gh pushes the head branch itself when it isn't on the remote yet.)
-  assertPushable(root, await currentBranch(root))
+  await checkPushable(root)
   const args = ['pr', 'create']
   if (opts.title) args.push('--title', opts.title, '--body', opts.body ?? '')
   else args.push('--fill')

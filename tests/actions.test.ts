@@ -22,8 +22,7 @@ const build: MonoFile = { argument: { default: 'development', options: ['develop
 const pass: MonoFile = { actions: ['x ${local} ${arg}'], argument: { default: 'dev' }, options: { local: { default: false, shortcut: 'l' } } }
 
 const config = { prodFlag: 'live', workspace: { packageMaps: { web: 'next-app', ghost: 'missing-pkg' } } }
-const workspaces = [{ name: 'next-app', scripts: ['dev', 'build'] }]
-const mono = monoActions({ deploy, 'env-sync': envSync, build, pass }, config, ['yarn'], workspaces)
+const mono = monoActions({ deploy, 'env-sync': envSync, build, pass }, config, ['yarn'])
 const def = (id: string, list: ActionDef[] = mono): ActionDef => list.find((d) => d.id === id)!
 const run = (id: string, values: Record<string, string | boolean> = {}, list: ActionDef[] = mono): string => buildCommand(def(id, list), { ...defaultValues(def(id, list)), ...values })
 
@@ -53,9 +52,7 @@ describe('.mono commands', () => {
     expect(validateValues(def('mono:build'), { arg: 'staging' })).toMatch(/one of/)
   })
 
-  it('include workspace aliases (when the workspace exists) and the built-in tools', () => {
-    expect(run('mono-ws:web', { script: 'build' })).toBe('yarn mono web build')
-    expect(mono.some((d) => d.id === 'mono-ws:ghost')).toBe(false)
+  it('include the built-in tools', () => {
     expect(def('mono-tools:prune').base.join(' ')).toBe('yarn mono tools prune')
   })
 })
@@ -105,7 +102,7 @@ describe('finding a project’s command folders', () => {
     const sets = await scanTools(dir, await scanScripts(dir))
     const mono = sets.find((s) => s.kind === 'mono')!
     expect(mono.title).toBe('.mono')
-    expect(mono.actions.map((a) => a.id)).toEqual(['mono:deploy', 'mono-ws:web', 'mono-tools:prune'])
+    expect(mono.actions.map((a) => a.id)).toEqual(['mono:deploy', 'mono-tools:prune'])
     expect(mono.notes?.[0]).toMatch(/broken\.json/)
     expect(buildCommand(mono.actions[0], { ...defaultValues(mono.actions[0]), __prod: true })).toBe('yarn mono deploy dev --live')
     const yarn = sets.find((s) => s.kind === 'yarn')!
@@ -113,6 +110,22 @@ describe('finding a project’s command folders', () => {
     expect(yarn.actions.some((a) => a.id === 'yarn:foreach')).toBe(true)
     expect(yarn.context.workspaces.map((w) => w.name)).toEqual(['next-app'])
     expect(yarn.context.dependencies).toContain('@mono-labs/cli')
+    // Workspace scripts run through mono: by alias (config.json packageMaps) or by name; root ones as usual.
+    write('packages/types/package.json', { name: '@my/types', scripts: { migrate: 'tsx migrate.ts' } })
+    write('.mono/config.json', { prodFlag: 'live', workspace: { packageMaps: { web: 'next-app', db: '@my/types' } } })
+    write('packages/plain/package.json', { name: 'plain-pkg', scripts: { lint: 'biome' } })
+    const { withMono } = await import('../src/main/processes/tools')
+    const { scriptCommand } = await import('@shared/processes')
+    const pkgs = await withMono(dir, await scanScripts(dir))
+    const cmd = (name: string, script: string): string => {
+      const p = pkgs.find((x) => x.name === name)!
+      return scriptCommand(p.pm, script, p.mono && { ...p.mono, name: p.name })
+    }
+    expect(pkgs.find((p) => p.name === '@my/types')?.mono?.alias).toBe('db')
+    expect(cmd('@my/types', 'migrate')).toBe('yarn mono db migrate')
+    expect(cmd('next-app', 'dev')).toBe('yarn mono web dev')
+    expect(cmd('plain-pkg', 'lint')).toBe('yarn mono plain-pkg lint')
+    expect(cmd('game', 'test')).toBe('yarn test')
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })

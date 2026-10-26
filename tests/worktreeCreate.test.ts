@@ -145,3 +145,46 @@ describe('active branches held in the data folder', () => {
     await expect(checkoutBranch(repo, 'fresh', { from: 'master' })).rejects.toThrow(/already exists/)
   })
 })
+
+describe('a chat worktree and the remote', () => {
+  it('tracks its parent branch’s upstream so it can pull, but its own pushes are refused', async () => {
+    const { createWorktree, NO_PUSH_REMOTE } = await import('../src/main/worktrees/worktreeService')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-up-'))
+    const origin = path.join(root, 'origin.git')
+    const user = path.join(root, 'user')
+    const other = path.join(root, 'other')
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])
+    fs.mkdirSync(user)
+    g(user, 'init', '-q', '-b', 'main')
+    g(user, 'config', 'core.autocrlf', 'false')
+    fs.writeFileSync(path.join(user, 'a.txt'), 'a\n')
+    g(user, 'add', '.')
+    g(user, 'commit', '-qm', 'base')
+    g(user, 'remote', 'add', 'origin', origin)
+    g(user, 'push', '-q', '-u', 'origin', 'main')
+
+    const w = await createWorktree({ repoCwd: user, target: 'main' })
+    expect(g(w.path, 'rev-parse', '--abbrev-ref', '@{upstream}')).toBe('origin/main')
+    // Someone pushes to origin/main; the chat's worktree pulls it down.
+    execFileSync('git', ['clone', '-q', origin, other])
+    fs.writeFileSync(path.join(other, 'b.txt'), 'b\n')
+    g(other, 'add', '.')
+    g(other, 'commit', '-qm', 'from elsewhere')
+    g(other, 'push', '-q', 'origin', 'main')
+    g(w.path, 'pull', '-q', '--rebase')
+    expect(fs.existsSync(path.join(w.path, 'b.txt'))).toBe(true)
+    // A plain `git push` (e.g. from the user's own terminal) goes nowhere.
+    let err = ''
+    try {
+      g(w.path, 'push')
+    } catch (e) {
+      err = String((e as { stderr?: string }).stderr ?? e)
+    }
+    expect(err).toContain(NO_PUSH_REMOTE)
+    expect(g(origin, 'branch', '--list')).not.toContain('claude/')
+    // The user's local main is untouched: merging stays a local step.
+    expect(fs.existsSync(path.join(user, 'b.txt'))).toBe(false)
+    g(user, 'worktree', 'remove', '--force', w.path)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+})

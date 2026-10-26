@@ -668,12 +668,15 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
               {info.behind ? ` ↓${info.behind}` : ''}
             </span>
           )}
-          {/* A chat worktree's branch has no remote of its own; it takes in its target when merging. */}
-          {!reviewedWt && (
-            <button className="icon-btn sm" title="Pull (rebase)" onClick={() => repo && attempt(() => api.git.pull(repo), 'Pulled').then(load)}>
-              <Icon name="download" size={14} />
-            </button>
-          )}
+          {/* A chat worktree's branch tracks its target's upstream (e.g. origin/main): pulling brings the
+              remote's updates into the worktree. (Its own commits are never pushed.) */}
+          <button
+            className="icon-btn sm"
+            title={reviewedWt ? `Pull ${reviewedWt.target}'s updates from its remote into this worktree (rebase)` : 'Pull (rebase)'}
+            onClick={() => repo && attempt(() => api.git.pull(repo), 'Pulled').then(load)}
+          >
+            <Icon name="download" size={14} />
+          </button>
           <button className={`icon-btn sm ${refreshing ? 'spinning' : ''}`} title={refreshing ? 'Refreshing…' : 'Refresh'} onClick={load}>
             <Icon name="refresh" size={14} />
           </button>

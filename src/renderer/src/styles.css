@@ -1990,6 +1990,13 @@ html.buddy-page body {
 .list-item.proj-folder > svg {
   color: var(--muted);
 }
+/* A workspace folder inside the .mono folder (by its alias), and its scripts, one level in. */
+.list-item.proj-folder.nested {
+  padding-left: 24px;
+}
+.list-item.proj-script.nested {
+  padding-left: 46px;
+}
 .list-item.proj-script {
   padding-top: 3px;
   padding-bottom: 3px;

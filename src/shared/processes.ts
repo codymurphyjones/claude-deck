@@ -10,6 +10,12 @@ export interface ScriptPackage {
   name: string
   pm: PackageManager
   scripts: Record<string, string>
+  /**
+   * In a project with `.mono`: the workspace's scripts run through mono, `<runner> mono <name> <script>`,
+   * so mono's environment loading applies. `alias` is its short label from .mono/config.json
+   * (workspace.packageMaps), e.g. "db" for "@my/types".
+   */
+  mono?: { runner: string[]; alias?: string }
 }
 
 export type ProcessStatus = 'running' | 'success' | 'failed' | 'stopped'
@@ -64,8 +70,9 @@ export function pickPm(packageManagerField: unknown, lockfiles: string[]): Packa
   return 'npm'
 }
 
-export function scriptCommand(pm: PackageManager, script: string): string {
+export function scriptCommand(pm: PackageManager, script: string, mono?: ScriptPackage['mono'] & { name: string }): string {
   const s = /^[\w:.@/-]+$/.test(script) ? script : JSON.stringify(script)
+  if (mono) return [...mono.runner, 'mono', mono.alias ?? mono.name, s].join(' ')
   return pm === 'yarn' ? `yarn ${s}` : `${pm} run ${s}`
 }
 

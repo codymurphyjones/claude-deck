@@ -8,6 +8,7 @@ import { findProjectForFolder, emitLibrary } from '../library'
 import { runtime } from '../runtime'
 import { ensureDir, run, shortId } from '../util'
 import { withProgress, type Progress } from '../progress'
+import { NO_PUSH_REMOTE } from '../git/pushGuard'
 import * as os from 'os'
 
 const worktreeRoot = (): string => ensureDir(settings().worktrees.root || path.join(runtime.userData, 'worktrees'))
@@ -173,6 +174,33 @@ async function snapshotCommit(cwd: string): Promise<string> {
   }
 }
 
+export { NO_PUSH_REMOTE }
+
+/**
+ * A chat's branch tracks the same upstream as the branch it works toward (e.g. origin/main), so
+ * `git pull` in its worktree brings down the remote's updates. Its work still goes into the local
+ * branch with "Merge into"; pushes from it are refused (pushRemote: a remote that doesn't exist),
+ * even from the user's own terminal, so tracking origin/main can't send its commits there.
+ * Worktrees share the repo's remotes, so origin is already the parent's. Idempotent.
+ */
+export async function trackParentUpstream(repoRoot: string, branch: string, target: string): Promise<void> {
+  const get = async (key: string): Promise<string> => (await git(repoRoot, ['config', '--get', key])).stdout.trim()
+  let remote = await get(`branch.${target}.remote`)
+  let merge = await get(`branch.${target}.merge`)
+  if (!remote || !merge || remote === '.') {
+    // The target doesn't track anything (or tracks a local branch): its namesake on origin, if any.
+    if ((await git(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${target}`])).code !== 0) {
+      await git(repoRoot, ['config', `branch.${branch}.pushRemote`, NO_PUSH_REMOTE])
+      return
+    }
+    remote = 'origin'
+    merge = `refs/heads/${target}`
+  }
+  await git(repoRoot, ['config', `branch.${branch}.remote`, remote])
+  await git(repoRoot, ['config', `branch.${branch}.merge`, merge])
+  await git(repoRoot, ['config', `branch.${branch}.pushRemote`, NO_PUSH_REMOTE])
+}
+
 /**
  * A new detached worktree holding another checkout's current state (e.g. a chat's worktree): its
  * commits, with its uncommitted changes as uncommitted changes. The source is not modified.
@@ -188,7 +216,10 @@ export async function worktreeFromCheckout(from: string, opts: { name?: string; 
   if (target) {
     patch.branch = `${settings().worktrees.branchPrefix}${target.replace(/[^\w./-]+/g, '-')}-${wt.id}`
     patch.target = target
-    await mustGit(wt.path, ['switch', '-q', '-c', patch.branch])
+    // Marked (and tracking the target's upstream) before it's checked out.
+    await mustGit(wt.path, ['branch', patch.branch, 'HEAD'])
+    await trackParentUpstream(repo, patch.branch, target)
+    await mustGit(wt.path, ['switch', '-q', patch.branch])
   }
   touchWorktree(wt.id, patch)
   emitLibrary()
@@ -340,7 +371,15 @@ async function makeWorktree(repoRoot: string, opts: CreateOpts, p: Progress): Pr
   let chatBranch: string | undefined
   if (!onBranch && opts.target) {
     chatBranch = `${settings().worktrees.branchPrefix}${opts.target.replace(/[^\w./-]+/g, '-')}-${id}`
-    await mustGit(repoRoot, ['worktree', 'add', '-b', chatBranch, dir, opts.target])
+    // The branch first, marked unpushable and tracking the target's upstream, then its worktree: it's
+    // never checked out anywhere without its push block.
+    await mustGit(repoRoot, ['branch', chatBranch, opts.target])
+    await trackParentUpstream(repoRoot, chatBranch, opts.target)
+    const added = await git(repoRoot, ['worktree', 'add', dir, chatBranch])
+    if (added.code !== 0) {
+      await git(repoRoot, ['branch', '-D', chatBranch])
+      throw new Error(added.stderr.trim() || `Couldn't create the worktree for ${chatBranch}`)
+    }
   } else if (!onBranch) await mustGit(repoRoot, ['worktree', 'add', '--detach', dir, base])
   if (carried) {
     const r = await git(dir, ['stash', 'apply', carried])

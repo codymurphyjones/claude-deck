@@ -159,7 +159,9 @@ test.describe('with a project folder', () => {
     const { page, repo } = deck
     fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'fixture', packageManager: 'yarn@4.5.0', scripts: { hello: 'node -e "1"' } }))
     fs.mkdirSync(path.join(repo, '.mono'))
-    fs.writeFileSync(path.join(repo, '.mono', 'config.json'), JSON.stringify({ prodFlag: 'live' }))
+    fs.writeFileSync(path.join(repo, '.mono', 'config.json'), JSON.stringify({ prodFlag: 'live', workspace: { packageMaps: { db: '@my/types' } } }))
+    fs.mkdirSync(path.join(repo, 'packages', 'types'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'packages', 'types', 'package.json'), JSON.stringify({ name: '@my/types', scripts: { migrate: 'node -e "1"' } }))
     fs.writeFileSync(
       path.join(repo, '.mono', 'deploy.json'),
       JSON.stringify({
@@ -195,6 +197,23 @@ test.describe('with a project folder', () => {
       return (await bridge.call('processes.list')).map((p) => p.command)
     })
     expect(ran).toContain('yarn mono deploy stage --region eu-west-1 --fresh --live')
+
+    // A workspace with a mono alias is listed in .mono by its alias (not again as a plain folder),
+    // .mono comes before the script folders, and the alias's scripts run through mono.
+    const sidebar = page.locator('.sidebar:not(.collapsed)')
+    const folders = await sidebar.locator('.proj-folder').allInnerTexts()
+    expect(folders.filter((t) => t.includes('packages/types') && !t.includes('db'))).toEqual([])
+    expect(folders.findIndex((t) => t.includes('.mono'))).toBeLessThan(folders.findIndex((t) => t.includes('root')))
+    await sidebar.locator('.proj-folder.nested', { hasText: 'db' }).click()
+    await sidebar.locator('.proj-script.nested', { hasText: 'migrate' }).click()
+    await expect
+      .poll(async () =>
+        page.evaluate(async () => {
+          const bridge = (window as unknown as { deckBridge: { call: (m: string) => Promise<{ command: string }[]> } }).deckBridge
+          return (await bridge.call('processes.list')).map((p) => p.command)
+        })
+      )
+      .toContain('yarn mono db migrate')
   })
 
   test('follows a branch switch made outside the app in the Chats view', async ({ deck }) => {

@@ -173,9 +173,10 @@ const choicesOf = (o: { options?: unknown[]; allowAll?: boolean }): string[] | u
 /**
  * The actions of a project's `.mono` folder, each field of its schema as a form input, run the way
  * the CLI expects: `<runner> mono <command> [argument] [--option value] [--flag] [--<prodFlag>]`.
- * Also its workspace aliases (`mono <alias> <script>`, from config.json) and built-in tools.
+ * Plus mono's built-in tools. (Workspace scripts run through mono's aliases appear with the scripts:
+ * see ScriptPackage.mono.)
  */
-export function monoActions(files: Record<string, MonoFile>, config: MonoConfig, runner: string[], workspaces: { name: string; scripts: string[] }[]): ActionDef[] {
+export function monoActions(files: Record<string, MonoFile>, config: MonoConfig, runner: string[]): ActionDef[] {
   const prodFlag = config.prodFlag || 'prod'
   const out: ActionDef[] = []
   for (const [command, f] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
@@ -231,21 +232,6 @@ export function monoActions(files: Record<string, MonoFile>, config: MonoConfig,
       steps: { pre: strList(f.preactions), main: strList(f.actions) },
       env: hasEnv ? { prodKey: '__prod', dev: strRecord(envs.dev), prod: strRecord(envs.prod) } : undefined,
       danger: /destroy|delete|drop|teardown/i.test(command)
-    })
-  }
-  // Workspace aliases: `mono <alias> <script>` runs a script in the aliased workspace.
-  for (const [alias, pkgName] of Object.entries(config.workspace?.packageMaps ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
-    const ws = workspaces.find((w) => w.name === pkgName)
-    if (!ws || !ws.scripts.length) continue
-    out.push({
-      id: `mono-ws:${alias}`,
-      group: 'Workspaces',
-      name: alias,
-      title: `${alias} → ${pkgName}`,
-      description: `Runs a script of ${pkgName} through mono (yarn workspace ${pkgName} <script>), with mono's environment mapping.`,
-      base: [...runner, 'mono', alias],
-      inputs: [{ key: 'script', label: 'Script', kind: 'choice', choices: ws.scripts, required: true, default: ws.scripts.includes('dev') ? 'dev' : ws.scripts[0], cli: { positional: true } }],
-      extraArgs: 'plain'
     })
   }
   out.push({

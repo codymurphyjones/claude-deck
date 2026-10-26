@@ -17,8 +17,19 @@ const inside = (p: string, dir: string): boolean => {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
-/** Why pushing `branch` from `root` isn't allowed, or undefined if it is. */
-export function pushRefusal(root: string, branch: string | undefined): string | undefined {
+/**
+ * A chat branch's push remote, set in git itself when the branch is made (before its worktree
+ * exists): no such remote exists, so a plain `git push` fails, naming why, from any terminal. It also
+ * marks the branch as a chat's for this guard, without waiting on the app's records.
+ */
+export const NO_PUSH_REMOTE = 'claude-deck-chat-branches-are-never-pushed'
+
+/**
+ * Why pushing `branch` from `root` isn't allowed, or undefined if it is. `pushRemote`: the branch's
+ * `branch.<name>.pushRemote` from git config, when the caller has read it.
+ */
+export function pushRefusal(root: string, branch: string | undefined, pushRemote?: string): string | undefined {
+  if (pushRemote === NO_PUSH_REMOTE) return `${branch} is a chat's own branch: its work goes into its target branch with "Merge into", and that branch is pushed from its own folder. Chat branches are never pushed.`
   const wts = worktreeSource()
   const chatWt = chatWorktreeAt(root)
   if (chatWt) return `This is a chat's worktree (${chatWt.branch ?? 'detached'}): its work goes into ${chatWt.target} with "Merge into ${chatWt.target}", and ${chatWt.target} is pushed from its own folder. Chat branches are never pushed.`
@@ -59,7 +70,7 @@ export function pushBlockEnv(cwd: string | undefined, base: Record<string, strin
 }
 
 /** Throws if pushing `branch` from `root` would publish a chat's worktree branch. */
-export function assertPushable(root: string, branch: string | undefined): void {
-  const why = pushRefusal(root, branch)
+export function assertPushable(root: string, branch: string | undefined, pushRemote?: string): void {
+  const why = pushRefusal(root, branch, pushRemote)
   if (why) throw new Error(why)
 }

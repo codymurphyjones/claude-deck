@@ -20,6 +20,7 @@ import { isAppTool } from '@shared/agentTools'
 import { callAppTool } from './appTools'
 import { MergedWorktreeCleanup } from './worktrees/mergedCleanup'
 import { HeadWatcher } from './git/headWatcher'
+import { trackParentUpstream } from './worktrees/worktreeService'
 import { setWorktreeSource } from './git/pushGuard'
 import { onLibraryChanged } from './library'
 
@@ -126,6 +127,10 @@ if (!app.requestSingleInstanceLock()) {
     const mergedCleanup = new MergedWorktreeCleanup((w) => sessions.isWorktreeProtected(w.id))
     mergedCleanup.start()
     // Each project folder's (and Claude Deck-held branch's) checked-out branch, followed live.
+    // Chat branches made before they tracked their parent's upstream: give them it (and the push block).
+    void (async () => {
+      for (const w of state().worktrees) if (!w.deleted && w.branch && w.target && !w.holdsBranch) await trackParentUpstream(w.repoRoot, w.branch, w.target).catch(() => undefined)
+    })()
     const heads = new HeadWatcher((folder, branch) => sessions.folderBranchChanged(folder, branch))
     const watchFolders = (): string[] => [...state().projects.flatMap((p) => p.folders), ...state().worktrees.filter((w) => w.holdsBranch && !w.deleted).map((w) => w.path)]
     void heads.sync(watchFolders())

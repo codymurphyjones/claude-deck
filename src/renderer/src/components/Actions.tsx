@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Project } from '@shared/types'
-import { isOpenFailure, plainLines, scriptState, type ProcessInfo, type ScriptPackage } from '@shared/processes'
+import { isOpenFailure, plainLines, scriptCommand, scriptState, type ProcessInfo, type ScriptPackage } from '@shared/processes'
 import { api } from '../api'
 import { attempt, get, loadScripts, openProcessTab, retargetProcessTab, set, useStore } from '../store'
 import { attach, detach, focusTerminal, hydrate, refit } from '../terminal/registry'
@@ -61,8 +61,18 @@ export function ProjectActions({ project, embedded = false }: { project: Project
   // Root package first, then sub-packages by path.
   const shown = [...(pkgs ?? [])]
     .sort((a, b) => Number(!!a.rel) - Number(!!b.rel) || a.rel.localeCompare(b.rel))
-    .map((p) => ({ pkg: p, names: Object.keys(p.scripts).filter((n) => !ql || n.toLowerCase().includes(ql) || p.rel.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql)) }))
+    .map((p) => ({ pkg: p, names: Object.keys(p.scripts).filter((n) => !ql || n.toLowerCase().includes(ql) || p.rel.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql) || !!p.mono?.alias?.toLowerCase().includes(ql)) }))
     .filter((g) => g.names.length)
+  // Workspaces with a .mono alias are listed in the .mono folder (run as `yarn mono <alias> <script>`),
+  // not again as plain package folders.
+  const aliased = shown.filter((g) => g.pkg.mono?.alias)
+  const plain = shown.filter((g) => !g.pkg.mono?.alias)
+  const toolsShown = (tools ?? [])
+    .map((t) => ({ t, actions: t.actions.filter((a) => !ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) }))
+    .filter((x) => x.actions.length || (x.t.kind === 'mono' && aliased.length))
+  const toolFolder = ({ t, actions }: (typeof toolsShown)[number]) => (
+    <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} workspaces={t.kind === 'mono' ? aliased.filter((g) => g.pkg.dir.toLowerCase().startsWith(t.dir.toLowerCase())) : []} />
+  )
 
   return (
     <>
@@ -109,16 +119,13 @@ export function ProjectActions({ project, embedded = false }: { project: Project
           {total > 12 && <input className="input sm" style={{ margin: '2px 0 4px' }} placeholder="Filter scripts…" value={q} onChange={(e) => setQ(e.target.value)} />}
           {!pkgs && <div className="empty-note">Scanning package.json files…</div>}
           {pkgs && !pkgs.length && <div className="empty-note">No package.json scripts found in this project.</div>}
-          {shown.map(({ pkg, names }) => (
-            <PackageFolder key={pkg.dir} projectId={project.id} pkg={pkg} names={names} procs={procs} defaultOpen={shown.length === 1} forceOpen={!!ql} />
+          {/* .mono first: its commands and its aliased workspaces' scripts. */}
+          {toolsShown.filter((x) => x.t.kind === 'mono').map(toolFolder)}
+          {plain.map(({ pkg, names }) => (
+            <PackageFolder key={pkg.dir} projectId={project.id} pkg={pkg} names={names} procs={procs} defaultOpen={plain.length === 1 && !toolsShown.some((x) => x.t.kind === 'mono')} forceOpen={!!ql} />
           ))}
-          {/* Command folders: .mono, and the package manager's own commands. */}
-          {tools
-            ?.map((t) => ({ t, actions: t.actions.filter((a) => !ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) }))
-            .filter((x) => x.actions.length)
-            .map(({ t, actions }) => (
-              <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} />
-            ))}
+          {/* Then the package manager's own commands. */}
+          {toolsShown.filter((x) => x.t.kind !== 'mono').map(toolFolder)}
         </div>
       )}
     </>
@@ -192,7 +199,7 @@ export function ActionsView() {
 const STATE_HINT = { '': 'Last run stopped', running: 'Running', success: 'Last run succeeded', failed: 'Last run failed' }
 
 /** One package.json as a collapsible folder of its scripts. */
-function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen }: { projectId: string; pkg: ScriptPackage; names: string[]; procs: ProcessInfo[]; defaultOpen: boolean; forceOpen: boolean }) {
+function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen, nested = false }: { projectId: string; pkg: ScriptPackage; names: string[]; procs: ProcessInfo[]; defaultOpen: boolean; forceOpen: boolean; nested?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   const expanded = open || forceOpen
   const own = procs.filter((p) => p.cwd === pkg.dir)
@@ -200,13 +207,22 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen }:
   const running = states.filter((x) => x === 'running').length
   const failed = states.filter((x) => x === 'failed').length
   const state = running ? 'running' : failed ? 'failed' : states.includes('success') ? 'success' : ''
-  const label = pkg.rel || 'root'
+  const label = pkg.mono?.alias ?? (pkg.rel || 'root')
+  // How its scripts run: through mono (alias or name, with mono's environment) or the package manager.
+  const cmd = (n: string): string => scriptCommand(pkg.pm, n, pkg.mono && { ...pkg.mono, name: pkg.name })
   return (
     <>
-      <div className={`list-item proj-folder ${state}`} title={`${pkg.name}\n${pkg.dir}\n${pkg.pm} · ${Object.keys(pkg.scripts).length} scripts`} onClick={() => setOpen(!expanded)}>
+      <div
+        className={`list-item proj-folder ${nested ? 'nested' : ''} ${state}`}
+        title={`${pkg.name}\n${pkg.dir}\n${pkg.mono ? `Runs through mono: ${cmd('<script>')}` : `${pkg.pm} · ${Object.keys(pkg.scripts).length} scripts`}`}
+        onClick={() => setOpen(!expanded)}
+      >
         <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
         <Icon name={expanded ? 'folder-open' : 'folder'} size={13} />
-        <span className="grow ellipsis">{label}</span>
+        <span className="grow ellipsis">
+          {label}
+          {pkg.mono?.alias && <span className="muted"> · {pkg.rel}</span>}
+        </span>
         {running > 0 && <span className="sub proj-count running">{running} running</span>}
         {failed > 0 && <span className="sub proj-count failed">{failed} failed</span>}
         {!running && !failed && <span className="sub">{names.length}</span>}
@@ -218,8 +234,8 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen }:
           return (
             <div
               key={n}
-              className={`list-item proj-script ${st}`}
-              title={`${hint}${pkg.scripts[n]}\n\nClick to run in ${label}`}
+              className={`list-item proj-script ${nested ? 'nested' : ''} ${st}`}
+              title={`${hint}${pkg.scripts[n]}\n\nClick to run: ${cmd(n)}`}
               onClick={() => void runScript(projectId, pkg, n)}
               onContextMenu={(e) => showLog(e, latest)}
             >
@@ -237,7 +253,24 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen }:
  * A command folder: a project's `.mono` commands, or its package manager's. Click an action for its
  * run form (every option); ▶ runs it with the values it last ran with (else its defaults).
  */
-function ToolFolder({ projectId, toolset: t, actions, procs, defaultOpen, forceOpen }: { projectId: string; toolset: ToolSet; actions: ActionDef[]; procs: ProcessInfo[]; defaultOpen: boolean; forceOpen: boolean }) {
+function ToolFolder({
+  projectId,
+  toolset: t,
+  actions,
+  procs,
+  defaultOpen,
+  forceOpen,
+  workspaces = []
+}: {
+  projectId: string
+  toolset: ToolSet
+  actions: ActionDef[]
+  procs: ProcessInfo[]
+  defaultOpen: boolean
+  forceOpen: boolean
+  /** .mono: the workspaces it has aliases for, listed by alias with their scripts (run through mono). */
+  workspaces?: { pkg: ScriptPackage; names: string[] }[]
+}) {
   const [open, setOpen] = useState(defaultOpen)
   const expanded = open || forceOpen
   const runsOf = (a: ActionDef): ProcessInfo[] => procs.filter((p) => p.action?.toolset === t.id && p.action.id === a.id)
@@ -285,7 +318,7 @@ function ToolFolder({ projectId, toolset: t, actions, procs, defaultOpen, forceO
         </span>
         {running > 0 && <span className="sub proj-count running">{running} running</span>}
         {failed > 0 && <span className="sub proj-count failed">{failed} failed</span>}
-        {!running && !failed && <span className="sub">{actions.length}</span>}
+        {!running && !failed && <span className="sub">{actions.length + workspaces.length}</span>}
       </div>
       {expanded &&
         groups.map((g) => (
@@ -320,6 +353,16 @@ function ToolFolder({ projectId, toolset: t, actions, procs, defaultOpen, forceO
               })}
           </div>
         ))}
+      {expanded && workspaces.length > 0 && (
+        <>
+          <div className="action-group-label" title="Workspace scripts run through mono by their alias (.mono/config.json), with mono's environment">
+            Workspaces
+          </div>
+          {workspaces.map(({ pkg, names }) => (
+            <PackageFolder key={pkg.dir} projectId={projectId} pkg={pkg} names={names} procs={procs} defaultOpen={false} forceOpen={forceOpen} nested />
+          ))}
+        </>
+      )}
     </>
   )
 }

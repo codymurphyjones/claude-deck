@@ -31,6 +31,21 @@ async function readMono(dir: string): Promise<{ files: Record<string, MonoFile>;
   return { files, config, notes }
 }
 
+/**
+ * In a folder with `.mono`: its workspace packages' scripts run through mono (`yarn mono <alias> <script>`),
+ * which maps long workspace names to the short labels in .mono/config.json and loads the environment
+ * mono provides. The root package's scripts aren't workspaces, so they run as usual.
+ */
+export async function withMono(folder: string, packages: ScriptPackage[]): Promise<ScriptPackage[]> {
+  const mono = await readMono(folder)
+  if (!mono) return packages
+  const rootPkg = (await readJson(path.join(folder, 'package.json')).catch(() => undefined)) as Record<string, unknown> | undefined
+  const entries = await fs.promises.readdir(folder).catch(() => [] as string[])
+  const runner = monoRunner(pickPm(rootPkg?.packageManager, LOCKFILES.map(([f]) => f).filter((f) => entries.includes(f))))
+  const aliasOf = new Map(Object.entries(mono.config.workspace?.packageMaps ?? {}).map(([alias, name]) => [name, alias]))
+  return packages.map((p) => (p.dir === folder || !p.name || p.name === p.rel ? p : { ...p, mono: { runner, alias: aliasOf.get(p.name) } }))
+}
+
 /** The tool sets of one project folder. `packages`: its package.json scripts (from scanScripts). */
 export async function scanTools(folder: string, packages: ScriptPackage[], relPrefix = ''): Promise<ToolSet[]> {
   const out: ToolSet[] = []
@@ -60,7 +75,7 @@ export async function scanTools(folder: string, packages: ScriptPackage[], relPr
       title: '.mono',
       dir: folder,
       rel,
-      actions: monoActions(mono.files, mono.config, monoRunner(pm), workspaces),
+      actions: monoActions(mono.files, mono.config, monoRunner(pm)),
       context,
       notes: mono.notes.length ? mono.notes : undefined
     })

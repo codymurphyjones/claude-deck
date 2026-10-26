@@ -25,6 +25,13 @@ describe('pushing', () => {
     expect(pushRefusal(path.resolve('/repo'), 'claude/main-2')).toMatch(/chat's own branch/)
   })
 
+  it('refuses a branch marked as a chat’s in git (its pushRemote), before the app has any record of it', async () => {
+    const { pushRefusal, setWorktreeSource, NO_PUSH_REMOTE } = await import('../src/main/git/pushGuard')
+    setWorktreeSource(() => [])
+    expect(pushRefusal(path.resolve('/anywhere'), 'claude/main-7', NO_PUSH_REMOTE)).toMatch(/never pushed/)
+    expect(pushRefusal(path.resolve('/anywhere'), 'feature', 'origin')).toBeUndefined()
+  })
+
   it('allows the user’s branches, branches held in Claude Deck and job branches', async () => {
     const { pushRefusal, setWorktreeSource } = await import('../src/main/git/pushGuard')
     setWorktreeSource(() => worktrees)
