@@ -270,6 +270,7 @@ export const api = {
   },
   gh: {
     list: c<PullRequestSummary[], [string, 'review' | 'assigned' | 'authored' | 'all']>('gh.list'),
+    approvable: c<PullRequestSummary[], [string]>('gh.approvable'),
     detail: c<PullRequestDetail, [string, number]>('gh.detail'),
     review: c<void, [string, number, 'approve' | 'request-changes' | 'comment', string]>('gh.review'),
     comment: c<void, [string, number, string]>('gh.comment')

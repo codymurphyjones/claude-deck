@@ -9,6 +9,7 @@ import { ChatBranchBar } from './ChatBranchBar'
 import { WorktreeChanges } from './WorktreeChanges'
 import { newChatMenu } from '../branchActions'
 import { runRoutine } from './Routines'
+import { openPrReview } from './Reviews'
 import { useRoutines } from './Jobs'
 import { shortPath, STATUS_LABEL, timeAgo, useNow } from './ui'
 
@@ -21,6 +22,8 @@ interface GitSnapshot {
   commits: CommitInfo[]
   pr: CurrentPr | null
   reviewPrs: PullRequestSummary[] | null
+  /** Open PRs by others whose newest commit isn't yours: you can approve them. Null: not known. */
+  approvable: PullRequestSummary[] | null
 }
 
 const showView = (sidebarView: 'repo' | 'reviews' | 'routines' | 'jobs', extra: Record<string, unknown> = {}): void => set({ sidebarOpen: true, sidebarView, ...extra })
@@ -46,13 +49,18 @@ function Home({ project: p, active }: { project: Project; active: boolean }) {
     try {
       const info = await api.git.info(root)
       const commits = info.isRepo ? await api.repo.log(root, { limit: 6 }).catch(() => []) : []
-      const base: GitSnapshot = { info, commits, pr: null, reviewPrs: null }
-      setGit((cur) => ({ ...base, pr: cur?.pr ?? null, reviewPrs: cur?.reviewPrs ?? null }))
+      const base: GitSnapshot = { info, commits, pr: null, reviewPrs: null, approvable: null }
+      setGit((cur) => ({ ...base, pr: cur?.pr ?? null, reviewPrs: cur?.reviewPrs ?? null, approvable: cur?.approvable ?? null }))
       // Network lookups fill in as they arrive.
       if (info.isRepo && info.ghAvailable && info.hasRemote) {
-        const [pr, reviewPrs] = await Promise.all([info.branch ? api.repo.currentPr(root).catch(() => null) : null, api.gh.list(root, 'all').catch(() => null)])
+        const [pr, reviewPrs, approvable] = await Promise.all([
+          info.branch ? api.repo.currentPr(root).catch(() => null) : null,
+          api.gh.list(root, 'all').catch(() => null),
+          api.gh.approvable(root).catch(() => null)
+        ])
         base.pr = pr
         base.reviewPrs = reviewPrs
+        base.approvable = approvable
         setGit({ ...base })
       }
       cacheSet(key, base)
@@ -121,6 +129,7 @@ function Home({ project: p, active }: { project: Project; active: boolean }) {
         </button>
       </div>
       {error && <div className="banner warn">{error}</div>}
+      <ApprovalsStrip root={root} prs={git?.approvable ?? null} />
 
       <div className="ph-grid">
         <ChatsCard project={p} />
@@ -344,6 +353,53 @@ const REVIEW_BADGE: Record<string, [string, string]> = {
   APPROVED: ['approved', 'ok'],
   CHANGES_REQUESTED: ['changes requested', 'err'],
   REVIEW_REQUIRED: ['needs review', 'warn']
+}
+
+/**
+ * At the top of the Overview: open pull requests you can approve (someone else opened them and the
+ * newest commit isn't yours), with your latest review on each. Nothing shows when there are none.
+ */
+function ApprovalsStrip({ root, prs }: { root: string; prs: PullRequestSummary[] | null }) {
+  if (!prs?.length) return null
+  const waiting = prs.filter((p) => p.myReview !== 'APPROVED')
+  return (
+    <section className="ph-approvals" data-testid="approvals">
+      <div className="ph-approvals-head">
+        <Icon name="check" size={14} style={{ color: 'var(--accent)' }} />
+        <span className="grow">
+          {waiting.length ? `${waiting.length} pull request${waiting.length === 1 ? '' : 's'} you can approve` : 'Pull requests you can approve'}
+          <span className="muted"> · opened by others, newest commit not yours</span>
+        </span>
+        <button className="btn sm ghost" onClick={() => showView('reviews')}>
+          Pull requests <Icon name="chevron-right" size={12} />
+        </button>
+      </div>
+      {prs.slice(0, 8).map((p) => (
+        <div key={p.number} className="list-item" title={`Open #${p.number} to review it`} onClick={() => openPrReview(root, p.number)}>
+          <Icon name="pr" size={13} style={{ color: p.myReview === 'APPROVED' ? 'var(--success)' : 'var(--accent)' }} />
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="ellipsis">
+              #{p.number} {p.title}
+            </div>
+            <div className="sub ellipsis">
+              {p.author} · {p.headRefName}
+            </div>
+          </div>
+          {p.isDraft && <span className="badge">draft</span>}
+          {p.myReview ? <span className={`badge ${MY_REVIEW[p.myReview]?.[1] ?? ''}`}>{MY_REVIEW[p.myReview]?.[0] ?? p.myReview.toLowerCase()}</span> : <span className="badge accent">needs your review</span>}
+        </div>
+      ))}
+    </section>
+  )
+}
+
+/** Your latest review on a PR, as a badge. */
+const MY_REVIEW: Record<string, [string, string]> = {
+  APPROVED: ['you approved', 'ok'],
+  CHANGES_REQUESTED: ['you requested changes', 'err'],
+  COMMENTED: ['you commented', ''],
+  DISMISSED: ['your review was dismissed', 'warn'],
+  PENDING: ['your review is pending', 'warn']
 }
 
 function PullRequestsCard({ git }: { git?: GitSnapshot }) {

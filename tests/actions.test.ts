@@ -129,3 +129,33 @@ describe('finding a project’s command folders', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe('hiding actions', () => {
+  it('applies rules everywhere and per project, by script name, package script, folder, command folder or command', async () => {
+    const f = await import('@shared/actionFilters')
+    let s = { hidden: [] as string[], hiddenByProject: {} as Record<string, string[]> }
+    s = f.withHidden(s, 'p1', f.scriptKey('format:check'), 'everywhere', true)
+    s = f.withHidden(s, 'p1', f.packageScriptKey('apps/web', 'dev'), 'project', true)
+    s = f.withHidden(s, 'p1', f.toolKey('yarn'), 'project', true)
+    s = f.withHidden(s, 'p2', f.actionKey('npm:publish'), 'project', true)
+    const p1 = f.hiddenRules(s, 'p1')
+    const p2 = f.hiddenRules(s, 'p2')
+    // Everywhere: that script name in every package of every project.
+    expect(f.isScriptHidden(p1, '', 'format:check')).toBe(true)
+    expect(f.isScriptHidden(p2, 'packages/x', 'format:check')).toBe(true)
+    // This project only: one package's script, a whole command folder, one command.
+    expect(f.isScriptHidden(p1, 'apps/web', 'dev')).toBe(true)
+    expect(f.isScriptHidden(p1, 'apps/api', 'dev')).toBe(false)
+    expect(f.isScriptHidden(p2, 'apps/web', 'dev')).toBe(false)
+    expect(f.isActionHidden(p1, 'yarn', 'yarn:add')).toBe(true)
+    expect(f.isActionHidden(p2, 'yarn', 'yarn:add')).toBe(false)
+    expect(f.isActionHidden(p2, 'npm', 'npm:publish')).toBe(true)
+    expect(f.hiddenBy(p1, f.scriptKey('format:check'))).toBe('everywhere')
+    // Showing again removes the rule (and an emptied project list goes).
+    s = f.withHidden(s, 'p2', f.actionKey('npm:publish'), 'project', false)
+    expect(s.hiddenByProject.p2).toBeUndefined()
+    // A hidden folder hides its scripts.
+    s = f.withHidden(s, 'p1', f.folderKey('tools'), 'project', true)
+    expect(f.isScriptHidden(f.hiddenRules(s, 'p1'), 'tools', 'lint')).toBe(true)
+  })
+})

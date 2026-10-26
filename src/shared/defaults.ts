@@ -65,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
     codex: { path: '', defaultModel: '', defaultEffort: '', defaultPermissionMode: '' }
   },
   shell: '',
+  actions: { hidden: [], hiddenByProject: {} },
   worktrees: { root: '', keep: 15, autoDelete: true, branchPrefix: 'claude/', cleanupMerged: true, deleteRemoteMerged: true, perChat: true, linkNodeModules: true },
   git: { commitPrefix: '' },
   agentPermissions: { appTools: {}, alwaysAsk: [...RECOMMENDED_ALWAYS_ASK], allowBypassSwitch: true },

@@ -148,10 +148,23 @@ test.describe('with a project folder', () => {
     // A second click goes back to that same chat rather than starting another.
     await main.locator('.branch-name').click()
     await expect(main.locator('.sub')).toHaveText('1')
-    // It's archived, not erased.
-    await page.keyboard.press('Control+,')
-    await page.locator('.settings-nav').getByText('Archived chats', { exact: true }).click()
-    await expect(page.getByRole('button', { name: 'Unarchive' })).toHaveCount(1)
+    // It's archived, not erased: the Chats page's archive toggle lists it for this project.
+    await sidebar.getByTitle(/archived chats \(1\)$/).click()
+    const archived = sidebar.getByTestId('archived-chats')
+    await expect(archived.locator('.list-item')).toHaveCount(1)
+    // Unarchive: back with the project's chats.
+    await archived.locator('.list-item').first().hover()
+    await archived.getByTitle('Unarchive', { exact: true }).click()
+    await expect(archived.locator('.list-item')).toHaveCount(0)
+    await expect(main.locator('.sub')).toHaveText('2')
+    // Archive it again, then delete it for good from here.
+    await main.locator('xpath=..').locator('.list-item').last().click({ button: 'right' })
+    await page.locator('.menu').getByText('Archive', { exact: true }).click()
+    await expect(archived.locator('.list-item')).toHaveCount(1)
+    await archived.locator('.list-item').first().click({ button: 'right' })
+    await page.locator('.menu').getByText('Delete for good…').click()
+    await expect(archived.locator('.list-item')).toHaveCount(0)
+    await expect(archived).toContainText('No archived chats')
     expect(logErrors(deck)).toEqual([])
   })
 
@@ -214,6 +227,30 @@ test.describe('with a project folder', () => {
         })
       )
       .toContain('yarn mono db migrate')
+
+    // Hiding: right-click → Hide in this project; the filter button's panel for "everywhere".
+    const hello = sidebar.locator('.proj-script', { hasText: 'hello' })
+    // (The root folder may already be open.)
+    if (!(await hello.count())) await sidebar.locator('.proj-folder', { hasText: 'root' }).click()
+    await hello.click({ button: 'right' })
+    await page.locator('.menu').getByText('Hide "hello" in this project').click()
+    await expect(hello).toHaveCount(0)
+    await page.getByTitle(/^Hide actions/).click()
+    const filter = page.locator('.modal .action-filter')
+    await expect(filter.locator('.filter-row', { hasText: 'hello' }).locator('input').first()).toBeChecked()
+    await filter.locator('.filter-row', { hasText: 'tools prune' }).locator('input').nth(1).check()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('action-mono-tools:prune')).toHaveCount(0)
+    // Shown again (dimmed) on request; the rules are saved in the settings.
+    await sidebar.getByText('2 hidden · Show').click()
+    await sidebar.locator('.proj-folder', { hasText: 'root' }).click()
+    await expect(hello).toHaveClass(/is-hidden/)
+    await expect
+      .poll(() => {
+        const s = JSON.parse(fs.readFileSync(path.join(deck.profile, 'settings.json'), 'utf8'))
+        return [s.actions?.hidden, Object.values(s.actions?.hiddenByProject ?? {})]
+      })
+      .toEqual([['action:mono-tools:prune'], [['script:|hello']]])
   })
 
   test('follows a branch switch made outside the app in the Chats view', async ({ deck }) => {

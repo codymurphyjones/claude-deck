@@ -489,6 +489,8 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     // ---- github ----
     'gh.list': (_e, cwd: string, filter: 'review' | 'assigned' | 'authored' | 'all') => gh.listPrs(cwd, filter),
     'gh.detail': (_e, cwd: string, n: number) => gh.prDetail(cwd, n),
+    // Open PRs by others whose newest commit isn't yours: the ones you can approve (project Overview).
+    'gh.approvable': (_e, cwd: string) => gh.approvablePrs(cwd),
     'gh.review': (_e, cwd: string, n: number, kind: 'approve' | 'request-changes' | 'comment', body: string) => gh.submitReview(cwd, n, kind, body),
     'gh.comment': (_e, cwd: string, n: number, body: string) => gh.comment(cwd, n, body),
 

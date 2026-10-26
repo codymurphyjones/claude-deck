@@ -11,6 +11,12 @@ import { Modal, Seg, timeAgo } from './ui'
 
 const usePr = create<{ cwd: string; number: number } | null>(() => null)
 
+/** Open a pull request's review (summary, changes, checks, Approve…) in the Pull requests view. */
+export function openPrReview(cwd: string, number: number): void {
+  set({ sidebarOpen: true, sidebarView: 'reviews' })
+  usePr.setState({ cwd, number }, true)
+}
+
 type PrFilter = 'review' | 'assigned' | 'authored' | 'all'
 const FILTER_KEY = 'deck.prFilter'
 const FILTER_LABEL: Record<PrFilter, string> = { all: 'All', authored: 'Mine', review: 'For me', assigned: 'Assigned' }

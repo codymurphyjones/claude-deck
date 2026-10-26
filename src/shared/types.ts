@@ -303,6 +303,10 @@ export interface Settings {
   defaultProvider: ProviderId
   providers: Record<ProviderId, ProviderSettings>
   shell: string
+  /**
+   * Actions hidden from the Actions view (keys: shared/actionFilters.ts): everywhere, and per project.
+   */
+  actions: { hidden: string[]; hiddenByProject: Record<string, string[]> }
   worktrees: {
     root: string
     keep: number
@@ -637,6 +641,8 @@ export interface PullRequestSummary {
   isDraft: boolean
   headRefName: string
   repo: string
+  /** Your latest review on it (APPROVED, CHANGES_REQUESTED, COMMENTED…), when asked for (approvable PRs). */
+  myReview?: string
 }
 
 export interface PullRequestDetail extends PullRequestSummary {

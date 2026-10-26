@@ -2677,3 +2677,91 @@ html.buddy-page body {
 .tool-action:hover .actions {
   opacity: 1;
 }
+/* Actions: the filter button's row, hidden items (when shown), and the "Hide actions" panel. */
+.actions-project-row {
+  padding: 0 10px 8px;
+  gap: 6px;
+}
+.actions-project-row .icon-btn.on {
+  color: var(--accent);
+}
+.list-item.is-hidden {
+  opacity: 0.45;
+  font-style: italic;
+}
+.hidden-toggle {
+  align-self: flex-start;
+  margin: 6px 4px;
+}
+.action-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.filter-head,
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.filter-head {
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.filter-list {
+  max-height: 55vh;
+  overflow: auto;
+}
+.filter-row {
+  padding: 3px 0;
+}
+.filter-row.depth-0 {
+  font-weight: 600;
+  margin-top: 6px;
+}
+.filter-row.depth-1 {
+  padding-left: 18px;
+}
+.filter-check {
+  width: 92px;
+  flex: none;
+  display: flex;
+  justify-content: center;
+}
+/* A project's archived chats on its Chats page (the archive toggle). */
+.archived-chats {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+.list-item.chat-item.archived {
+  opacity: 0.75;
+}
+.list-item.chat-item.archived:hover {
+  opacity: 1;
+}
+/* Overview: pull requests you can approve, at the top. */
+.ph-approvals {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ph-approvals-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  padding: 2px 4px 6px;
+}
+.ph-approvals-head .muted {
+  font-weight: 400;
+  font-size: 12px;
+}

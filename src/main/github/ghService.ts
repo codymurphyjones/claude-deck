@@ -39,6 +39,70 @@ export async function repoName(cwd: string): Promise<string> {
   return (await gh(cwd, ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'])).trim()
 }
 
+let viewer: string | undefined
+/** The signed-in GitHub user (gh's), asked once. */
+async function viewerLogin(cwd: string): Promise<string> {
+  viewer ??= (await gh(cwd, ['api', 'user', '--jq', '.login'])).trim()
+  return viewer
+}
+
+type ApprovalRawPr = RawPr & {
+  commits?: { authors?: { login?: string }[] }[]
+  latestReviews?: { author?: { login: string }; state: string }[]
+}
+
+/**
+ * Open PRs `me` can approve: someone else opened them, and the newest commit isn't `me`'s (GitHub
+ * doesn't let you approve your own PR, and repos can require the last push to be approved by
+ * someone else). Each carries `me`'s latest review, if any; ones still needing it come first.
+ */
+export function pickApprovable(list: ApprovalRawPr[], me: string, repo: string): PullRequestSummary[] {
+  const mine = (login?: string): boolean => !!login && login.toLowerCase() === me.toLowerCase()
+  return list
+    .filter((p) => !mine(p.author?.login))
+    .filter((p) => {
+      const last = p.commits?.[p.commits.length - 1]
+      return !last?.authors?.some((a) => mine(a.login))
+    })
+    .map((p) => ({ ...toSummary(p, repo), myReview: p.latestReviews?.find((r) => mine(r.author?.login))?.state }))
+    .sort((a, b) => Number(a.myReview === 'APPROVED') - Number(b.myReview === 'APPROVED') || b.updatedAt.localeCompare(a.updatedAt))
+}
+
+// Only each PR's newest commit (`gh pr list --json commits` asks for all of them, which exceeds
+// GitHub's query size for a busy repo).
+const APPROVABLE_QUERY = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      nodes {
+        number title url updatedAt isDraft headRefName reviewDecision
+        author { login }
+        commits(last: 1) { nodes { commit { authors(first: 10) { nodes { user { login } } } } } }
+        latestReviews(first: 20) { nodes { author { login } state } }
+      }
+    }
+  }
+}`
+
+type GqlPr = Omit<RawPr, 'reviewDecision'> & {
+  reviewDecision?: string | null
+  commits: { nodes: { commit: { authors: { nodes: { user?: { login: string } | null }[] } } }[] }
+  latestReviews: { nodes: { author?: { login: string } | null; state: string }[] }
+}
+
+export async function approvablePrs(cwd: string): Promise<PullRequestSummary[]> {
+  const [repo, me] = await Promise.all([repoName(cwd), viewerLogin(cwd)])
+  const [owner, name] = repo.split('/')
+  const out = JSON.parse(await gh(cwd, ['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-f', `query=${APPROVABLE_QUERY}`])) as { data: { repository: { pullRequests: { nodes: GqlPr[] } } } }
+  const list: ApprovalRawPr[] = out.data.repository.pullRequests.nodes.map((p) => ({
+    ...p,
+    reviewDecision: p.reviewDecision ?? undefined,
+    author: p.author ?? undefined,
+    commits: p.commits.nodes.map((c) => ({ authors: c.commit.authors.nodes.map((a) => ({ login: a.user?.login })) })),
+    latestReviews: p.latestReviews.nodes.map((r) => ({ author: r.author ?? undefined, state: r.state }))
+  }))
+  return pickApprovable(list, me, repo)
+}
+
 export async function listPrs(cwd: string, filter: 'review' | 'assigned' | 'authored' | 'all'): Promise<PullRequestSummary[]> {
   const repo = await repoName(cwd)
   const args = ['pr', 'list', '--json', FIELDS, '--limit', '50']

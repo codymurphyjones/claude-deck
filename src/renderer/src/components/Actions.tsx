@@ -8,6 +8,9 @@ import { Icon } from './Icon'
 import { openMenu, useNow } from './ui'
 import { buildCommand, validateValues, type ActionDef, type ToolSet } from '@shared/actions'
 import { lastValues, openActionForm, runAction } from './ActionRunDialog'
+import { actionKey, folderKey, isActionHidden, isScriptHidden, isToolHidden, packageScriptKey, scriptKey, toolKey } from '@shared/actionFilters'
+import { hideMenuItems, setHidden, useHiddenRules } from '../actionFilters'
+import { ActionFilterDialog } from './ActionFilterDialog'
 
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -23,6 +26,14 @@ const runScript = (projectId: string, pkg: ScriptPackage, script: string): Promi
 
 // ------------------------------------------------------------------ sidebar section
 /** Right-click on a script or process: open its terminal output. */
+/** Remove every rule (this project's and the app-wide ones) that hides an item through these keys. */
+const unhide = async (projectId: string, keys: string[]): Promise<void> => {
+  for (const k of keys) {
+    await setHidden(projectId, k, 'project', false)
+    await setHidden(projectId, k, 'everywhere', false)
+  }
+}
+
 const showLog = (e: React.MouseEvent, p?: ProcessInfo): void => {
   if (!p) return
   e.preventDefault()
@@ -44,6 +55,8 @@ export function ProjectActions({ project, embedded = false }: { project: Project
     set({ actionsFocus: undefined })
   }, [focus, project.id])
   const [q, setQ] = useState('')
+  const [showHidden, setShowHidden] = useState(false)
+  const rules = useHiddenRules(project.id)
   const pkgs = useStore((s) => s.scripts[project.id])
   const tools = useStore((s) => s.tools[project.id])
   const procs = useStore((s) => s.processes).filter((p) => p.projectId === project.id)
@@ -62,14 +75,21 @@ export function ProjectActions({ project, embedded = false }: { project: Project
   const shown = [...(pkgs ?? [])]
     .sort((a, b) => Number(!!a.rel) - Number(!!b.rel) || a.rel.localeCompare(b.rel))
     .map((p) => ({ pkg: p, names: Object.keys(p.scripts).filter((n) => !ql || n.toLowerCase().includes(ql) || p.rel.toLowerCase().includes(ql) || p.name.toLowerCase().includes(ql) || !!p.mono?.alias?.toLowerCase().includes(ql)) }))
+    // Hidden ones (the filter button, or right-click → Hide) leave the list unless shown.
+    .map((g) => ({ ...g, names: showHidden ? g.names : g.names.filter((n) => !isScriptHidden(rules, g.pkg.rel, n)) }))
     .filter((g) => g.names.length)
   // Workspaces with a .mono alias are listed in the .mono folder (run as `yarn mono <alias> <script>`),
   // not again as plain package folders.
   const aliased = shown.filter((g) => g.pkg.mono?.alias)
   const plain = shown.filter((g) => !g.pkg.mono?.alias)
   const toolsShown = (tools ?? [])
-    .map((t) => ({ t, actions: t.actions.filter((a) => !ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) }))
+    .filter((t) => showHidden || !isToolHidden(rules, t.kind))
+    .map((t) => ({ t, actions: t.actions.filter((a) => (!ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) && (showHidden || !isActionHidden(rules, t.kind, a.id))) }))
     .filter((x) => x.actions.length || (x.t.kind === 'mono' && aliased.length))
+  // How many items the rules hide here, for the "Show hidden" toggle.
+  const hiddenCount =
+    (pkgs ?? []).reduce((n, p) => n + Object.keys(p.scripts).filter((s) => isScriptHidden(rules, p.rel, s)).length, 0) +
+    (tools ?? []).reduce((n, t) => n + t.actions.filter((a) => isActionHidden(rules, t.kind, a.id)).length, 0)
   const toolFolder = ({ t, actions }: (typeof toolsShown)[number]) => (
     <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} workspaces={t.kind === 'mono' ? aliased.filter((g) => g.pkg.dir.toLowerCase().startsWith(t.dir.toLowerCase())) : []} />
   )
@@ -126,6 +146,11 @@ export function ProjectActions({ project, embedded = false }: { project: Project
           ))}
           {/* Then the package manager's own commands. */}
           {toolsShown.filter((x) => x.t.kind !== 'mono').map(toolFolder)}
+          {hiddenCount > 0 && (
+            <button className="btn sm ghost hidden-toggle" onClick={() => setShowHidden((v) => !v)} title="Hidden with the filter button or right-click → Hide">
+              <Icon name="eye" size={12} /> {showHidden ? `Hide the ${hiddenCount} hidden again` : `${hiddenCount} hidden · Show`}
+            </button>
+          )}
         </div>
       )}
     </>
@@ -153,6 +178,9 @@ export function ActionsView() {
   const id = (focus ?? fromTab ?? picked) || projects[0]?.id
   const p = projects.find((x) => x.id === id)
   const elsewhere = procs.filter((x) => x.projectId !== id && (x.status === 'running' || isOpenFailure(x)))
+  const [filtering, setFiltering] = useState(false)
+  const rules = useHiddenRules(id ?? '')
+  const ruleCount = rules.project.size + rules.everywhere.size
   return (
     <>
       <div className="sidebar-head">
@@ -163,13 +191,13 @@ export function ActionsView() {
           </button>
         )}
       </div>
-      <div className="col" style={{ padding: '0 10px 8px', gap: 6 }}>
+      <div className="row actions-project-row">
         {fromTab && !focus ? (
-          <div className="muted mono ellipsis" style={{ fontSize: 11.5 }} title={`${p?.folders[0] ?? ''} (follows the selected project tab)`}>
+          <div className="muted mono ellipsis grow" style={{ fontSize: 11.5 }} title={`${p?.folders[0] ?? ''} (follows the selected project tab)`}>
             {p?.name}
           </div>
         ) : (
-          <select className="select" value={id ?? ''} onChange={(e) => setPicked(e.target.value)}>
+          <select className="select grow" value={id ?? ''} onChange={(e) => setPicked(e.target.value)}>
             {projects.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name}
@@ -177,7 +205,13 @@ export function ActionsView() {
             ))}
           </select>
         )}
+        {p && (
+          <button className={`icon-btn sm ${ruleCount ? 'on' : ''}`} title={`Hide actions (in this project or everywhere)${ruleCount ? ` · ${ruleCount} rule${ruleCount === 1 ? '' : 's'}` : ''}`} onClick={() => setFiltering(true)}>
+            <Icon name="filter" size={13} />
+          </button>
+        )}
       </div>
+      {filtering && p && <ActionFilterDialog projectId={p.id} onClose={() => setFiltering(false)} />}
       <div className="sidebar-body">
         {!p && <div className="empty-note">Add a project to run its scripts here.</div>}
         {p && <ProjectActions key={p.id} project={p} embedded />}
@@ -208,6 +242,7 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen, n
   const failed = states.filter((x) => x === 'failed').length
   const state = running ? 'running' : failed ? 'failed' : states.includes('success') ? 'success' : ''
   const label = pkg.mono?.alias ?? (pkg.rel || 'root')
+  const rules = useHiddenRules(projectId)
   // How its scripts run: through mono (alias or name, with mono's environment) or the package manager.
   const cmd = (n: string): string => scriptCommand(pkg.pm, n, pkg.mono && { ...pkg.mono, name: pkg.name })
   return (
@@ -216,6 +251,7 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen, n
         className={`list-item proj-folder ${nested ? 'nested' : ''} ${state}`}
         title={`${pkg.name}\n${pkg.dir}\n${pkg.mono ? `Runs through mono: ${cmd('<script>')}` : `${pkg.pm} · ${Object.keys(pkg.scripts).length} scripts`}`}
         onClick={() => setOpen(!expanded)}
+        onContextMenu={(e) => openMenu(e, hideMenuItems(projectId, { project: folderKey(pkg.rel), everywhere: folderKey(pkg.rel) }, `the ${label} folder`))}
       >
         <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
         <Icon name={expanded ? 'folder-open' : 'folder'} size={13} />
@@ -234,10 +270,16 @@ function PackageFolder({ projectId, pkg, names, procs, defaultOpen, forceOpen, n
           return (
             <div
               key={n}
-              className={`list-item proj-script ${nested ? 'nested' : ''} ${st}`}
+              className={`list-item proj-script ${nested ? 'nested' : ''} ${isScriptHidden(rules, pkg.rel, n) ? 'is-hidden' : ''} ${st}`}
               title={`${hint}${pkg.scripts[n]}\n\nClick to run: ${cmd(n)}`}
               onClick={() => void runScript(projectId, pkg, n)}
-              onContextMenu={(e) => showLog(e, latest)}
+              onContextMenu={(e) =>
+                openMenu(e, [
+                  { label: 'Show last output', icon: 'terminal', disabled: !latest, onClick: () => latest && openProcessTab(latest.id) },
+                  { separator: true },
+                  ...(isScriptHidden(rules, pkg.rel, n) ? [{ label: 'Show again', icon: 'eye', onClick: () => unhide(projectId, [packageScriptKey(pkg.rel, n), scriptKey(n), folderKey(pkg.rel)]) }] : hideMenuItems(projectId, { project: packageScriptKey(pkg.rel, n), everywhere: scriptKey(n) }, `"${n}"`))
+                ])
+              }
             >
               <Icon name={st === 'failed' ? 'x' : st === 'success' ? 'check' : 'play'} size={11} />
               <span className="grow ellipsis">{n}</span>
@@ -273,6 +315,7 @@ function ToolFolder({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const expanded = open || forceOpen
+  const rules = useHiddenRules(projectId)
   const runsOf = (a: ActionDef): ProcessInfo[] => procs.filter((p) => p.action?.toolset === t.id && p.action.id === a.id)
   const states = actions.map((a) => scriptState(runsOf(a)).state)
   const running = states.filter((x) => x === 'running').length
@@ -300,7 +343,9 @@ function ToolFolder({
           }
         }
       },
-      { label: 'Show last output', icon: 'terminal', disabled: !latest, onClick: () => latest && openProcessTab(latest.id) }
+      { label: 'Show last output', icon: 'terminal', disabled: !latest, onClick: () => latest && openProcessTab(latest.id) },
+      { separator: true },
+      ...(isActionHidden(rules, t.kind, a.id) ? [{ label: 'Show again', icon: 'eye', onClick: () => unhide(projectId, [actionKey(a.id), toolKey(t.kind)]) }] : hideMenuItems(projectId, { project: actionKey(a.id), everywhere: actionKey(a.id) }, `"${a.name}"`))
     ])
   }
   return (
@@ -309,6 +354,7 @@ function ToolFolder({
         className={`list-item proj-folder tool-folder ${running ? 'running' : failed ? 'failed' : ''}`}
         title={`${t.title} · ${t.actions.length} command${t.actions.length === 1 ? '' : 's'}\n${t.dir}`}
         onClick={() => setOpen(!expanded)}
+        onContextMenu={(e) => openMenu(e, hideMenuItems(projectId, { project: toolKey(t.kind), everywhere: toolKey(t.kind) }, `${t.title}'s commands`))}
       >
         <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
         <Icon name={t.kind === 'mono' ? 'layers' : 'zap'} size={13} />
@@ -331,7 +377,7 @@ function ToolFolder({
                 return (
                   <div
                     key={a.id}
-                    className={`list-item proj-script tool-action ${st}`}
+                    className={`list-item proj-script tool-action ${isActionHidden(rules, t.kind, a.id) ? 'is-hidden' : ''} ${st}`}
                     title={`${a.title}${a.description ? `\n${a.description}` : ''}\n\nClick for its options · ▶ runs with the last values${latest ? ' · right-click for more' : ''}`}
                     onClick={() => openActionForm(projectId, t.id, a.id)}
                     onContextMenu={(e) => menu(e, a)}

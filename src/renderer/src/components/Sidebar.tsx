@@ -183,6 +183,10 @@ function ProjectChatsView({ project: p }: { project: Project }) {
   const ql = q.toLowerCase()
   const match = (c: ChatRecord): boolean => !ql || c.name.toLowerCase().includes(ql) || (c.branch ?? '').toLowerCase().includes(ql) || (c.lastPrompt ?? '').toLowerCase().includes(ql)
   const mine = lib.chats.filter((c) => c.projectId === p.id && !c.archived && !c.hidden)
+  // This project's archived chats, managed here (the toggle in the header) as well as in Settings.
+  const [showArchived, setShowArchived] = useState(false)
+  const archived = lib.chats.filter((c) => c.projectId === p.id && c.archived && !c.hidden && match(c)).sort((a, b) => b.updatedAt - a.updatedAt)
+  const archivedTotal = lib.chats.filter((c) => c.projectId === p.id && c.archived && !c.hidden).length
   const shown = mine.filter(match)
   const pinned = shown.filter((c) => c.pinned)
   // A worktree chat belongs to the branch it merges into; others to the branch they ran on.
@@ -293,6 +297,13 @@ function ProjectChatsView({ project: p }: { project: Project }) {
         <span className="title">Chats</span>
         <button className="icon-btn sm" title={`New chat in ${p.name}: pick a branch`} onClick={(e) => void newChatMenu(e.currentTarget, root)}>
           <Icon name="plus" size={15} />
+        </button>
+        <button
+          className={`icon-btn sm ${showArchived ? 'on' : ''}`}
+          title={showArchived ? 'Hide archived chats' : `Show ${p.name}'s archived chats (${archivedTotal})`}
+          onClick={() => setShowArchived((v) => !v)}
+        >
+          <Icon name="archive" size={14} />
         </button>
         <button className="icon-btn sm" title="Project options" onClick={(e) => projectMenu(e, p)}>
           <Icon name="more" size={15} />
@@ -410,6 +421,9 @@ function ProjectChatsView({ project: p }: { project: Project }) {
               chats.slice(0, 40).map((c) => <ChatItem key={c.agentSessionId} chat={c} live={liveByChat.get(c.agentSessionId)} indent={false} />)}
           </div>
         ))}
+        {showArchived && (
+          <ArchivedChats projectName={p.name} chats={archived} total={archivedTotal} />
+        )}
         {wts.length > 0 && (
           <>
             <div className="section-label">Worktrees</div>
@@ -420,6 +434,77 @@ function ProjectChatsView({ project: p }: { project: Project }) {
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * A project's archived chats, on its Chats page: open (unarchives it), unarchive, or delete for good,
+ * one by one or all at once. (Deleting removes it from Claude Deck; the conversation file stays.)
+ */
+function ArchivedChats({ projectName, chats, total }: { projectName: string; chats: ChatRecord[]; total: number }) {
+  const erase = async (list: ChatRecord[]): Promise<void> => {
+    const r = await api.dialog.confirm(
+      list.length === 1 ? `Delete “${list[0].name}” for good?` : `Delete ${list.length} archived chats of ${projectName} for good?`,
+      'They are removed from Claude Deck and can’t be restored here. The conversation files stay on disk.',
+      ['Delete', 'Cancel']
+    )
+    if (r !== 0) return
+    await attempt(async () => {
+      for (const c of list) await api.library.removeChat(c.agentSessionId)
+    }, list.length === 1 ? 'Chat deleted' : `Deleted ${list.length} chats`)
+  }
+  return (
+    <div className="archived-chats" data-testid="archived-chats">
+      <div className="section-label branches-head">
+        <Icon name="archive" size={11} />
+        <span className="grow">
+          Archived <span className="sub">{total}</span>
+        </span>
+        {chats.length > 1 && (
+          <button className="btn sm ghost danger" title="Delete every archived chat shown here, for good" onClick={() => void erase(chats)}>
+            Delete all
+          </button>
+        )}
+      </div>
+      {!chats.length && <div className="empty-note branch-empty">{total ? 'No archived chats match.' : `No archived chats in ${projectName}.`}</div>}
+      {chats.slice(0, 200).map((c) => (
+        <div
+          key={c.agentSessionId}
+          className="list-item chat-item archived"
+          title={`${c.name}\n${c.cwd}\nArchived · click to open (unarchives it)`}
+          onClick={() => {
+            void api.library.updateChat(c.agentSessionId, { archived: false })
+            void resumeChat(c.agentSessionId)
+          }}
+          onContextMenu={(e) =>
+            openMenu(e, [
+              { label: 'Open', icon: 'play', onClick: () => (void api.library.updateChat(c.agentSessionId, { archived: false }), resumeChat(c.agentSessionId)) },
+              { label: 'Unarchive', icon: 'undo', onClick: () => api.library.updateChat(c.agentSessionId, { archived: false }) },
+              { separator: true },
+              { label: 'Delete for good…', icon: 'trash', danger: true, onClick: () => void erase([c]) }
+            ])
+          }
+        >
+          <Icon name="archive" size={13} style={{ color: 'var(--muted)' }} />
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="ellipsis">{c.name}</div>
+            <div className="sub ellipsis">
+              {timeAgo(c.updatedAt)}
+              {c.branch ? ` · ${c.branch}` : ''}
+              {c.lastPrompt ? ` · ${c.lastPrompt.replace(/\s+/g, ' ')}` : ''}
+            </div>
+          </div>
+          <span className="actions">
+            <button className="icon-btn sm" title="Unarchive" onClick={(e) => (e.stopPropagation(), void api.library.updateChat(c.agentSessionId, { archived: false }))}>
+              <Icon name="undo" size={12} />
+            </button>
+            <button className="icon-btn sm" title="Delete for good" onClick={(e) => (e.stopPropagation(), void erase([c]))}>
+              <Icon name="trash" size={12} />
+            </button>
+          </span>
+        </div>
+      ))}
+    </div>
   )
 }
 
