@@ -55,7 +55,8 @@ export interface LaunchOptions {
   /** Parent session id for a shell drawer. */
   parentId?: string
   /** Login flow options */
-  login?: { console?: boolean; sso?: boolean; email?: string }
+  /** Sign-in options: console / SSO / email (Claude), device code (Codex). */
+  login?: { console?: boolean; sso?: boolean; email?: string; device?: boolean }
   extraArgs?: string[]
 }
 

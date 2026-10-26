@@ -129,6 +129,8 @@ export interface UiState {
   // modals
   palette: false | 'all' | 'chats' | 'files'
   settingsOpen: false | string
+  /** A setting to focus and highlight when Settings opens (e.g. 'commitPrefix'). */
+  settingsFocus?: string
   newSession: false | NewSessionPrefill
   composerFor?: string
   composerPrefill?: string
@@ -158,7 +160,7 @@ export interface UiState {
    */
   /** `push`: the merge was asked to push the target too. */
   heldMerges: { worktreeId: string; target: string; checkout: string; files: string[]; chat: string }[]
-  prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; resolve: (v: string | null) => void }
+  prompt?: { title: string; value: string; placeholder?: string; multiline?: boolean; secret?: boolean; resolve: (v: string | null) => void }
   fileToOpen?: { path: string; sessionId?: string }
   updateState?: UpdateState
   teamKey?: string
@@ -334,7 +336,8 @@ export async function attempt<T>(fn: () => Promise<T>, okText?: string): Promise
 }
 
 // ------------------------------------------------------------------ prompts
-export function askText(title: string, value = '', opts: { placeholder?: string; multiline?: boolean } = {}): Promise<string | null> {
+/** Ask for a line of text. `secret`: a password field (keys, tokens), never shown or autocompleted. */
+export function askText(title: string, value = '', opts: { placeholder?: string; multiline?: boolean; secret?: boolean } = {}): Promise<string | null> {
   return new Promise((resolve) => set({ prompt: { title, value, ...opts, resolve } }))
 }
 
@@ -774,10 +777,24 @@ export async function resumeChat(agentSessionId: string, mode: 'tab' | 'split' =
   await openSession('agent', { cwd: chat.cwd, provider: chat.provider, resumeId: agentSessionId, name: chat.name }, { mode })
 }
 
-export async function signIn(opts: { console?: boolean; sso?: boolean; email?: string } = {}, provider: ProviderId = get().settings.defaultProvider): Promise<void> {
+export async function signIn(opts: { console?: boolean; sso?: boolean; email?: string; device?: boolean } = {}, provider: ProviderId = get().settings.defaultProvider): Promise<void> {
   const existing = Object.values(get().sessions).find((s) => s.kind === 'login' && s.provider === provider && s.status !== 'exited')
   if (existing) return focusSessionTab(existing.id)
   await openSession('login', { cwd: get().homedir, provider, login: opts, name: `Sign in to ${providerOf(provider).label}` })
+}
+
+/** Sign in with an API key (Codex: `codex login --with-api-key`). */
+export async function signInWithApiKey(provider: ProviderId): Promise<void> {
+  const key = (await askText(`${providerOf(provider).label} API key`, '', { placeholder: 'sk-…', secret: true }))?.trim()
+  if (!key) return
+  const action = startAction(`Signing in to ${providerOf(provider).label}…`, `login key ${provider}`)
+  try {
+    await api.auth.loginWithApiKey(provider, key)
+    action.done(`Signed in to ${providerOf(provider).label} with an API key`)
+  } catch (e) {
+    action.drop()
+    toast(`Sign-in failed: ${(e as Error).message}`, 'error')
+  }
 }
 
 /** Sign-in state for a provider (the default provider when omitted). */

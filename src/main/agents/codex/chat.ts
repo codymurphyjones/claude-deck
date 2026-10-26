@@ -4,7 +4,8 @@ import type { SessionInfo } from '@shared/types'
 import { settings } from '../../context'
 import { agentEnv, meshServer, sessionBrief, sessionDirs } from '../../sessions/launch'
 import { ChatBase, type ToolItem } from '../chatBase'
-import type { AgentChat, PermissionDecision } from '../types'
+import type { AgentChat, LifecycleResult, PermissionDecision } from '../types'
+import { pushBlockEnv } from '../../git/pushGuard'
 import { AppServer } from './appServer'
 import { codexHistory } from './history'
 import { modePolicy } from './policy'
@@ -32,8 +33,24 @@ export class CodexChat extends ChatBase implements AgentChat {
   private ready: Promise<void> | undefined
   private queue: Send[] = []
   private pendingContext: string[] = []
-  private pendingPerms = new Map<string, { rpcId: number | string; itemId: string; legacy: boolean; isCommand: boolean }>()
+  private pendingPerms = new Map<
+    string,
+    {
+      rpcId: number | string
+      itemId: string
+      legacy: boolean
+      isCommand: boolean
+      /** A rule Codex proposes for "always allow" (kept by Codex across sessions). */
+      amendment?: unknown
+      /** A question request (item/tool/requestUserInput): question text → its id. */
+      questions?: { id: string; question: string }[]
+    }
+  >()
+  /** Plan text as it streams in (item/plan/delta), per item. */
+  private plans = new Map<string, string>()
   private denials = new Map<string, string>()
+  /** The team edit guard's verdict per Codex item (from tool-start), awaited before an edit is approved. */
+  private guards = new Map<string, Promise<LifecycleResult['deny']>>()
   private toolIds = new Map<string, string[]>() // codex item id -> tool item ids
   private outputs = new Map<string, string>()
   private model: string | undefined
@@ -68,7 +85,12 @@ export class CodexChat extends ChatBase implements AgentChat {
         this.notice(`Display error: ${(e as Error).message}`, 'warn')
       }
     })
-    this.server.on('request', (id: number | string, method: string, params: Json) => this.handleRequest(id, method, params))
+    this.server.on('request', (id: number | string, method: string, params: Json) =>
+      void this.handleRequest(id, method, params).catch((e: Error) => {
+        this.notice(`Approval error: ${e.message}`, 'warn')
+        this.server.respondError(id, e.message)
+      })
+    )
     this.server.on('exit', (code: number, stderr: string) => {
       this.flushDeltas()
       for (const p of this.pendingPerms.values()) this.decide(p.itemId, { status: 'denied' })
@@ -76,7 +98,8 @@ export class CodexChat extends ChatBase implements AgentChat {
       this.meta.busy = false
       this.emit('exit', code, stderr)
     })
-    this.server.start(this.command, [], { cwd: s.cwd, env: agentEnv(s) })
+    // A template's extra arguments: codex options (e.g. `-c key=value`, `--profile name`).
+    this.server.start(this.command, s.launch.extraArgs ?? [], { cwd: s.cwd, env: agentEnv(s) })
     this.ready = this.open().catch((e: Error) => {
       this.notice(`Could not start Codex: ${e.message}`, 'error')
       this.server.kill()
@@ -85,14 +108,21 @@ export class CodexChat extends ChatBase implements AgentChat {
 
   private async open(): Promise<void> {
     const s = this.session
-    await this.server.request('initialize', { clientInfo: { name: 'claude_deck', title: 'Claude Deck', version: app.getVersion() } })
+    // experimentalApi: steering, questions (requestUserInput), plan mode, live settings… Older
+    // app-servers ignore the capability and those calls fail softly (each has a fallback).
+    await this.server.request('initialize', { clientInfo: { name: 'claude_deck', title: 'Claude Deck', version: app.getVersion() }, capabilities: { experimentalApi: true } })
     this.server.notify('initialized')
     const config: Json = {}
     if (settings().mesh.enabled) config['mcp_servers.deck-mesh'] = meshServer(s)
     const dirs = sessionDirs(s)
     if (dirs.length) config['sandbox_workspace_write.writable_roots'] = dirs
     if (this.effort) config.model_reasoning_effort = this.effort
-    const { approvalPolicy, sandbox } = modePolicy(this.mode)
+    // In a chat's worktree, git can't push (git/pushGuard.ts). Codex filters the environment its shells
+    // get (shell_environment_policy; by default it can drop names containing KEY, as GIT_CONFIG_KEY_n
+    // do), so the block is also set explicitly there: `set` is applied after Codex's filtering.
+    const block = pushBlockEnv(s.cwd)
+    if (Object.keys(block).length) config['shell_environment_policy.set'] = block
+    const { approvalPolicy, sandbox } = this.policy()
     const brief = sessionBrief(s)
     const params: Json = {
       cwd: s.cwd,
@@ -102,8 +132,13 @@ export class CodexChat extends ChatBase implements AgentChat {
       ...(brief ? { developerInstructions: brief } : {}),
       ...(Object.keys(config).length ? { config } : {})
     }
+    // 'auto' mode: Codex's own reviewer decides approvals instead of the user. Not while the team
+    // guard is on: its requests must come to the app (which answers for auto mode itself).
+    if (this.mode === 'auto' && !this.guarding()) params.approvalsReviewer = 'auto_review'
     const rid = s.launch.resumeId
-    const res = await this.server.request<Json>(rid ? 'thread/resume' : 'thread/start', rid ? { threadId: rid, ...params } : params)
+    // A fork continues a copy of the conversation as a new thread (side chats, fork into a worktree).
+    const method = rid ? (s.launch.fork ? 'thread/fork' : 'thread/resume') : 'thread/start'
+    const res = await this.server.request<Json>(method, rid ? { threadId: rid, ...params } : params)
     const thread = (res.thread as Json) ?? {}
     this.threadId = String(thread.id ?? rid ?? '')
     this.transcriptPath = typeof thread.path === 'string' ? thread.path : undefined
@@ -129,6 +164,20 @@ export class CodexChat extends ChatBase implements AgentChat {
     })
     const msg: Send = { text, images: opts.images, userItemId }
     if (queued) {
+      // Into the running turn (`turn/steer`), as Claude takes messages mid-turn; queued for the next
+      // turn when that isn't possible (no turn id yet, or an app-server without turn/steer).
+      if (this.threadId && this.turnId) {
+        const input: Json[] = [...(opts.images ?? []).map((i) => ({ type: 'image', url: `data:${i.mediaType};base64,${i.data}` })), { type: 'text', text }]
+        void this.server
+          .request('turn/steer', { threadId: this.threadId, expectedTurnId: this.turnId, input })
+          .then(() => this.op({ op: 'patch', id: userItemId, patch: { queued: false } }))
+          .catch(() => {
+            this.queue.push(msg)
+            this.meta.queued++
+            this.emitMeta()
+          })
+        return true
+      }
       this.queue.push(msg)
       this.meta.queued++
       this.emitMeta()
@@ -157,8 +206,10 @@ export class CodexChat extends ChatBase implements AgentChat {
       const params: Json = { threadId: this.threadId, input }
       if (this.model) params.model = this.model
       if (this.effort) params.effort = this.effort
+      // Plan mode: Codex's real plan mode (it plans and may ask questions; nothing is changed).
+      if (this.mode === 'plan' && this.meta.model) params.collaborationMode = { mode: 'plan', settings: { model: this.meta.model, reasoning_effort: this.effort ?? null, developer_instructions: null } }
       if (this.modeDirty) {
-        const p = modePolicy(this.mode)
+        const p = this.policy()
         if (p.approvalPolicy) params.approvalPolicy = p.approvalPolicy
         if (p.sandboxPolicy) params.sandboxPolicy = p.sandboxPolicy
         this.modeDirty = false
@@ -182,20 +233,75 @@ export class CodexChat extends ChatBase implements AgentChat {
     for (const [requestId, p] of [...this.pendingPerms]) if (mode === 'bypassPermissions' || (mode === 'acceptEdits' && !p.isCommand)) this.respondPermission(requestId, { allow: true })
   }
 
+/**
+   * The Codex policy for the chosen mode. With team coordination on, edits must be checked against
+   * peers' file claims before they happen (Claude's PreToolUse guard), so Codex asks before every edit
+   * ('untrusted' does, per codex-rs core/src/safety.rs) and the app answers for the chosen mode
+   * (autoAnswer): edits that pass the guard and modes that wouldn't ask are approved without a prompt.
+   */
+  private policy(): ReturnType<typeof modePolicy> {
+    const p = modePolicy(this.mode)
+    return this.guarding() ? { ...p, approvalPolicy: 'untrusted' } : p
+  }
+
+  /** Edits are checked against the team guard: team coordination on, and the chat can edit. */
+  private guarding(): boolean {
+    return settings().mesh.enabled && this.mode !== 'plan'
+  }
+
+  /**
+   * Answer for the user when guarding, as the chosen mode would: workspace edits / auto / bypass
+   * approve on their own (as without the guard); default and manual ask.
+   */
+  private autoApproves(isCommand: boolean): boolean {
+    if (!this.guarding()) return false
+    // Commands only in bypass: elsewhere one may be asking to leave the sandbox, which the mode
+    // wouldn't approve on its own (Claude asks for commands in these modes too).
+    if (isCommand) return this.mode === 'bypassPermissions'
+    return this.mode === 'acceptEdits' || this.mode === 'auto' || this.mode === 'bypassPermissions'
+  }
+
   async setModel(model: string): Promise<void> {
     this.model = model || undefined
     this.meta.model = this.model ?? this.meta.model
     this.emitMeta()
+    // Into the running turn too (otherwise it applies from the next one).
+    if (this.model && this.threadId && this.turnId) void this.server.request('turn/settings/update', { threadId: this.threadId, turnId: this.turnId, model: this.model }).catch(() => undefined)
   }
 
   respondPermission(requestId: string, d: PermissionDecision): void {
     const p = this.pendingPerms.get(requestId)
     if (!p) return
     this.pendingPerms.delete(requestId)
-    const decision = p.legacy ? (d.allow ? (d.always ? 'approved_for_session' : 'approved') : 'denied') : d.allow ? (d.always ? 'acceptForSession' : 'accept') : 'decline'
+    // A question card's answers (QuestionCard sends { answers: { [question]: "a, b" } }).
+    if (p.questions) {
+      const given = (d.updatedInput?.answers ?? {}) as Record<string, string>
+      const answers = d.allow ? Object.fromEntries(p.questions.map((q) => [q.id, { answers: given[q.question] ? [given[q.question]] : [] }])) : {}
+      this.server.respond(p.rpcId, { answers })
+      this.decide(p.itemId, { status: d.allow ? 'allowed' : 'denied' })
+      if (!this.pendingPerms.size && this.meta.busy) this.emit('status', 'working')
+      return
+    }
+    // "Always allow" a command: Codex's proposed rule when it offers one (it keeps it), else this session.
+    const always = p.isCommand && p.amendment ? { acceptWithExecpolicyAmendment: { execpolicy_amendment: p.amendment } } : 'acceptForSession'
+    const decision = p.legacy ? (d.allow ? (d.always ? 'approved_for_session' : 'approved') : 'denied') : d.allow ? (d.always ? always : 'accept') : 'decline'
     this.server.respond(p.rpcId, { decision })
     this.decide(p.itemId, { status: d.allow ? 'allowed' : 'denied' })
+    // Codex's decline carries no message: the user's feedback is sent to the agent separately.
+    if (!d.allow && d.message?.trim()) this.steer(d.message.trim())
     if (!this.pendingPerms.size && this.meta.busy) this.emit('status', 'working')
+  }
+
+  /**
+   * Get `text` to the agent now: into the running turn (`turn/steer`), else with the next prompt
+   * (older app-servers without turn/steer, or no turn running).
+   */
+  private steer(text: string): void {
+    const later = (): void => {
+      this.pendingContext.push(text)
+    }
+    if (!this.threadId || !this.turnId) return later()
+    this.server.request('turn/steer', { threadId: this.threadId, expectedTurnId: this.turnId, input: [{ type: 'text', text }] }).catch(later)
   }
 
   hasPendingPermission(): boolean {
@@ -242,8 +348,42 @@ export class CodexChat extends ChatBase implements AgentChat {
         return
       }
       case 'thread/tokenUsage/updated': {
-        const last = ((p.tokenUsage as Json | undefined)?.last as Json | undefined) ?? {}
+        const tu = (p.tokenUsage as Json | undefined) ?? {}
+        const last = (tu.last as Json | undefined) ?? {}
         this.usage = { input: Number(last.inputTokens) || undefined, output: Number(last.outputTokens) || undefined }
+        // The model's real context window, for the composer's context meter.
+        const win = Number(tu.modelContextWindow)
+        if (win > 0 && win !== this.meta.contextWindow) {
+          this.meta.contextWindow = win
+          this.emitMeta()
+        }
+        return
+      }
+      // Codex's to-do list for the turn, shown like Claude's TodoWrite.
+      case 'turn/plan/updated': {
+        const steps = Array.isArray(p.plan) ? (p.plan as Json[]) : []
+        const todos = steps.map((st) => ({ content: String(st.step ?? ''), status: st.status === 'inProgress' ? 'in_progress' : String(st.status ?? 'pending') }))
+        const id = `todo-${String(p.turnId ?? this.turnId ?? 'turn')}`
+        const input = { todos, ...(p.explanation ? { explanation: String(p.explanation) } : {}) }
+        if (this.findTool(id)) this.patchTool(id, { input })
+        else this.op({ op: 'append', item: { kind: 'tool', id, ts: Date.now(), name: 'TodoWrite', toolKind: 'other', input, status: 'done' } })
+        return
+      }
+      case 'item/plan/delta': {
+        const id = String(p.itemId)
+        const text = (this.plans.get(id) ?? '') + String(p.delta ?? '')
+        this.plans.set(id, text)
+        this.showPlan(id, text, true)
+        return
+      }
+      case 'thread/compacted':
+        return this.notice('Conversation compacted: older turns were summarized to free up context.', 'info')
+      case 'model/rerouted':
+        return this.notice(`Codex switched model: ${String(p.fromModel ?? '?')} → ${String(p.toModel ?? '?')}${p.reason ? ` (${String(p.reason)})` : ''}`, 'warn')
+      case 'warning':
+      case 'configWarning': {
+        const m = (p.message ?? p.summary ?? (p.warning as Json | undefined)?.message) as string | undefined
+        if (m) this.notice(String(m), 'warn')
         return
       }
       case 'turn/completed':
@@ -267,6 +407,11 @@ export class CodexChat extends ChatBase implements AgentChat {
         return [mcpTool(String(item.server ?? 'mcp'), String(item.tool ?? 'tool'), item.arguments)]
       case 'webSearch':
         return [webSearchTool(item.query)]
+      // Subagents: shown like Claude's Agent tool.
+      case 'collabAgentToolCall':
+        return [{ name: 'Agent', toolKind: 'other', input: { description: String(item.tool ?? 'agent'), prompt: item.prompt ?? '', agents: item.receiverThreadIds ?? [], model: item.model ?? undefined } }]
+      case 'subAgentActivity':
+        return [{ name: 'Agent', toolKind: 'other', input: { description: `${String(item.agentPath ?? 'subagent')} ${String(item.kind ?? '')}`.trim() } }]
       default:
         return []
     }
@@ -288,10 +433,13 @@ export class CodexChat extends ChatBase implements AgentChat {
     const ids = tools.map((_, i) => `${id}#${i}`)
     this.toolIds.set(id, ids)
     tools.forEach((t, i) => this.op({ op: 'append', item: { kind: 'tool', id: ids[i], ts: Date.now(), name: t.name, toolKind: t.toolKind, input: t.input, status: 'running' } }))
-    for (const t of tools)
-      void this.lifecycle?.({ type: 'tool-start', toolKind: t.toolKind, name: t.name, input: t.input, sessionId: this.threadId }).then((r) => {
-        if (r.deny?.decision === 'deny') this.denials.set(id, r.deny.reason)
-      })
+    // The team guard's verdict (deny or ask), kept per item so an approval request waits for it.
+    const verdicts = tools.map((t) => this.lifecycle?.({ type: 'tool-start', toolKind: t.toolKind, name: t.name, input: t.input, sessionId: this.threadId }).then((r) => r?.deny))
+    const verdict = Promise.all(verdicts).then((all) => all.find((d) => d?.decision === 'deny') ?? all.find((d) => d?.decision === 'ask'))
+    this.guards.set(id, verdict)
+    void verdict.then((d) => {
+      if (d?.decision === 'deny') this.denials.set(id, d.reason)
+    })
   }
 
   private itemCompleted(item: Json | undefined): void {
@@ -304,6 +452,10 @@ export class CodexChat extends ChatBase implements AgentChat {
       if (this.items.some((x) => x.id === `t-${id}`)) this.op({ op: 'patch', id: `t-${id}`, patch: text ? { text, streaming: false } : { streaming: false } })
       else if (text) this.op({ op: 'append', item: { kind: 'text', id: `t-${id}`, ts: Date.now(), text, streaming: false } })
       return
+    }
+    if (item.type === 'plan') {
+      this.plans.delete(id)
+      return this.showPlan(id, String(item.text ?? ''), false)
     }
     if (item.type === 'reasoning') {
       const summary = Array.isArray(item.summary) ? (item.summary as unknown[]).map(String).join('\n\n') : ''
@@ -332,7 +484,8 @@ export class CodexChat extends ChatBase implements AgentChat {
     }
   }
 
-  private handleRequest(rpcId: number | string, method: string, p: Json): void {
+  private async handleRequest(rpcId: number | string, method: string, p: Json): Promise<void> {
+    if (method === 'item/tool/requestUserInput') return this.askUser(rpcId, p)
     const legacy = method === 'execCommandApproval' || method === 'applyPatchApproval'
     if (!legacy && method !== 'item/commandExecution/requestApproval' && method !== 'item/fileChange/requestApproval') {
       this.server.respondError(rpcId, `Unsupported request ${method}`)
@@ -345,19 +498,59 @@ export class CodexChat extends ChatBase implements AgentChat {
       this.toolIds.set(itemId, [`${itemId}#0`])
       this.op({ op: 'append', item: { kind: 'tool', id: `${itemId}#0`, ts: Date.now(), name: t.name, toolKind: t.toolKind, input: t.input, status: 'running' } })
     }
-    const denied = this.denials.get(itemId)
+    // The team guard decides first (Claude's PreToolUse): wait for its verdict on this item, which may
+    // still be on its way (the request can arrive right behind item/started).
+    const verdict = await Promise.race([this.guards.get(itemId) ?? Promise.resolve(undefined), new Promise<undefined>((r) => setTimeout(() => r(undefined), 5000))])
+    const denied = this.denials.get(itemId) ?? (verdict?.decision === 'deny' ? verdict.reason : undefined)
     if (denied) {
       this.server.respond(rpcId, { decision: legacy ? 'denied' : 'decline' })
       this.decide(itemId, { status: 'denied' })
       this.notice(denied, 'mesh')
+      // Tell the agent why, as Claude's hook does.
+      this.steer(`That edit was refused: ${denied}`)
+      return
+    }
+    // Answered for the user where the chosen mode wouldn't ask (unless the guard wants a person to look).
+    if (this.autoApproves(isCommand) && verdict?.decision !== 'ask') {
+      this.server.respond(rpcId, { decision: legacy ? 'approved' : 'accept' })
       return
     }
     const first = this.findTool(this.toolIds.get(itemId)![0])!
     const requestId = String(rpcId)
     const permission: PermissionRequest = { requestId, toolName: first.name, input: first.input, description: (p.reason as string | undefined) ?? undefined, sessionApproval: true, status: 'pending' }
-    this.pendingPerms.set(requestId, { rpcId, itemId, legacy, isCommand })
+    this.pendingPerms.set(requestId, { rpcId, itemId, legacy, isCommand, amendment: p.proposedExecpolicyAmendment ?? undefined })
     this.patchTool(first.id, { permission })
     // The session service notifies from this status (as for Claude's can_use_tool).
+    this.emit('status', 'needs-input', permission)
+  }
+
+/**
+   * Codex asks the user questions (plan mode): shown as a question card, like Claude's
+   * AskUserQuestion; the answers go back as { answers: { [questionId]: { answers: [label] } } }.
+   */
+/** Codex's plan (plan mode), as a plan card the user can approve to start implementing it. */
+  private showPlan(itemId: string, plan: string, streaming: boolean): void {
+    const id = `plan-${itemId}`
+    if (this.findTool(id)) this.patchTool(id, { input: { plan }, status: streaming ? 'running' : 'done' })
+    else this.op({ op: 'append', item: { kind: 'tool', id, ts: Date.now(), name: 'CodexPlan', toolKind: 'other', input: { plan }, status: streaming ? 'running' : 'done' } })
+  }
+
+  private askUser(rpcId: number | string, p: Json): void {
+    const qs = Array.isArray(p.questions) ? (p.questions as Json[]) : []
+    const questions = qs.map((q) => ({
+      id: String(q.id ?? ''),
+      header: q.header ? String(q.header) : undefined,
+      question: String(q.question ?? ''),
+      options: ((q.options as Json[] | null) ?? []).map((o) => ({ label: String(o.label ?? ''), description: o.description ? String(o.description) : undefined })),
+      multiSelect: false
+    }))
+    const itemId = `q-${String(p.itemId ?? rpcId)}`
+    const toolId = `${itemId}#0`
+    this.toolIds.set(itemId, [toolId])
+    const requestId = String(rpcId)
+    const permission: PermissionRequest = { requestId, toolName: 'AskUserQuestion', input: { questions }, status: 'pending' }
+    this.op({ op: 'append', item: { kind: 'tool', id: toolId, ts: Date.now(), name: 'AskUserQuestion', toolKind: 'other', input: { questions }, status: 'running', permission } })
+    this.pendingPerms.set(requestId, { rpcId, itemId, legacy: false, isCommand: false, questions: questions.map((q) => ({ id: q.id, question: q.question })) })
     this.emit('status', 'needs-input', permission)
   }
 

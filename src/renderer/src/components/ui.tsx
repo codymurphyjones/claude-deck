@@ -234,7 +234,14 @@ export function PromptDialog() {
         {p.multiline ? (
           <textarea className="textarea" autoFocus value={v} placeholder={p.placeholder} onChange={(e) => setV(e.target.value)} rows={6} onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && done(v)} />
         ) : (
-          <input className="input" autoFocus value={v} placeholder={p.placeholder} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && done(v)} />
+          <input
+            className="input"
+            autoFocus
+            type={p.secret ? 'password' : 'text'}
+            autoComplete={p.secret ? 'off' : undefined}
+            spellCheck={p.secret ? false : undefined}
+            value={v}
+            placeholder={p.placeholder} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && done(v)} />
         )}
       </div>
     </Modal>

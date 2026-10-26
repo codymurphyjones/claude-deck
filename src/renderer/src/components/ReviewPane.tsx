@@ -17,6 +17,9 @@ import { cacheGet, cacheSet } from '../viewCache'
 /** Agent note paths are repo-relative, or absolute (forward slashes) for files outside the repo. */
 const isAbsPath = (p: string): boolean => /^([a-z]:)?\//i.test(p)
 
+/** Whether the commit-prefix offer (on the first Draft) was made. */
+const PREFIX_ASKED = 'deck.commitPrefixOffered'
+
 /** Files with more diff lines than this are shown without highlighting. */
 const HIGHLIGHT_MAX_LINES = 6000
 
@@ -581,8 +584,20 @@ export function ReviewPane({ session }: { session?: LiveSession }) {
 
   const generate = async (): Promise<void> => {
     if (!repo) return
+    // The first Draft: offer a commit prefix (e.g. "CJ |"), set in Settings → Git & worktrees. Asked once.
+    if (!commitPrefix.trim() && !localStorage.getItem(PREFIX_ASKED)) {
+      localStorage.setItem(PREFIX_ASKED, '1')
+      const r = await api.dialog.confirm(
+        'Add a prefix to your commit messages?',
+        'Many teams start commit messages with the author\'s initials or a tag, like "CJ | Fix the login bug". Claude Deck can add one to every commit you make here; drafted messages stay as written.',
+        ['Set a prefix…', 'No thanks']
+      )
+      if (r === 0) set({ settingsOpen: 'worktrees', settingsFocus: 'commitPrefix' })
+    }
     setBusy('gen')
-    const m = await attempt(() => api.git.generateCommitMessage(repo))
+    // Drafted by the provider of the chat working in this folder (else this pane's chat; else the default).
+    const provider = Object.values(sessions).find((s) => s.kind === 'agent' && s.root === repo)?.provider ?? session?.provider
+    const m = await attempt(() => api.git.generateCommitMessage(repo, provider))
     if (m) setMsg(m)
     setBusy('')
   }

@@ -73,18 +73,20 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
       ['gpt-5', 'GPT-5'],
       ['gpt-5-codex-mini', 'GPT-5 Codex mini (fastest)']
     ],
-    efforts: ['', 'minimal', 'low', 'medium', 'high'],
+    // Models and efforts are fetched from Codex (model/list) when it's installed; these are the fallback.
+    efforts: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
     permissionModes: [
       ['', 'Default'],
-      ['plan', 'Read-only'],
-      ['acceptEdits', 'Auto (edit workspace, ask outside it)'],
+      ['plan', 'Plan (read-only: plans and asks before changing anything)'],
+      ['acceptEdits', 'Workspace edits (ask outside it)'],
+      ['auto', 'Auto (Codex reviews its own approvals)'],
       ['manual', 'Ask for everything'],
       ['bypassPermissions', 'Full access (no sandbox)']
     ],
     modeCycle: ['default', 'acceptEdits', 'plan'],
     fastModel: 'gpt-5-codex-mini',
     instructionsFile: 'AGENTS.md',
-    caps: { liveApprovals: true, setModelLive: true, fork: false, images: true, costUsd: false, cloud: false, slashCommands: false, fromPr: false }
+    caps: { liveApprovals: true, setModelLive: true, fork: true, images: true, costUsd: false, cloud: false, slashCommands: false, fromPr: false }
   }
 }
 

@@ -67,6 +67,8 @@ export interface ChatMeta {
   tools: string[]
   busy: boolean
   queued: number
+  /** The model's context window in tokens, when the agent reports it (the composer's context meter). */
+  contextWindow?: number
 }
 
 /** Apply an op to an item list (shared by main's log and the renderer store). */

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { PROVIDER_IDS, PROVIDERS, type ProviderId, type ProviderSettings } from '@shared/agent'
 import { APP_TOOL_INFO, APP_TOOL_TIERS, appToolTier, RECOMMENDED_ALWAYS_ASK, type AppToolName } from '@shared/agentTools'
 import { DEFAULT_SHORTCUTS } from '@shared/defaults'
@@ -7,12 +7,13 @@ import type { EnvAction, EnvironmentConfig, Insights, PromptTemplate, SessionTem
 import { api } from '../api'
 import { commands } from '../commands'
 import { eventCombo, normalizeCombo, prettyCombo, shortcutMap } from '../shortcuts'
-import { activeSession, attempt, resumeChat, set, signIn, toast, useAuth, useStore } from '../store'
+import { activeSession, attempt, resumeChat, set, signIn, signInWithApiKey, toast, useAuth, useStore } from '../store'
 import { allThemes, resolveTheme } from '../theme'
 import { Icon } from './Icon'
 import { ProviderSeg } from './NewSessionDialog'
 import { Modal, Seg, Switch, timeAgo } from './ui'
 import { UpdatesSection } from './Updates'
+import { providerLists, useProviderLists } from '../providerLists'
 
 const NAV: [string, string, string][] = [
   ['general', 'General', 'settings'],
@@ -94,20 +95,21 @@ type P = { s: Settings; update: (p: Partial<Settings>) => void }
 
 function ProviderDefaults({ provider, s, update }: P & { provider: ProviderId }) {
   const desc = PROVIDERS[provider]
+  const lists = useProviderLists(provider)
   const cur = s.providers[provider]
   const set = (patch: Partial<ProviderSettings>): void => update({ providers: { ...s.providers, [provider]: { ...cur, ...patch } } })
   return (
     <Row label={`${desc.label} defaults`} desc="Model, effort and permission mode for new sessions.">
       <div className="row">
         <select className="select" value={cur.defaultModel} onChange={(e) => set({ defaultModel: e.target.value })}>
-          {desc.models.map(([v, l]) => (
+          {lists.models.map(([v, l]) => (
             <option key={v} value={v}>
               {l}
             </option>
           ))}
         </select>
         <select className="select" value={cur.defaultEffort} onChange={(e) => set({ defaultEffort: e.target.value })}>
-          {desc.efforts.map((x) => (
+          {lists.efforts.map((x) => (
             <option key={x} value={x}>
               {x ? `${x} effort` : 'Default effort'}
             </option>
@@ -590,6 +592,16 @@ function ProviderAccount({ provider }: { provider: ProviderId }) {
             </button>
           </>
         )}
+        {provider === 'codex' && (
+          <>
+            <button className="btn" onClick={() => (set({ settingsOpen: false }), signIn({ device: true }, provider))}>
+              Device code
+            </button>
+            <button className="btn" onClick={() => signInWithApiKey(provider)}>
+              API key
+            </button>
+          </>
+        )}
         <button className="btn ghost" onClick={() => api.auth.refresh(provider)}>
           <Icon name="refresh" size={13} /> Refresh
         </button>
@@ -652,12 +664,12 @@ function Worktrees({ s, update }: P) {
           </>
         }
       >
-        <input className="input mono" style={{ width: 160 }} value={g.commitPrefix} placeholder="none" onChange={(e) => update({ git: { ...g, commitPrefix: e.target.value } })} />
+        <CommitPrefixInput value={g.commitPrefix} onChange={(commitPrefix) => update({ git: { ...g, commitPrefix } })} />
       </Row>
       <h3>Worktrees</h3>
       <Row
         label="Each chat works in its own worktree"
-        desc="New chats in a Git repo get their own copy (in Claude Deck's data folder) on a branch of their own, off the branch you pick (by default, the one your folder has checked out). Merge into <branch> brings the work back: your folder updates right away if it's on that branch (or after you confirm, if it has uncommitted changes); other branches are updated and pushed from Claude Deck. Turn off to have chats edit your folder directly; you can also choose per chat in New session."
+        desc="New chats in a Git repo get their own copy (in Claude Deck's data folder) on a branch of their own, off the branch you pick (by default, the one your folder has checked out). Merge into <branch> brings the work back: your folder updates right away if it's on that branch (or after you confirm, if it has uncommitted changes); a branch your folder isn't on is checked out in Claude Deck's data folder and updated there. Nothing is pushed for you: push the branch when you're ready. Turn off to have chats edit your folder directly; you can also choose per chat in New session."
       >
         <Switch on={w.perChat} onChange={(perChat) => update({ worktrees: { ...w, perChat } })} />
       </Row>
@@ -746,7 +758,7 @@ function Templates({ s, update }: P) {
               ))}
             </select>
             <select className="select" value={t.model ?? ''} onChange={(e) => setTpl(i, { model: e.target.value || undefined })}>
-              {PROVIDERS[t.provider ?? s.defaultProvider].models.map(([v, l]) => (
+              {providerLists(t.provider ?? s.defaultProvider).models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -907,6 +919,23 @@ function Personalization() {
       </div>
     </>
   )
+}
+
+/** The commit prefix field; focused and highlighted when Settings opens to it (the first Draft's offer). */
+function CommitPrefixInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  const focus = useStore((s) => s.settingsFocus)
+  const [flash, setFlash] = useState(false)
+  useEffect(() => {
+    if (focus !== 'commitPrefix' || !ref.current) return
+    set({ settingsFocus: undefined })
+    ref.current.scrollIntoView({ block: 'center' })
+    ref.current.focus()
+    setFlash(true)
+    const t = setTimeout(() => setFlash(false), 2400)
+    return () => clearTimeout(t)
+  }, [focus])
+  return <input ref={ref} className={`input mono ${flash ? 'flash' : ''}`} style={{ width: 160 }} value={value} placeholder="e.g. CJ |" onChange={(e) => onChange(e.target.value)} />
 }
 
 function Archived() {

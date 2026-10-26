@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { providerOf } from '@shared/agent'
 import { api } from '../api'
 import { commands, SLASH_COMMANDS } from '../commands'
 import { prettyCombo, shortcutMap } from '../shortcuts'
@@ -55,7 +56,8 @@ export function CommandPalette() {
     if (!onlySlash)
       for (const c of commands().filter((c) => c.when?.() ?? true))
         add({ key: 'c' + c.id, group: 'Commands', title: c.title, icon: c.icon ?? 'zap', hint: prettyCombo(sc[c.id]), run: c.run }, `${c.title} ${c.group}`)
-    if (active?.kind === 'agent' && !onlyCommands)
+    // Claude's slash commands, for agents that take them (not Codex).
+    if (active?.kind === 'agent' && !onlyCommands && providerOf(active.provider).caps.slashCommands)
       for (const [cmd, desc] of SLASH_COMMANDS)
         add({ key: 'sl' + cmd, group: 'Claude slash commands', title: cmd, sub: desc, icon: 'code', run: () => api.session.sendPrompt(active.id, cmd, 'steer') }, `${cmd} ${desc}`)
     if (!onlyCommands && !onlySlash) {

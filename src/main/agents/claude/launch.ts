@@ -65,6 +65,8 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
   // It only makes bypass selectable; the session still starts in `mode`, and auto mode is unaffected.
   if (cfg.agentPermissions.allowBypassSwitch || mode === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions')
   args.push('--settings', settingsFile)
+  // Remote Control (continue from the Claude app or claude.ai/code), named after the chat.
+  if (L.remoteControl) args.push('--remote-control', s.name)
 
   if (cfg.mesh.enabled) {
     const mcpFile = path.join(dir, 'mcp.json')

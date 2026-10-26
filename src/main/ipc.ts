@@ -289,6 +289,9 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     // ---- auth ----
     'auth.refresh': (_e, p?: ProviderId) => (p ? auth.refresh(p) : auth.refreshAll()),
     'auth.logout': (_e, p: ProviderId) => auth.logout(p),
+    'auth.loginWithApiKey': (_e, p: ProviderId, key: string) => auth.loginWithApiKey(p, key),
+    // The models and efforts a provider's CLI offers now (Codex: model/list), else undefined.
+    'agents.models': (_e, p: ProviderId) => adapter(p).listModels?.(),
 
     // ---- library ----
     'library.get': () => ({ projects: state().projects, chats: state().chats, worktrees: state().worktrees, recentFolders: state().recentFolders }),
@@ -342,10 +345,10 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
       const r = await run('git', ['show', `HEAD:./${path.basename(file)}`], { cwd: path.dirname(file), timeout: 15_000 })
       return r.code === 0 ? r.stdout : null
     },
-    'git.generateCommitMessage': async (_e, cwd: string) => {
+    'git.generateCommitMessage': async (_e, cwd: string, provider?: ProviderId) => {
       const diff = await git.rawDiffForMessage(cwd)
       if (!diff.trim()) throw new Error('No changes to describe')
-      const raw = await adapter().complete(
+      const raw = await adapter(provider).complete(
         'Write a git commit message for the changes on stdin: an imperative subject line under 72 characters, then optionally a blank line and a short body. ' +
           'Reply with the commit message text only, exactly as it should be committed: no code fences, no markdown headings, no quotes, no introduction or explanation.',
         { cwd, input: diff }

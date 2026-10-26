@@ -612,7 +612,8 @@ label.check {
 .list-item.active {
   background: var(--active);
 }
-.list-item.flash {
+.list-item.flash,
+.input.flash {
   animation: listFlash 2.4s var(--ease);
 }
 @keyframes listFlash {

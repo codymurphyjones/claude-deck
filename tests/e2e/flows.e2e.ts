@@ -52,6 +52,31 @@ test.describe('with a project folder', () => {
   test.describe('chats editing the folder directly', () => {
     test.use({ settings: { worktrees: { perChat: false } } })
 
+    test('the first Draft offers a commit prefix, and Yes opens that setting', async ({ deck }) => {
+      const { app, page, repo } = deck
+      await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
+      // Count the offers, answering the first with "Set a prefix…".
+      await app.evaluate(({ dialog }) => {
+        const g = globalThis as unknown as { offers: string[] }
+        g.offers = []
+        dialog.showMessageBox = (async (_w: unknown, o: { message: string }) => {
+          g.offers.push(o.message)
+          return { response: 0, checkboxChecked: false }
+        }) as unknown as typeof dialog.showMessageBox
+      })
+      await page.keyboard.press('Control+Shift+G')
+      const review = page.getByTestId('review-pane')
+      await review.getByRole('button', { name: /Draft/ }).click()
+      const prefix = page.locator('.modal').getByPlaceholder('e.g. CJ |')
+      await expect(prefix).toBeFocused()
+      await expect(page.locator('.settings-nav .on, .settings-nav .active').first()).toContainText('Git & worktrees')
+      await page.keyboard.press('Escape')
+      // Asked once only.
+      await review.getByRole('button', { name: /Draft/ }).click()
+      const offers = await app.evaluate(() => (globalThis as unknown as { offers: string[] }).offers.filter((m) => /prefix/.test(m)).length)
+      expect(offers).toBe(1)
+    })
+
     test('stages and commits a change from the Review pane', async ({ deck }) => {
       const { page, repo } = deck
       await expect(page.getByText(path.basename(repo)).first()).toBeVisible()
@@ -225,6 +250,9 @@ test.describe('with a project folder', () => {
     const folders = await sidebar.locator('.proj-folder').allInnerTexts()
     expect(folders.filter((t) => t.includes('packages/types') && !t.includes('db'))).toEqual([])
     expect(folders.findIndex((t) => t.includes('.mono'))).toBeLessThan(folders.findIndex((t) => t.includes('root')))
+    // The aliased workspaces have their own folder, right below .mono (not inside it).
+    const monoAt = folders.findIndex((t) => t.includes('.mono'))
+    expect(folders[monoAt + 1]).toContain('Workspaces')
     await sidebar.locator('.proj-folder.nested', { hasText: 'db' }).click()
     await sidebar.locator('.proj-script.nested', { hasText: 'migrate' }).click()
     await expect

@@ -85,13 +85,13 @@ export function ProjectActions({ project, embedded = false }: { project: Project
   const toolsShown = (tools ?? [])
     .filter((t) => showHidden || !isToolHidden(rules, t.kind))
     .map((t) => ({ t, actions: t.actions.filter((a) => (!ql || a.name.toLowerCase().includes(ql) || a.title.toLowerCase().includes(ql) || t.title.toLowerCase().includes(ql)) && (showHidden || !isActionHidden(rules, t.kind, a.id))) }))
-    .filter((x) => x.actions.length || (x.t.kind === 'mono' && aliased.length))
+    .filter((x) => x.actions.length)
   // How many items the rules hide here, for the "Show hidden" toggle.
   const hiddenCount =
     (pkgs ?? []).reduce((n, p) => n + Object.keys(p.scripts).filter((s) => isScriptHidden(rules, p.rel, s)).length, 0) +
     (tools ?? []).reduce((n, t) => n + t.actions.filter((a) => isActionHidden(rules, t.kind, a.id)).length, 0)
   const toolFolder = ({ t, actions }: (typeof toolsShown)[number]) => (
-    <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} workspaces={t.kind === 'mono' ? aliased.filter((g) => g.pkg.dir.toLowerCase().startsWith(t.dir.toLowerCase())) : []} />
+    <ToolFolder key={t.id} projectId={project.id} toolset={t} actions={actions} procs={procs} defaultOpen={t.kind === 'mono'} forceOpen={!!ql} />
   )
 
   return (
@@ -139,8 +139,9 @@ export function ProjectActions({ project, embedded = false }: { project: Project
           {total > 12 && <input className="input sm" style={{ margin: '2px 0 4px' }} placeholder="Filter scripts…" value={q} onChange={(e) => setQ(e.target.value)} />}
           {!pkgs && <div className="empty-note">Scanning package.json files…</div>}
           {pkgs && !pkgs.length && <div className="empty-note">No package.json scripts found in this project.</div>}
-          {/* .mono first: its commands and its aliased workspaces' scripts. */}
+          {/* .mono first, then the workspaces it has short labels for, then the other scripts. */}
           {toolsShown.filter((x) => x.t.kind === 'mono').map(toolFolder)}
+          {aliased.length > 0 && <WorkspacesFolder projectId={project.id} workspaces={aliased} procs={procs} forceOpen={!!ql} />}
           {plain.map(({ pkg, names }) => (
             <PackageFolder key={pkg.dir} projectId={project.id} pkg={pkg} names={names} procs={procs} defaultOpen={plain.length === 1 && !toolsShown.some((x) => x.t.kind === 'mono')} forceOpen={!!ql} />
           ))}
@@ -301,8 +302,7 @@ function ToolFolder({
   actions,
   procs,
   defaultOpen,
-  forceOpen,
-  workspaces = []
+  forceOpen
 }: {
   projectId: string
   toolset: ToolSet
@@ -310,8 +310,6 @@ function ToolFolder({
   procs: ProcessInfo[]
   defaultOpen: boolean
   forceOpen: boolean
-  /** .mono: the workspaces it has aliases for, listed by alias with their scripts (run through mono). */
-  workspaces?: { pkg: ScriptPackage; names: string[] }[]
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const expanded = open || forceOpen
@@ -364,7 +362,7 @@ function ToolFolder({
         </span>
         {running > 0 && <span className="sub proj-count running">{running} running</span>}
         {failed > 0 && <span className="sub proj-count failed">{failed} failed</span>}
-        {!running && !failed && <span className="sub">{actions.length + workspaces.length}</span>}
+        {!running && !failed && <span className="sub">{actions.length}</span>}
       </div>
       {expanded &&
         groups.map((g) => (
@@ -399,16 +397,40 @@ function ToolFolder({
               })}
           </div>
         ))}
-      {expanded && workspaces.length > 0 && (
-        <>
-          <div className="action-group-label" title="Workspace scripts run through mono by their alias (.mono/config.json), with mono's environment">
-            Workspaces
-          </div>
-          {workspaces.map(({ pkg, names }) => (
-            <PackageFolder key={pkg.dir} projectId={projectId} pkg={pkg} names={names} procs={procs} defaultOpen={false} forceOpen={forceOpen} nested />
-          ))}
-        </>
-      )}
+    </>
+  )
+}
+
+/**
+ * The workspaces .mono has short labels for (.mono/config.json packageMaps), listed by label right
+ * below .mono; their scripts run through mono (`yarn mono <alias> <script>`, with its environment).
+ */
+function WorkspacesFolder({ projectId, workspaces, procs, forceOpen }: { projectId: string; workspaces: { pkg: ScriptPackage; names: string[] }[]; procs: ProcessInfo[]; forceOpen: boolean }) {
+  const [open, setOpen] = useState(true)
+  const expanded = open || forceOpen
+  const dirs = new Set(workspaces.map((w) => w.pkg.dir))
+  const own = procs.filter((p) => dirs.has(p.cwd))
+  const running = own.filter((p) => p.status === 'running').length
+  const failed = own.filter(isOpenFailure).length
+  return (
+    <>
+      <div
+        className={`list-item proj-folder tool-folder ${running ? 'running' : failed ? 'failed' : ''}`}
+        title="Workspaces with a short label in .mono/config.json: their scripts run through mono (yarn mono <label> <script>), with mono's environment"
+        onClick={() => setOpen(!expanded)}
+        data-testid="mono-workspaces"
+      >
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
+        <Icon name="grid" size={13} />
+        <span className="grow ellipsis">Workspaces</span>
+        {running > 0 && <span className="sub proj-count running">{running} running</span>}
+        {failed > 0 && <span className="sub proj-count failed">{failed} failed</span>}
+        {!running && !failed && <span className="sub">{workspaces.length}</span>}
+      </div>
+      {expanded &&
+        workspaces.map(({ pkg, names }) => (
+          <PackageFolder key={pkg.dir} projectId={projectId} pkg={pkg} names={names} procs={procs} defaultOpen={false} forceOpen={forceOpen} nested />
+        ))}
     </>
   )
 }

@@ -5,7 +5,9 @@ import { api } from '../api'
 import { activeSession, openSession, set, useStore } from '../store'
 import { startableBranches } from '../branchActions'
 import { Icon } from './Icon'
+import { CodexPushWarning } from './CodexPushWarning'
 import { Modal, Seg, Switch } from './ui'
+import { useProviderLists } from '../providerLists'
 
 /** Provider picker shown wherever an agent is chosen. */
 export function ProviderSeg({ value, onChange }: { value: ProviderId; onChange: (p: ProviderId) => void }) {
@@ -87,6 +89,8 @@ export function NewSessionDialog() {
     if (t.initialPrompt) setPrompt(t.initialPrompt)
   }, [templateId])
 
+  // The provider's current models and efforts (Codex asks its CLI); a hook, so before the early return.
+  const lists = useProviderLists(provider)
   if (!pre) return null
   const desc = PROVIDERS[provider]
   const whereChoice = where
@@ -253,7 +257,7 @@ export function NewSessionDialog() {
           <label className="field grow">
             Model
             <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {desc.models.map(([v, l]) => (
+              {lists.models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>
@@ -263,7 +267,7 @@ export function NewSessionDialog() {
           <label className="field" style={{ width: 120 }}>
             Effort
             <select className="select" value={effort} onChange={(e) => setEffort(e.target.value)}>
-              {desc.efforts.map((x) => (
+              {lists.efforts.map((x) => (
                 <option key={x} value={x}>
                   {x || 'Default'}
                 </option>
@@ -281,6 +285,7 @@ export function NewSessionDialog() {
             </select>
           </label>
         </div>
+        <CodexPushWarning provider={provider} />
         <label className="field">
           First prompt (optional)
           <textarea className="textarea" rows={3} value={prompt} placeholder={`What should ${desc.label} do?`} onChange={(e) => setPrompt(e.target.value)} />

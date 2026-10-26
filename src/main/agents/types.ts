@@ -98,8 +98,18 @@ export interface AgentHistory {
 
 export interface AgentAuth {
   status(): Promise<Omit<AuthStatus, 'provider'>>
-  loginArgs(opts?: { console?: boolean; sso?: boolean; email?: string }): string[]
+  loginArgs(opts?: LoginOptions): string[]
   logout(): Promise<void>
+  /** Sign in with an API key (passed on stdin, never on a command line), when the CLI supports it. */
+  loginWithApiKey?(key: string): Promise<void>
+}
+
+/** How to sign in: console / SSO / email (Claude), device code (Codex). */
+export interface LoginOptions {
+  console?: boolean
+  sso?: boolean
+  email?: string
+  device?: boolean
 }
 
 export interface AgentAdapter {
@@ -109,6 +119,8 @@ export interface AgentAdapter {
   locate(): string
   createChat(s: SessionInfo): AgentChat
   headless(opts: HeadlessOptions): { done: Promise<HeadlessResult>; kill: () => void }
+  /** The models and efforts the CLI offers right now (Codex: model/list); undefined to use the descriptor's. */
+  listModels?(): Promise<{ models: [string, string][]; efforts: string[] } | undefined>
   /** One-shot, tool-less completion (commit messages). */
   complete(prompt: string, opts: { cwd: string; input?: string; model?: string }): Promise<string>
   history: AgentHistory

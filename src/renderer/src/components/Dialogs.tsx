@@ -4,6 +4,7 @@ import { activeSession, openSession, set, startAction, toast, useStore } from '.
 import { Icon } from './Icon'
 import { providerOf } from '@shared/agent'
 import { Modal, Switch } from './ui'
+import { providerLists } from '../providerLists'
 
 export function GoalDialog() {
   const id = useStore((s) => s.goalFor)
@@ -152,7 +153,7 @@ export function FleetDialog() {
           <label className="field" style={{ width: 200 }}>
             Model
             <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {providerOf(useStore.getState().settings.defaultProvider).models.map(([v, l]) => (
+              {providerLists().models.map(([v, l]) => (
                 <option key={v} value={v}>
                   {l}
                 </option>

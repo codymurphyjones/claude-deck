@@ -3,6 +3,7 @@ import type { Automation, AutomationSchedule } from '@shared/types'
 import { api } from '../api'
 import { attempt, openSession, set, useStore } from '../store'
 import { Icon } from './Icon'
+import { CodexPushWarning } from './CodexPushWarning'
 import { AgentSelect, efforts, ScheduledJobFields } from './Jobs'
 import { Modal, openMenu, Seg, Switch, timeAgo, useNow } from './ui'
 
@@ -344,6 +345,7 @@ export function AutomationDialog() {
                 </select>
               </label>
             </div>
+            <CodexPushWarning provider={a.provider} />
             <div className="muted" style={{ fontSize: 12 }}>
               Runs are unattended: anything that would need an approval prompt is denied automatically.
             </div>

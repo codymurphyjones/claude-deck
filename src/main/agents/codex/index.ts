@@ -5,9 +5,12 @@ import type { SessionInfo } from '@shared/types'
 import { settings } from '../../context'
 import { locateBinary } from '../../runtime'
 import { plainEnv } from '../../sessions/launch'
+import { pushBlockEnv } from '../../git/pushGuard'
 import { run, spawnLines } from '../../util'
 import type { AgentAdapter, HeadlessOptions, HeadlessResult } from '../types'
 import { CodexChat } from './chat'
+import { AppServer } from './appServer'
+import * as fs from 'fs'
 import { codexHistory, codexHome } from './history'
 import { modePolicy } from './policy'
 
@@ -26,7 +29,7 @@ function locate(): string {
 }
 
 /** `codex exec` flags for an unattended run (approvals can't be answered, so never ask). */
-function execArgs(opts: { model?: string; effort?: string; permissionMode?: string }): string[] {
+function execArgs(opts: { model?: string; effort?: string; permissionMode?: string; cwd?: string }): string[] {
   const args = ['exec', '--json', '--skip-git-repo-check']
   const model = opts.model || settings().providers.codex.defaultModel
   if (model) args.push('--model', model)
@@ -34,6 +37,10 @@ function execArgs(opts: { model?: string; effort?: string; permissionMode?: stri
   const mode = opts.permissionMode || 'acceptEdits'
   if (mode === 'bypassPermissions') args.push('--dangerously-bypass-approvals-and-sandbox')
   else args.push('--sandbox', modePolicy(mode).sandbox ?? 'workspace-write')
+  // In a chat's worktree: the push block (git/pushGuard.ts), set explicitly in Codex's shell environment
+  // so its filtering (which can drop GIT_CONFIG_KEY_n) can't remove it. A TOML inline table.
+  const block = opts.cwd ? pushBlockEnv(opts.cwd) : {}
+  if (Object.keys(block).length) args.push('-c', `shell_environment_policy.set={${Object.entries(block).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}}`)
   return args
 }
 
@@ -78,12 +85,59 @@ function headless(opts: HeadlessOptions): { done: Promise<HeadlessResult>; kill:
   }
 }
 
+/**
+ * The signed-in ChatGPT account's email and plan, from the ID token Codex saved (auth.json). Read
+ * only, nothing sent anywhere; nothing when signed in with an API key or the file isn't readable.
+ */
+function accountInfo(): { email?: string; subscriptionType?: string } {
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(codexHome(), 'auth.json'), 'utf8')) as { tokens?: { id_token?: string } }
+    const payload = auth.tokens?.id_token?.split('.')[1]
+    if (!payload) return {}
+    const claims = JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) as Record<string, unknown>
+    const openai = (claims['https://api.openai.com/auth'] ?? {}) as Record<string, unknown>
+    return {
+      email: typeof claims.email === 'string' ? claims.email : undefined,
+      subscriptionType: typeof openai.chatgpt_plan_type === 'string' ? openai.chatgpt_plan_type : undefined
+    }
+  } catch {
+    return {}
+  }
+}
+
+let modelCache: { models: [string, string][]; efforts: string[] } | undefined
+/**
+ * The models Codex offers now (`model/list` on a short-lived app-server), with their efforts. Cached
+ * for the session; undefined when Codex isn't installed or doesn't answer, so the built-in list is used.
+ */
+async function listModels(): Promise<{ models: [string, string][]; efforts: string[] } | undefined> {
+  if (modelCache) return modelCache
+  const server = new AppServer()
+  try {
+    server.start(locate(), [], { cwd: os.homedir(), env: plainEnv() })
+    const ask = <T,>(p: Promise<T>): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), 15_000))])
+    await ask(server.request('initialize', { clientInfo: { name: 'claude_deck', title: 'Claude Deck', version: '0' } }))
+    server.notify('initialized')
+    const res = await ask(server.request<{ data?: { model: string; displayName?: string; hidden?: boolean; supportedReasoningEfforts?: { reasoningEffort: string }[] }[] }>('model/list', { includeHidden: false }))
+    const list = (res.data ?? []).filter((m) => !m.hidden && m.model)
+    if (!list.length) return undefined
+    const efforts = [...new Set(list.flatMap((m) => (m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort)))]
+    modelCache = { models: [['', 'Default'], ...list.map((m) => [m.model, m.displayName || m.model] as [string, string])], efforts: ['', ...efforts] }
+    return modelCache
+  } catch {
+    return undefined
+  } finally {
+    server.kill()
+  }
+}
+
 export const codexAdapter: AgentAdapter = {
   id: 'codex',
   descriptor: PROVIDERS.codex,
   locate,
   createChat: (s: SessionInfo) => new CodexChat(locate(), s),
   headless,
+  listModels,
   async complete(prompt, opts) {
     const h = headless({ prompt: opts.input ? `${prompt}\n\n${opts.input}` : prompt, cwd: opts.cwd, model: opts.model || PROVIDERS.codex.fastModel, permissionMode: 'plan' })
     const r = await h.done
@@ -97,12 +151,17 @@ export const codexAdapter: AgentAdapter = {
       const out = `${r.stdout}\n${r.stderr}`.trim()
       if (r.code === 0 && /logged in/i.test(out) && !/not logged in/i.test(out)) {
         const method = /api key/i.test(out) ? 'api-key' : /chatgpt/i.test(out) ? 'chatgpt' : undefined
-        return { checked: true, loggedIn: true, authMethod: method }
+        return { checked: true, loggedIn: true, authMethod: method, ...accountInfo() }
       }
       if (process.env.OPENAI_API_KEY) return { checked: true, loggedIn: true, authMethod: 'api-key' }
       return { checked: true, loggedIn: false, error: out.slice(0, 300) || undefined }
     },
-    loginArgs: () => ['login'],
+    // Device code: for machines where the browser sign-in can't reach back (remote, headless).
+    loginArgs: (opts = {}) => (opts.device ? ['login', '--device-auth'] : ['login']),
+    async loginWithApiKey(key: string) {
+      const r = await run(locate(), ['login', '--with-api-key'], { input: key, timeout: 60_000 })
+      if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || 'codex login --with-api-key failed')
+    },
     async logout() {
       await run(locate(), ['logout'], { timeout: 30_000 })
     }

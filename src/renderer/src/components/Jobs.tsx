@@ -20,9 +20,11 @@ import { api } from '../api'
 import { askText, attempt, get, loadJobs, loadRoutines, openSession, set, showSidebar, startAction, toast, useStore } from '../store'
 import { copyJobCard } from '../jobClipboard'
 import { Icon } from './Icon'
+import { CodexPushWarning } from './CodexPushWarning'
 import { runRoutine } from './Routines'
 import { Modal, openMenu, Seg, shortPath, Switch, timeAgo, useNow } from './ui'
 import { useChatWorktrees } from './WorktreeChanges'
+import { providerLists } from '../providerLists'
 
 /** Repo folders that can hold jobs: project folders, plus whatever the active chat is in. */
 export function useRoots(): string[] {
@@ -597,6 +599,7 @@ export function RunOptionsFields({
           <PermissionSelect value={value.permissionMode} fallback={d.permissionMode} onChange={(permissionMode) => onChange({ ...value, permissionMode })} />
         </label>
       </div>
+      <CodexPushWarning provider={value.provider ?? d.provider} />
     </>
   )
 }
@@ -617,7 +620,7 @@ export function AgentSelect({ value, onChange }: { value?: ProviderId; onChange:
 }
 
 /** Effort levels the agent understands (without the '' default entry). */
-export const efforts = (p?: ProviderId): string[] => providerOf(p ?? useStore.getState().settings.defaultProvider).efforts.filter(Boolean)
+export const efforts = (p?: ProviderId): string[] => providerLists(p).efforts.filter(Boolean)
 
 export function PermissionSelect({ value, fallback, onChange }: { value?: string; fallback?: string; onChange: (v?: string) => void }) {
   return (

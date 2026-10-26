@@ -56,8 +56,16 @@ export class AuthService extends EventEmitter {
     this.polls.set(p, setTimeout(() => void this.refresh(p), ms))
   }
 
-  loginArgs(p: ProviderId, opts: { console?: boolean; sso?: boolean; email?: string } = {}): string[] {
+  loginArgs(p: ProviderId, opts: { console?: boolean; sso?: boolean; email?: string; device?: boolean } = {}): string[] {
     return adapter(p).auth.loginArgs(opts)
+  }
+
+  /** Sign in with an API key (Codex), then re-check. */
+  async loginWithApiKey(p: ProviderId, key: string): Promise<void> {
+    const a = adapter(p).auth
+    if (!a.loginWithApiKey) throw new Error(`${adapter(p).descriptor.label} doesn't support API-key sign-in here`)
+    await a.loginWithApiKey(key)
+    await this.refresh(p)
   }
 
   async logout(p: ProviderId = 'claude'): Promise<void> {

@@ -16,6 +16,7 @@ import {
   setRight,
   shellFor,
   signIn,
+  signInWithApiKey,
   toggleShell,
   useAuth,
   useStore,
@@ -65,6 +66,16 @@ export function MainArea() {
               </button>
               <button className="btn sm ghost" onClick={() => signIn({ sso: true })}>
                 SSO
+              </button>
+            </>
+          )}
+          {provider === 'codex' && (
+            <>
+              <button className="btn sm" onClick={() => signIn({ device: true })} title="Sign in on another device with a one-time code (no local browser needed)">
+                Device code
+              </button>
+              <button className="btn sm ghost" onClick={() => signInWithApiKey('codex')}>
+                API key
               </button>
             </>
           )}
@@ -226,16 +237,21 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
       { label: 'Rename…', icon: 'edit', onClick: () => askText('Rename session', s.name).then<unknown>((n) => n && api.session.rename(id, n)) },
       ...(isAgent
         ? [
-            { label: 'Fork chat', icon: 'fork', onClick: () => runCommand('forkChat') },
-            { label: 'Fork into worktree', icon: 'branch', onClick: () => runCommand('forkWorktree') },
-            { label: 'Side chat', icon: 'message', onClick: () => runCommand('sideChat') },
+            // Forks need an agent that can fork a conversation (not Codex yet: shared/agent.ts caps).
+            ...(providerOf(s.provider).caps.fork
+              ? [
+                  { label: 'Fork chat', icon: 'fork', onClick: () => runCommand('forkChat') },
+                  { label: 'Fork into worktree', icon: 'branch', onClick: () => runCommand('forkWorktree') },
+                  { label: 'Side chat', icon: 'message', onClick: () => runCommand('sideChat') }
+                ]
+              : []),
             { label: s.worktreeId ? 'Hand off to local checkout' : 'Hand off to a worktree', icon: 'arrow', onClick: () => runCommand('handoff') },
             { separator: true },
             { label: 'Set goal…', icon: 'target', onClick: () => set({ goalFor: id }) },
             { label: 'Schedule follow-up…', icon: 'clock', onClick: () => runCommand('scheduleInChat') },
             { label: 'Cycle permission mode', icon: 'shield', hint: 'Shift+Tab', onClick: () => api.session.cycleMode(id) },
             { label: 'Role…', icon: 'users', onClick: (() => roleMenu(el)) as () => void },
-            { label: 'Continue on phone (Remote Control)', icon: 'phone', onClick: () => runCommand('remoteControl') },
+            ...(providerOf(s.provider).id === 'claude' ? [{ label: 'Continue on phone (Remote Control)', icon: 'phone', onClick: () => runCommand('remoteControl') }] : []),
             { separator: true }
           ]
         : []),

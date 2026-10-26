@@ -159,6 +159,8 @@ export const ToolCard = memo(function ToolCard({
 
   if (t.name === 'AskUserQuestion') return <QuestionCard item={t} sessionId={sessionId} />
   if (t.name === 'ExitPlanMode') return <PlanCard item={t} sessionId={sessionId} cwd={cwd} dark={dark} />
+  if (t.name === 'TodoWrite') return <TodoCard item={t} />
+  if (t.name === 'CodexPlan') return <CodexPlanCard item={t} sessionId={sessionId} cwd={cwd} dark={dark} />
 
   const file = str(t.input.file_path || t.input.notebook_path)
   const target = file ? rel(file, cwd) : summarizeInput(t.name, t.input)
@@ -489,6 +491,68 @@ function PlanCard({ item: t, sessionId, cwd, dark }: { item: ToolItem; sessionId
             </button>
           </div>
         ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- TodoWrite (Claude) / turn plan (Codex)
+/** The agent's to-do list for the work: each step and where it stands. */
+function TodoCard({ item: t }: { item: ToolItem }) {
+  const todos = (Array.isArray(t.input.todos) ? t.input.todos : []) as { content?: string; activeForm?: string; status?: string }[]
+  const done = todos.filter((x) => x.status === 'completed').length
+  return (
+    <div className="todo-card" data-testid="todo-card">
+      <div className="todo-head">
+        <Icon name="list" size={13} />
+        <span className="grow">To-do</span>
+        <span className="muted">
+          {done}/{todos.length}
+        </span>
+      </div>
+      {typeof t.input.explanation === 'string' && t.input.explanation && <div className="muted todo-note">{t.input.explanation}</div>}
+      {todos.map((x, i) => (
+        <div key={i} className={`todo-row ${x.status ?? 'pending'}`}>
+          <span className="todo-box">{x.status === 'completed' ? <Icon name="check" size={11} /> : x.status === 'in_progress' ? <span className="dot working" /> : null}</span>
+          <span className="grow">{x.status === 'in_progress' && x.activeForm ? x.activeForm : x.content}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- Codex plan (plan mode)
+/**
+ * Codex's plan from plan mode. Codex doesn't ask for approval of a plan (Claude's ExitPlanMode does),
+ * so approving here switches the chat to workspace edits and asks it to implement the plan.
+ */
+function CodexPlanCard({ item: t, sessionId, cwd, dark }: { item: ToolItem; sessionId: string; cwd: string; dark: boolean }) {
+  const [started, setStarted] = useState(false)
+  const streaming = t.status === 'running'
+  const implement = async (): Promise<void> => {
+    setStarted(true)
+    await api.chat.setMode(sessionId, 'acceptEdits')
+    await api.session.sendPrompt(sessionId, 'Implement the plan above.')
+  }
+  return (
+    <div className={`plan-card ${!streaming && !started ? 'pending' : ''}`} data-testid="codex-plan">
+      <div className="plan-head">
+        <Icon name="list" size={14} />
+        <span className="grow">{streaming ? 'Planning…' : 'Plan'}</span>
+      </div>
+      <Markdown text={String(t.input.plan ?? '')} streaming={streaming} cwd={cwd} dark={dark} />
+      {!streaming && (
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>
+          {started ? (
+            <span className="muted" style={{ fontSize: 12 }}>
+              Implementing (switched to workspace edits)
+            </span>
+          ) : (
+            <button className="btn sm primary" onClick={() => void implement()}>
+              Implement this plan
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

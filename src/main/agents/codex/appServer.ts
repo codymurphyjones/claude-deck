@@ -21,8 +21,9 @@ export class AppServer extends EventEmitter {
     return !!this.proc && this.proc.exitCode === null && !this.proc.killed
   }
 
+  /** `args`: codex's global options (e.g. `-c key=value`, `--profile x`), placed before `app-server`. */
   start(command: string, args: string[], opts: { cwd: string; env: Record<string, string> }): void {
-    this.proc = spawn(command, ['app-server', ...args], {
+    this.proc = spawn(command, [...args, 'app-server'], {
       cwd: opts.cwd,
       env: opts.env,
       windowsHide: true,

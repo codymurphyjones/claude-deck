@@ -3,6 +3,7 @@ import { buildRoutineChatPrompt, buildStepPrompt, newJob, routineRunName, stepsT
 import { api } from '../api'
 import { attempt, currentProjectRoot, loadRoutines, openSession, set, showSidebar, useStore } from '../store'
 import { Icon } from './Icon'
+import { CodexPushWarning } from './CodexPushWarning'
 import { copyJobCard } from '../jobClipboard'
 import { startableBranches } from '../branchActions'
 import { AgentSelect, BranchOrChatSelect, deleteRoutine, designRoutineInChat, efforts, PermissionSelect, RunItem, RunOptionsFields, scheduleRoutine, scrollToFlash, startRun, useRoots, useRoutines } from './Jobs'
@@ -300,6 +301,7 @@ export function RoutineRunDialog() {
                 <PermissionSelect value={opts.permissionMode} fallback={d.permissionMode} onChange={(permissionMode) => setOpts({ ...opts, permissionMode })} />
               </label>
             </div>
+            <CodexPushWarning provider={opts.provider ?? d.provider} />
             <label className="field">
               Branch or conversation
               <BranchOrChatSelect

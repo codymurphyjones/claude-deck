@@ -7,6 +7,7 @@ import { providerOf } from '@shared/agent'
 import { openMenuAt, fuzzyScore } from '../components/ui'
 import { set, toast, useStore } from '../store'
 import { lockKey, useChat, useDrafts, useLocked } from './chatStore'
+import { providerLists } from '../providerLists'
 
 const MODE_LABEL: Record<string, string> = {
   default: 'Ask before edits',
@@ -107,7 +108,9 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
 
   const slashItems = useMemo(() => {
     if (popup?.kind !== 'slash') return []
-    const fromCli = meta?.commands?.length ? meta.commands.map((c) => [`/${c.name}`, c.description] as [string, string]) : SLASH_COMMANDS
+    // The agent's own list when it reports one; Claude's known commands only for agents that take them
+    // (Codex's slash commands are its terminal UI's, not something to send as a message).
+    const fromCli = meta?.commands?.length ? meta.commands.map((c) => [`/${c.name}`, c.description] as [string, string]) : providerOf(s.provider).caps.slashCommands ? SLASH_COMMANDS : []
     return fromCli
       .map(([n, d]) => ({ n, d, score: fuzzyScore(popup.q, n.slice(1)) }))
       .filter((x) => x.score > 0)
@@ -211,6 +214,8 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
   }
 
   const desc = providerOf(s.provider)
+  // The model's context window: as the agent reports it, else 1M for Claude's "[1m]" models, else 200k.
+  const contextWindow = meta?.contextWindow ?? (/\[1m\]/i.test(meta?.model ?? s.launch.model ?? '') ? 1_000_000 : 200_000)
   const prov = settings.providers[desc.id]
   const mode = s.permissionMode || prov.defaultPermissionMode || 'default'
   const model = (s.launch.model || meta?.model || prov.defaultModel || 'default').replace(/^claude-/, '')
@@ -291,7 +296,7 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
           <button
             className="chip"
             title="Model"
-            onClick={(e) => openMenuAt(e.currentTarget, desc.models.map(([v, l]) => ({ label: l, icon: (s.launch.model ?? '') === v ? 'check' : undefined, onClick: () => api.chat.setModel(s.id, v) })))}
+            onClick={(e) => openMenuAt(e.currentTarget, providerLists(s.provider).models.map(([v, l]) => ({ label: l, icon: (s.launch.model ?? '') === v ? 'check' : undefined, onClick: () => api.chat.setModel(s.id, v) })))}
           >
             <Icon name="sparkles" size={12} /> {model}
           </button>
@@ -299,8 +304,8 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
             <Icon name="target" size={12} /> Goal
           </button>
           {s.contextTokens ? (
-            <span className="chip ghost" title="Context in use">
-              <ContextRing tokens={s.contextTokens} /> {Math.round(s.contextTokens / 1000)}k
+            <span className="chip ghost" title={`Context in use: ${Math.round(s.contextTokens / 1000)}k of ${Math.round(contextWindow / 1000)}k`}>
+              <ContextRing tokens={s.contextTokens} window={contextWindow} /> {Math.round(s.contextTokens / 1000)}k
             </span>
           ) : null}
           <span className="grow" />
@@ -319,8 +324,9 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
   )
 }
 
-function ContextRing({ tokens }: { tokens: number }) {
-  const frac = Math.min(1, tokens / 200_000)
+/** How full the context is, against the model's window (reported by the agent, else a guess). */
+function ContextRing({ tokens, window }: { tokens: number; window: number }) {
+  const frac = Math.min(1, tokens / window)
   const r = 6
   const c = 2 * Math.PI * r
   return (

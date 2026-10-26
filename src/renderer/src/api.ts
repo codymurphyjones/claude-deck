@@ -157,7 +157,10 @@ export const api = {
   },
   auth: {
     refresh: c<AuthStatus | AuthStatus[], [ProviderId?]>('auth.refresh'),
-    logout: c<void, [ProviderId]>('auth.logout')
+    logout: c<void, [ProviderId]>('auth.logout'),
+    loginWithApiKey: c<void, [ProviderId, string]>('auth.loginWithApiKey'),
+    /** A provider's current models and efforts (Codex: from model/list), else undefined. */
+    models: c<{ models: [string, string][]; efforts: string[] } | undefined, [ProviderId]>('agents.models')
   },
   library: {
     get: c<Library>('library.get'),
@@ -190,7 +193,7 @@ export const api = {
     branches: c<string[], [string]>('git.branches'),
     commits: c<CommitInfo[], [string]>('git.commits'),
     createPr: c<string, [string, { title?: string; body?: string; draft?: boolean; base?: string }]>('git.createPr'),
-    generateCommitMessage: c<string, [string]>('git.generateCommitMessage'),
+    generateCommitMessage: c<string, [string, ProviderId?]>('git.generateCommitMessage'),
     fileAtHead: c<string | null, [string]>('git.fileAtHead')
   },
   /** Progressive loads: batches arrive on `load:batch`; use loadProgressive() in ./progressive. */

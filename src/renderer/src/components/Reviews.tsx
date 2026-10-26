@@ -205,7 +205,7 @@ function PrModal() {
             <button className="btn" onClick={reviewWithClaude}>
               <Icon name="sparkles" size={13} /> Review with Claude
             </button>
-            <button className="btn" onClick={() => openSession('agent', { cwd: target.cwd, extraArgs: ['--from-pr', String(pr.number)], name: `PR #${pr.number}` }).then(close)}>
+            <button className="btn" onClick={() => openSession('agent', { cwd: target.cwd, provider: 'claude', extraArgs: ['--from-pr', String(pr.number)], name: `PR #${pr.number}` }).then(close)}>
               <Icon name="history" size={13} /> Linked chat
             </button>
           </>

@@ -329,7 +329,8 @@ export function commands(): Command[] {
 
 export function runCommand(id: string): boolean {
   const c = commands().find((x) => x.id === id)
-  if (!c) return false
+  // Not available here (e.g. forking a Codex chat): don't run it.
+  if (!c || (c.when && !c.when())) return false
   void c.run()
   return true
 }

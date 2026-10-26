@@ -212,7 +212,13 @@ export class ClaudeChat extends ChatBase implements AgentChat {
       case 'init':
         this.meta.model = j.model as string
         this.meta.tools = (j.tools as string[]) ?? []
-        if (j.session_id) this.emit('session', j.session_id)
+        // The model's context window (the composer's context meter), from the result's per-model usage.
+    const win = Math.max(0, ...Object.values((j.modelUsage as Record<string, { contextWindow?: number }> | undefined) ?? {}).map((m) => Number(m.contextWindow) || 0))
+    if (win > 0 && win !== this.meta.contextWindow) {
+      this.meta.contextWindow = win
+      this.emitMeta()
+    }
+    if (j.session_id) this.emit('session', j.session_id)
         this.emitMeta()
         return
       case 'compact_boundary':
