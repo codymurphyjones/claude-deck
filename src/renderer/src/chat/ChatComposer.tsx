@@ -303,11 +303,7 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
           <button className="chip" title={`Set a goal — ${desc.label} keeps going until it's done`} onClick={() => set({ goalFor: s.id })}>
             <Icon name="target" size={12} /> Goal
           </button>
-          {s.contextTokens ? (
-            <span className="chip ghost" title={`Context in use: ${Math.round(s.contextTokens / 1000)}k of ${Math.round(contextWindow / 1000)}k`}>
-              <ContextRing tokens={s.contextTokens} window={contextWindow} /> {Math.round(s.contextTokens / 1000)}k
-            </span>
-          ) : null}
+          <GuardChip s={s} contextWindow={contextWindow} />
           <span className="grow" />
           {meta?.queued ? <span className="muted" style={{ fontSize: 11.5 }}>{meta.queued} queued</span> : null}
           {busy && (
@@ -321,6 +317,44 @@ export function ChatComposer({ session: s, meta }: { session: LiveSession; meta?
         </div>
       </div>
     </div>
+  )
+}
+
+const GUARD_HINT: Record<string, string> = {
+  warn: 'Getting large: every request re-sends the whole conversation.',
+  compact: 'Large: it will be compacted when this turn ends.',
+  rotate: 'Very large: it will continue in a fresh session with a summary when this turn ends.'
+}
+
+/** Context in use and estimated spend; its menu compacts, starts fresh, or lifts a spend pause. */
+function GuardChip({ s, contextWindow }: { s: LiveSession; contextWindow: number }) {
+  const g = useStore((st) => st.guard.sessions[s.id])
+  const hourPaused = useStore((st) => st.guard.tripped)
+  const tokens = g?.contextTokens || s.contextTokens || 0
+  const win = g?.contextWindow || contextWindow
+  const paused = g?.tripped ?? hourPaused
+  if (!tokens && !g?.spendUsd && !paused) return null
+  const level = g?.level ?? 'ok'
+  const title = [
+    `Context in use: ${Math.round(tokens / 1000)}k of ${Math.round(win / 1000)}k`,
+    g?.spendUsd ? `Estimated spend this session: $${g.spendUsd.toFixed(2)}` : '',
+    g?.compactions ? `Compacted ${g.compactions}×` : '',
+    GUARD_HINT[level] ?? '',
+    paused ? `Paused: ${paused}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const menu = (el: HTMLElement) =>
+    openMenuAt(el, [
+      ...(paused ? [{ label: 'Allow more spending', icon: 'check', onClick: () => api.chat.guardAllow(g?.tripped ? s.id : undefined) }] : []),
+      { label: 'Compact conversation now', icon: 'sparkles', onClick: () => api.chat.compact(s.id) },
+      { label: 'Continue in a fresh session (with a summary)', icon: 'refresh', onClick: () => api.chat.rotate(s.id) }
+    ])
+  return (
+    <button className={`chip ${paused ? 'danger' : level === 'ok' ? 'ghost-btn' : 'warn'}`} title={title} onClick={(e) => menu(e.currentTarget)}>
+      <ContextRing tokens={tokens} window={win} /> {Math.round(tokens / 1000)}k{g?.spendUsd ? ` · $${g.spendUsd < 10 ? g.spendUsd.toFixed(2) : g.spendUsd.toFixed(0)}` : ''}
+      {paused ? ' · paused' : ''}
+    </button>
   )
 }
 

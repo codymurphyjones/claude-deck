@@ -43,6 +43,8 @@ export interface MeshDeps {
   readTerminal: (id: string, lines: number) => Promise<string>
   shellOf: (id: string) => SessionInfo | undefined
   sessionChanged: (id: string) => void
+  /** Why automatic continuations are paused for a session (the spend guard), if they are. */
+  paused?: (id: string) => string | undefined
 }
 
 const ago = (ts: number): string => {
@@ -59,6 +61,8 @@ const ago = (ts: number): string => {
 export class MeshService {
   private stores = new Map<string, JsonStore<GroupData>>()
   private lastSeen = new Map<string, number>()
+  /** The roster/claims/board summary last injected per session: unchanged, it isn't sent again. */
+  private lastRoster = new Map<string, string>()
   private lastRead = new Map<string, Map<string, number>>()
   private staleWarned = new Map<string, Set<string>>()
   private replyWaiters = new Map<string, (m: MeshMessage) => void>()
@@ -183,7 +187,16 @@ export class MeshService {
     const parts: string[] = []
     const claims = this.activeClaims(g).filter((c) => c.sessionId !== s.id)
     const openBoard = g.board.filter((b) => b.status !== 'done')
-    if (peers.length) {
+    // Every injection stays in the conversation and is re-sent with each later request, so the
+    // roster, claims and board go out only when they changed (statuses alone don't count).
+    const rosterKey = JSON.stringify([
+      peers.map((p) => [p.name, p.role, p.lastPrompt, p.cwd]),
+      claims.map((c) => [c.key, c.sessionName, c.intent]),
+      openBoard.map((b) => [b.id, b.status, b.owner])
+    ])
+    const rosterNew = isStart || this.lastRoster.get(s.id) !== rosterKey
+    this.lastRoster.set(s.id, rosterKey)
+    if (peers.length && rosterNew) {
       parts.push(
         `[Claude Deck mesh] You are session "${s.name}"${s.role !== 'free' ? ` (role: ${s.role})` : ''}. ${peers.length} other Claude session${peers.length > 1 ? 's are' : ' is'} working in this same ${s.meshGroup?.startsWith('repo:') ? 'repository' : 'folder'} right now:`
       )
@@ -193,12 +206,12 @@ export class MeshService {
           `• "${p.name}" — ${p.status}${p.role !== 'free' ? ` — role: ${p.role}` : ''}${p.lastPrompt ? ` — task: "${truncate(p.lastPrompt.replace(/\s+/g, ' '), 140)}"` : ''}${recent.length ? ` — recently edited: ${[...new Set(recent)].join(', ')}` : ''}${p.cwd !== s.cwd ? ` — cwd: ${p.cwd}` : ''}`
         )
       }
-    } else if (!openBoard.length && !this.unreadFor(s).length) {
+    } else if (!peers.length && !openBoard.length && !this.unreadFor(s).length) {
       return undefined
-    } else if (isStart) {
+    } else if (!peers.length && isStart) {
       parts.push(`[Claude Deck mesh] You are session "${s.name}". No other sessions are active in this folder right now.`)
     }
-    if (claims.length) parts.push(`Files claimed by peers (avoid editing; message the owner instead): ${claims.map((c) => `${c.key} (${c.sessionName}: ${c.intent})`).join('; ')}`)
+    if (claims.length && rosterNew) parts.push(`Files claimed by peers (avoid editing; message the owner instead): ${claims.map((c) => `${c.key} (${c.sessionName}: ${c.intent})`).join('; ')}`)
     const since = this.lastSeen.get(s.id) ?? s.createdAt
     const peerEdits = g.edits.filter((e) => e.sessionId !== s.id && e.ts > since)
     if (peerEdits.length && !isStart) {
@@ -208,7 +221,7 @@ export class MeshService {
         `Files changed by peers since your last turn (re-read before editing them): ${[...byFile.values()].map((e) => `${e.key} (${e.sessionName}, ${ago(e.ts)})`).join(', ')}`
       )
     }
-    if (openBoard.length) {
+    if (openBoard.length && rosterNew) {
       const mine = openBoard.filter((b) => b.owner === s.id)
       parts.push(
         `Shared board: ${openBoard.filter((b) => b.status === 'todo').length} todo, ${openBoard.filter((b) => b.status === 'doing').length} doing, ${openBoard.filter((b) => b.status === 'blocked').length} blocked${mine.length ? `; assigned to you: ${mine.map((b) => `[${b.id}] ${b.title} (${b.status})`).join(', ')}` : ''} (board_list for details).`
@@ -221,9 +234,9 @@ export class MeshService {
       parts.push(`New messages for you:\n${this.formatMessages(unread)}\nReply with mesh_reply (by message id) or mesh_send.`)
       this.markRead(s, unread)
     }
-    if (peers.length) parts.push('Coordinate through the deck-mesh tools: claim files before editing them, steer clear of files claimed by others, and message peers about changes that affect them.')
+    if (peers.length && rosterNew) parts.push('Coordinate through the deck-mesh tools: claim files before editing them, steer clear of files claimed by others, and message peers about changes that affect them.')
     this.lastSeen.set(s.id, Date.now())
-    return parts.join('\n')
+    return parts.length ? parts.join('\n') : undefined
   }
 
   /** Context injected after tool calls: only new messages, so turns stay lean. */
@@ -302,7 +315,7 @@ export class MeshService {
 
   /** On Stop: if peers asked this session for something, keep it going. */
   stopReason(s: SessionInfo): string | undefined {
-    if (!settings().mesh.enabled) return undefined
+    if (!settings().mesh.enabled || this.deps.paused?.(s.id)) return undefined
     const urgent = this.unreadFor(s).filter(wakes)
     if (!urgent.length) return undefined
     this.markRead(s, urgent)
@@ -318,6 +331,7 @@ export class MeshService {
       }
     }
     if (s.status === 'idle') setTimeout(() => this.tryWake(s.id), 400)
+    if (s.status === 'exited') this.lastRoster.delete(s.id)
     if (s.status === 'exited' && s.meshGroup) {
       const g = this.group(s)!
       g.claims = g.claims.filter((c) => c.sessionId !== s.id)
@@ -329,7 +343,7 @@ export class MeshService {
   tryWake(id: string, force = false): boolean {
     const s = this.deps.get(id)
     const cfg = settings().mesh
-    if (!s || s.status !== 'idle' || !cfg.enabled) return false
+    if (!s || s.status !== 'idle' || !cfg.enabled || this.deps.paused?.(id)) return false
     if (!force && (!cfg.autoWake || Date.now() - s.lastUserInput < cfg.autoWakeIdleMs)) return false
     const msgs = this.unreadFor(s).filter((m) => force || wakes(m))
     if (!msgs.length) return false

@@ -24,6 +24,7 @@ import {
   type JobSource
 } from '@shared/jobs'
 import { broadcast, settings } from '../context'
+import { guard } from '../guard/guardService'
 import { currentBranch, mustGit, rawGit as git, toplevel } from '../git/gitService'
 import { findProjectForFolder } from '../library'
 import { notify } from '../notify/notifyService'
@@ -392,6 +393,7 @@ export class JobService {
     if (ctl) ctl.kill = h.kill
     const r = await h.done
     if (ctl) ctl.kill = undefined
+    guard().addExternalSpend(r.costUsd)
     return r
   }
 

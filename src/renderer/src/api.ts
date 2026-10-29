@@ -31,6 +31,7 @@ import type {
   TranscriptSummary,
   WorktreeRecord
 } from '@shared/types'
+import type { GuardSnapshot } from '@shared/types'
 import type { ChatItem, ChatMeta } from '@shared/chat'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import type { BranchInfo, CommitAction, CurrentPr, RemoteInfo, RepoStatus, StashAction, StashInfo, TagInfo } from '@shared/repo'
@@ -326,6 +327,10 @@ export const api = {
     snapshot: c<{ items: ChatItem[]; meta: ChatMeta }, [string]>('chat.snapshot'),
     send: c<boolean, [string, string, { mediaType: string; data: string }[]?]>('chat.send'),
     interrupt: c<void, [string]>('chat.interrupt'),
+    guard: c<GuardSnapshot>('guard.snapshot'),
+    guardAllow: c<void, [string?]>('guard.allow'),
+    compact: c<void, [string]>('guard.compact'),
+    rotate: c<void, [string]>('guard.rotate'),
     permission: c<void, [string, string, { allow: boolean; always?: boolean; message?: string; updatedInput?: Record<string, unknown> }]>('chat.permission'),
     setMode: c<void, [string, string]>('chat.setMode'),
     setModel: c<void, [string, string]>('chat.setModel'),

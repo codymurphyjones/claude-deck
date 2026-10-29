@@ -1,4 +1,4 @@
-import type { AuthStatus, Automation, AutomationRun, MeshGroupState, ProgressEvent, SessionInfo, Settings, TimelineEvent, ToastMessage, UpdateState } from '@shared/types'
+import type { AuthStatus, Automation, AutomationRun, GuardSnapshot, MeshGroupState, ProgressEvent, SessionInfo, Settings, TimelineEvent, ToastMessage, UpdateState } from '@shared/types'
 import type { JobRun } from '@shared/jobs'
 import type { ProcessInfo } from '@shared/processes'
 import { api, bridge, type Library, type LiveSession } from './api'
@@ -192,6 +192,8 @@ function useSubscriptions(windowId: number, isPopout: boolean): void {
     if (!get().progress.some((x) => x.id === p.id)) set((s) => ({ progress: [...s.progress, p] }))
     finishProgress(p.id, { state: p.state, detail: p.state === 'done' ? 'Ready' : 'Failed' })
   })
+  bridge.on('guard:changed', (guard: GuardSnapshot) => set({ guard }))
+  void api.chat.guard().then((guard) => set({ guard }))
   bridge.on('settings:changed', (settings: Settings) => {
     set({ settings })
     applyLook()

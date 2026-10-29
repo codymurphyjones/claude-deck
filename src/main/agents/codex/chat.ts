@@ -222,6 +222,16 @@ export class CodexChat extends ChatBase implements AgentChat {
     }
   }
 
+  /** Summarize the thread in place (app-server `thread/compact/start`). */
+  compact(): boolean {
+    if (!this.alive || !this.threadId) return false
+    this.server.request('thread/compact/start', { threadId: this.threadId }).catch((e: Error) => {
+      this.notice(`Could not compact the conversation: ${e.message}`, 'warn')
+      this.emit('compactFailed')
+    })
+    return true
+  }
+
   interrupt(): void {
     if (this.threadId && this.turnId) void this.server.request('turn/interrupt', { threadId: this.threadId, turnId: this.turnId }).catch(() => {})
   }
@@ -377,6 +387,7 @@ export class CodexChat extends ChatBase implements AgentChat {
         return
       }
       case 'thread/compacted':
+        this.emit('compacted')
         return this.notice('Conversation compacted: older turns were summarized to free up context.', 'info')
       case 'model/rerouted':
         return this.notice(`Codex switched model: ${String(p.fromModel ?? '?')} → ${String(p.toModel ?? '?')}${p.reason ? ` (${String(p.reason)})` : ''}`, 'warn')

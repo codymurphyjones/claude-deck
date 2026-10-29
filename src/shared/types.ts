@@ -131,6 +131,8 @@ export interface ChatRecord {
   lastPrompt?: string
   quick?: boolean
   hidden?: boolean
+  /** The chat this one continues after a context rotation. */
+  rotatedFrom?: string
 }
 
 export interface WorktreeRecord {
@@ -352,6 +354,45 @@ export interface Settings {
   showTimeline: boolean
   chat: ChatSettings
   updates: UpdateSettings
+  guard: GuardSettings
+}
+
+/** Context & spend guard: keeps long or runaway sessions from re-sending huge histories. */
+export interface GuardSettings {
+  enabled: boolean
+  /** Fractions of the model's context window. */
+  warnPct: number
+  compactPct: number
+  rotatePct: number
+  /** Compact at this many context tokens even if the window is larger (1M-token models). */
+  compactAtTokens: number
+  /** Rotate to a fresh session after this many compactions. */
+  rotateAfterCompactions: number
+  autoCompact: boolean
+  autoRotate: boolean
+  /** Spend limits (estimated USD); 0 = no limit. Crossing one pauses all automatic continuations. */
+  sessionUsdLimit: number
+  hourlyUsdLimit: number
+}
+
+export type GuardLevel = 'ok' | 'warn' | 'compact' | 'rotate'
+
+/** Live guard state for one session (pushed with `guard:changed`). */
+export interface SessionGuardState {
+  contextTokens: number
+  contextWindow: number
+  level: GuardLevel
+  spendUsd: number
+  compactions: number
+  /** Why automatic continuations are paused for this session, if they are. */
+  tripped?: string
+}
+
+export interface GuardSnapshot {
+  sessions: Record<string, SessionGuardState>
+  hourUsd: number
+  /** Set while the global hourly limit is exceeded. */
+  tripped?: string
 }
 
 export interface UpdateSettings {

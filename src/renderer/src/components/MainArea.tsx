@@ -318,6 +318,7 @@ function TerminalPane({ id, tabId, focused, tabActive, multi }: { id: string; ta
             {fmtTokens(s.contextTokens)} ctx
           </span>
         )}
+        <HourSpend />
         {s.launch.remoteControl ? (
           <span className="badge ok" title="Remote Control enabled">
             <Icon name="phone" size={11} /> remote
@@ -735,5 +736,22 @@ function EmptyState() {
         </span>
       </div>
     </div>
+  )
+}
+
+/** Estimated spend across everything in the last hour; red while the hourly limit pauses automatic work. */
+function HourSpend() {
+  const hour = useStore((st) => st.guard.hourUsd)
+  const tripped = useStore((st) => st.guard.tripped)
+  if (hour < 0.01 && !tripped) return null
+  return (
+    <span
+      className={`badge ${tripped ? 'err' : 'opt'}`}
+      style={tripped ? { cursor: 'var(--cursor)' } : undefined}
+      title={tripped ? `${tripped}. Automatic work is paused; click to allow more.` : 'Estimated spend across all sessions, jobs and scheduled tasks in the last hour'}
+      onClick={tripped ? () => api.chat.guardAllow() : undefined}
+    >
+      ${hour.toFixed(2)}/h{tripped ? ' · paused' : ''}
+    </span>
   )
 }

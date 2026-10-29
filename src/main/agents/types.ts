@@ -1,5 +1,6 @@
 import type { EventEmitter } from 'events'
 import type { AgentEvent, ProviderDescriptor, ProviderId, TokenUsage } from '@shared/agent'
+import type { UsageRecord } from '@shared/pricing'
 import type { ChatItem, ChatMeta } from '@shared/chat'
 import type { AuthStatus, SessionInfo, TranscriptSummary } from '@shared/types'
 
@@ -27,7 +28,7 @@ export type LifecycleHandler = (ev: AgentEvent) => Promise<LifecycleResult>
  * One live agent conversation, normalized into ChatItems.
  *
  * Events: 'op' (ChatOp), 'status' ('working' | 'needs-input' | 'idle', permission?), 'session' (id),
- * 'meta' (ChatMeta), 'turn' (), 'exit' (code, stderr).
+ * 'meta' (ChatMeta), 'turn' (), 'exit' (code, stderr), 'compacted' (), 'cost' (cumulative USD, when the CLI reports it).
  */
 export interface AgentChat extends EventEmitter {
   items: ChatItem[]
@@ -39,6 +40,8 @@ export interface AgentChat extends EventEmitter {
   kill(): void
   send(text: string, opts?: { images?: { mediaType: string; data: string }[]; injected?: boolean }): boolean
   interrupt(): void
+  /** Ask the agent to summarize its conversation in place ('compacted' fires when it has). */
+  compact(): boolean
   setPermissionMode(mode: string): Promise<unknown>
   setModel(model: string): Promise<unknown>
   respondPermission(requestId: string, d: PermissionDecision): void
@@ -92,6 +95,8 @@ export interface AgentHistory {
   load(sessionId: string): ChatItem[]
   /** Context usage from the newest usage record. */
   usage(transcriptPath: string | undefined): TokenUsage | undefined
+  /** API requests recorded since `offset` (undefined: start at the current end of the file). */
+  usageSince(transcriptPath: string, offset: number | undefined): { records: UsageRecord[]; offset: number } | undefined
   /** Make a session resumable from another folder (worktree handoff). */
   prepareResume(sessionId: string, cwd: string): void
 }

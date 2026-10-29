@@ -149,4 +149,13 @@ describe('Codex chat answers', () => {
     await (c.startTurn as (m: object) => Promise<void>).call(c, { text: 'plan it', userItemId: 'u1' })
     expect(sent.find((x) => x.method === 'turn/start')?.body).toMatchObject({ collaborationMode: { mode: 'plan', settings: { model: 'gpt-5' } } })
   })
+  it('compacts the thread on request and reports when Codex has compacted it', async () => {
+    const { chat, c, sent } = await makeChat(undefined)
+    const compacted = vi.fn()
+    chat.on('compacted', compacted)
+    expect(chat.compact()).toBe(true)
+    expect(sent.find((x) => x.method === 'thread/compact/start')?.body).toEqual({ threadId: 'th1' })
+    ;(c.handle as (m: string, p: object) => void).call(c, 'thread/compacted', { threadId: 'th1' })
+    expect(compacted).toHaveBeenCalledOnce()
+  })
 })

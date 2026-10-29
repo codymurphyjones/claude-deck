@@ -1147,6 +1147,14 @@ li.task.done > div {
   background: transparent;
   cursor: default;
 }
+.chip.ghost-btn {
+  border-color: transparent;
+  background: transparent;
+}
+.chip.warn {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
 .send-btn {
   width: 32px;
   height: 32px;

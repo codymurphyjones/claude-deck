@@ -11,6 +11,7 @@ import { JsonStore } from '../store'
 import { run, shortId, truncate } from '../util'
 import { createWorktree, touchWorktree } from '../worktrees/worktreeService'
 import { describeRun, type JobService } from '../jobs/jobService'
+import { guard } from '../guard/guardService'
 import { runHeadless } from './headless'
 import { migrateSessionRefs } from '@shared/migrate'
 
@@ -111,7 +112,8 @@ export class Scheduler {
         }
         continue
       }
-      if (a.nextRun && a.nextRun <= now && !this.running.has(a.id)) void this.runNow(a.id)
+      // Over a spend limit, scheduled runs wait (they fire once it clears or the user allows more).
+      if (a.nextRun && a.nextRun <= now && !this.running.has(a.id) && !guard().paused()) void this.runNow(a.id)
     }
   }
 
@@ -153,7 +155,7 @@ export class Scheduler {
 
   private onIdle(s: SessionInfo): void {
     for (const a of this.store.data.automations) {
-      if (a.kind !== 'inchat' || !a.pending || a.targetChatId !== s.agentSessionId) continue
+      if (a.kind !== 'inchat' || !a.pending || a.targetChatId !== s.agentSessionId || guard().paused(s.id)) continue
       a.pending = false
       const p = (a as Automation & { pendingPrompt?: string }).pendingPrompt ?? a.prompt
       this.sessions.sendPrompt(s.id, `[Scheduled: ${a.name}] ${p}`, 'steer')
@@ -232,6 +234,7 @@ export class Scheduler {
       const res = await h.done
       runRec.agentSessionId = res.sessionId ?? runRec.agentSessionId
       runRec.costUsd = res.costUsd
+      guard().addExternalSpend(res.costUsd)
       runRec.output = res.text || `Exited with code ${res.code}`
       runRec.status = res.finished ? (res.isError ? 'error' : 'success') : res.code === 0 ? 'success' : 'error'
       this.running.delete(a.id)
@@ -264,6 +267,7 @@ export class Scheduler {
         Date.parse(p.updatedAt) > seen &&
         (!f || p.title.toLowerCase().includes(f) || p.author.login.toLowerCase().includes(f) || p.labels.some((l) => l.name.toLowerCase().includes(f)))
     )
+    if (fresh.length && guard().paused()) return // over a spend limit: keep these for the next poll
     a.githubSeen = new Date(Math.max(seen, ...prs.map((p) => Date.parse(p.updatedAt)))).toISOString()
     this.emit()
     if (!fresh.length) return

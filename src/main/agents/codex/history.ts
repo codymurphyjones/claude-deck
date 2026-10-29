@@ -2,8 +2,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import type { TokenUsage } from '@shared/agent'
+import type { UsageRecord } from '@shared/pricing'
 import type { ChatItem } from '@shared/chat'
 import type { AgentHistory, TranscriptDigest, TranscriptFile } from '../types'
+import { readNewLines } from '../../util'
 import { isContextBlock, mcpTool, parseApplyPatch, patchTool, shellTool, webSearchTool, type NormalizedTool } from './tools'
 
 // Codex stores one "rollout" per thread: $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl,
@@ -256,6 +258,41 @@ function usage(rolloutPath: string | undefined): TokenUsage | undefined {
   return undefined
 }
 
+/** Per-request usage from rollout lines: token_count events (input includes cached input). */
+export function parseUsage(lines: string[]): UsageRecord[] {
+  const out: UsageRecord[] = []
+  let model: string | undefined
+  for (const line of lines) {
+    const tc = line.includes('"turn_context"')
+    if (!tc && !line.includes('"token_count"')) continue
+    try {
+      const j = JSON.parse(line) as Json
+      const p = j.payload as Json | undefined
+      if (j.type === 'turn_context') {
+        if (typeof p?.model === 'string') model = p.model
+        continue
+      }
+      const info = p?.info as Json | undefined
+      const last = info?.last_token_usage as Json | undefined
+      if (!last) continue
+      // The same totals are re-reported (e.g. on rate-limit updates); count each request once.
+      const id = String((info?.total_token_usage as Json | undefined)?.total_tokens ?? '') || undefined
+      if (id && out.length && out[out.length - 1].id === id) continue
+      const all = Number(last.input_tokens) || 0
+      const cacheRead = Math.min(all, Number(last.cached_input_tokens) || 0)
+      out.push({ id, model, input: all - cacheRead, cacheWrite: 0, cacheRead, output: Number(last.output_tokens) || 0, context: all })
+    } catch {
+      /* partial line */
+    }
+  }
+  return out
+}
+
+function usageSince(rolloutPath: string, offset: number | undefined): { records: UsageRecord[]; offset: number } | undefined {
+  const r = readNewLines(rolloutPath, offset)
+  return r && { records: parseUsage(r.lines), offset: r.offset }
+}
+
 export const codexHistory: AgentHistory = {
   files,
   idOf,
@@ -264,6 +301,7 @@ export const codexHistory: AgentHistory = {
   find,
   load: (sessionId) => loadRollout(find(sessionId)),
   usage,
+  usageSince,
   // Rollouts aren't stored per folder: a thread resumes from anywhere.
   prepareResume: () => {}
 }

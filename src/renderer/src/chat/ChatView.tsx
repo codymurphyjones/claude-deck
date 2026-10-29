@@ -305,6 +305,7 @@ const BlockView = memo(function BlockView({
           {fmtDur(b.item.durationMs) && <span>{fmtDur(b.item.durationMs)}</span>}
           {b.item.inputTokens ? <span>{fmtTok(b.item.inputTokens)} in</span> : null}
           {b.item.outputTokens ? <span>{fmtTok(b.item.outputTokens)} out</span> : null}
+          {b.item.costUsd ? <span title="Cost reported by the CLI">${b.item.costUsd.toFixed(2)}</span> : null}
         </div>
       )
   }

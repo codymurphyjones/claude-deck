@@ -127,3 +127,7 @@ export const prepareResume = (provider: ProviderId | undefined, id: string, cwd:
 /** Context usage for a live session. */
 export const sessionUsage = (provider: ProviderId | undefined, transcriptPath: string | undefined): TokenUsage | undefined =>
   adapter(provider ?? 'claude').history.usage(transcriptPath)
+
+/** API requests recorded in a live session's transcript since `offset`. */
+export const sessionUsageSince = (provider: ProviderId | undefined, transcriptPath: string, offset: number | undefined) =>
+  adapter(provider ?? 'claude').history.usageSince(transcriptPath, offset)

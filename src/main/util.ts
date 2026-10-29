@@ -144,3 +144,28 @@ export const stripAnsi = (s: string): string =>
 export const truncate = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
 export const toPosix = (p: string): string => p.replace(/\\/g, '/')
+
+/**
+ * Complete lines appended to a file since `offset` (a partial last line waits for the next read).
+ * With no offset, starts at the end: nothing that was already there is returned.
+ */
+export function readNewLines(file: string, offset: number | undefined, maxBytes = 32 * 1024 * 1024): { lines: string[]; offset: number } | undefined {
+  try {
+    const size = fs.statSync(file).size
+    if (offset === undefined || offset > size) return { lines: [], offset: size }
+    const len = Math.min(size - offset, maxBytes)
+    if (len <= 0) return { lines: [], offset }
+    const fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(len)
+    try {
+      fs.readSync(fd, buf, 0, len, offset)
+    } finally {
+      fs.closeSync(fd)
+    }
+    const end = buf.lastIndexOf(0x0a)
+    if (end < 0) return { lines: [], offset: len === maxBytes ? offset + len : offset }
+    return { lines: buf.subarray(0, end).toString('utf8').split('\n'), offset: offset + end + 1 }
+  } catch {
+    return undefined
+  }
+}

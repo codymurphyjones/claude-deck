@@ -15,7 +15,7 @@ import type {
   UpdateState
 } from '@shared/types'
 import type { JobDef, JobRun, JobSource } from '@shared/jobs'
-import type { ProgressEvent } from '@shared/types'
+import type { GuardSnapshot, ProgressEvent } from '@shared/types'
 import { etaKey, runningLabel } from '@shared/progress'
 import type { ProcessInfo, ScriptPackage } from '@shared/processes'
 import type { ToolSet } from '@shared/actions'
@@ -74,6 +74,8 @@ export interface UiState {
   version: string
   agentPaths: Record<ProviderId, string>
   settings: Settings
+  /** Context & spend guard state (per session, and the rolling-hour total). */
+  guard: GuardSnapshot
   systemDark: boolean
   auths: Record<ProviderId, AuthStatus>
   sessions: Record<string, LiveSession>
@@ -188,6 +190,7 @@ export const useStore = create<UiState>(() => ({
   version: '',
   agentPaths: { claude: '', codex: '' },
   settings: DEFAULT_SETTINGS,
+  guard: { sessions: {}, hourUsd: 0 },
   systemDark: window.matchMedia('(prefers-color-scheme: dark)').matches,
   auths: { claude: { provider: 'claude', checked: false, loggedIn: false }, codex: { provider: 'codex', checked: false, loggedIn: false } },
   sessions: {},

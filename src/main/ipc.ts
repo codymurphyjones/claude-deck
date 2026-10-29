@@ -10,6 +10,7 @@ import { ROUTINES_DIR, type JobService } from './jobs/jobService'
 import type { ProcessService } from './processes/processService'
 import type { JobDef, JobRun, JobRunOptions } from '@shared/jobs'
 import { getTimeline, settings, state, toast, updateSettings, updateState } from './context'
+import { guard } from './guard/guardService'
 import { loadEnvironment, saveEnvironment } from './env/environmentService'
 import * as git from './git/gitService'
 import * as gh from './github/ghService'
@@ -171,6 +172,10 @@ export function registerIpc(deps: { sessions: SessionService; auth: AuthService;
     'chat.snapshot': (_e, id: string) => sessions.chatSnapshot(id),
     'chat.send': (_e, id: string, text: string, images?: { mediaType: string; data: string }[]) => sessions.chatSend(id, text, images),
     'chat.interrupt': (_e, id: string) => sessions.chatInterrupt(id),
+    'guard.snapshot': () => guard().snapshot(),
+    'guard.allow': (_e, id?: string) => sessions.guardAllow(id),
+    'guard.compact': (_e, id: string) => sessions.guardCompact(id),
+    'guard.rotate': (_e, id: string) => sessions.rotate(id),
     'chat.permission': (_e, id: string, requestId: string, d: { allow: boolean; always?: boolean; message?: string; updatedInput?: Record<string, unknown> }) =>
       sessions.chatPermission(id, requestId, d),
     'chat.setMode': (_e, id: string, mode: string) => sessions.setMode(id, mode),

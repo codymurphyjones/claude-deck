@@ -107,7 +107,19 @@ export const DEFAULT_SETTINGS: Settings = {
     fontSize: 14,
     sendKey: 'enter'
   },
-  updates: { channel: 'stable', auto: true }
+  updates: { channel: 'stable', auto: true },
+  guard: {
+    enabled: true,
+    warnPct: 0.4,
+    compactPct: 0.5,
+    rotatePct: 0.7,
+    compactAtTokens: 150_000,
+    rotateAfterCompactions: 2,
+    autoCompact: true,
+    autoRotate: true,
+    sessionUsdLimit: 25,
+    hourlyUsdLimit: 50
+  }
 }
 
 export const MESH_COLORS = ['#e8a54b', '#5fb3f9', '#b78bf7', '#4cc38a', '#f06a8a', '#3fd0c9', '#f2cc60', '#9aa4ff']

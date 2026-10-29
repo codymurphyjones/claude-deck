@@ -12,6 +12,7 @@ import { currentBranch, snapshot, toplevel } from '../git/gitService'
 import { emitLibrary, ensureProject, findProjectForFolder, getChat, updateChat, upsertChat } from '../library'
 import { openInExternalEditor } from '../externalEditor'
 import { MeshService } from '../mesh/meshService'
+import { guard } from '../guard/guardService'
 import { dismissNotification, focusSession, mainWindow, notify, updateSleepBlocker } from '../notify/notifyService'
 import type { PtyService } from '../pty/ptyService'
 import { defaultShell, runtime } from '../runtime'
@@ -32,18 +33,32 @@ import { plainEnv } from './launch'
 import { adapter, providerOf } from '../agents/registry'
 import { hookToEvent, resultToHook, type HookPayload, type HookResult } from '../agents/claude/hooks'
 import type { AgentChat, LifecycleResult, PermissionDecision } from '../agents/types'
-import { chatToText, type ChatOp, type PermissionRequest } from '@shared/chat'
+import { chatToText, type ChatItem, type ChatOp, type PermissionRequest } from '@shared/chat'
+
+type LiveSession = SessionInfo & {
+  contextTokens?: number
+  queued?: string[]
+  turnFiles?: Set<string>
+  /** The chat this one continues after a context rotation. */
+  rotatedFrom?: string
+  /** A goal continuation held back while the conversation is compacted. */
+  guardContinue?: string
+}
 
 /** Tag of the toast asking for one permission request. */
 const permTag = (sessionId: string, requestId: string): string => `perm:${sessionId}:${requestId}`
 
 export class SessionService extends EventEmitter {
-  readonly sessions = new Map<string, SessionInfo & { contextTokens?: number; queued?: string[]; turnFiles?: Set<string> }>()
+  readonly sessions = new Map<string, LiveSession>()
   readonly mesh: MeshService
   /** Agent sessions run as structured chat processes (no terminal). */
   readonly chats = new Map<string, AgentChat>()
   private active = new Map<number, string | undefined>()
   private reviewNudges = new Map<string, number[]>()
+  /** Last usage sample per session (sampled at most every couple of seconds mid-turn). */
+  private lastSample = new Map<string, number>()
+  /** When each session's current turn started (a breaker tripping after that interrupts it once). */
+  private turnStarted = new Map<string, number>()
   /** Window that hosts sessions created without one (scheduled tasks). */
   defaultHost = 0
   terminalReader: ((s: SessionInfo, lines: number) => Promise<string | undefined>) | undefined
@@ -62,7 +77,8 @@ export class SessionService extends EventEmitter {
       sessionChanged: (id) => {
         const s = this.sessions.get(id)
         if (s) this.changed(s)
-      }
+      },
+      paused: (id) => guard().paused(id)
     })
     pty.on('data', (id: string, data: string) => {
       const s = this.sessions.get(id)
@@ -81,8 +97,8 @@ export class SessionService extends EventEmitter {
     return [...this.sessions.values()].map((s) => this.public(s))
   }
 
-  private public(s: SessionInfo & { contextTokens?: number; queued?: string[]; turnFiles?: Set<string> }): SessionInfo & { contextTokens?: number; queuedCount?: number } {
-    const { queued, turnFiles: _t, ...rest } = s
+  private public(s: LiveSession): SessionInfo & { contextTokens?: number; queuedCount?: number } {
+    const { queued, turnFiles: _t, guardContinue: _g, ...rest } = s
     return { ...rest, queuedCount: queued?.length ?? 0 }
   }
 
@@ -243,7 +259,8 @@ export class SessionService extends EventEmitter {
       branch: s.branch,
       model: s.launch.model,
       quick: s.launch.quick,
-      hidden: s.temporary || undefined
+      hidden: s.temporary || undefined,
+      ...((s as LiveSession).rotatedFrom ? { rotatedFrom: (s as LiveSession).rotatedFrom } : {})
     })
     if (s.worktreeId) touchWorktree(s.worktreeId, { chatId: s.agentSessionId })
   }
@@ -324,7 +341,17 @@ export class SessionService extends EventEmitter {
     if (rid) chat.items = loadConversation(s.provider, rid)
     this.hostSend(s, 'chat:op', s.id, { op: 'reset', items: chat.items } satisfies ChatOp)
     chat.on('op', (o: ChatOp) => this.hostSend(s, 'chat:op', s.id, o))
-    chat.on('meta', (m) => this.hostSend(s, 'chat:meta', s.id, m))
+    chat.on('meta', (m) => {
+      guard().setContextWindow(s.id, m.contextWindow)
+      this.hostSend(s, 'chat:meta', s.id, m)
+    })
+    guard().processRestarted(s.id)
+    chat.on('cost', (usd: number) => {
+      guard().sample(s.id, s.provider, s.transcriptPath)
+      guard().reportCost(s.id, usd)
+    })
+    chat.on('compacted', () => this.onCompacted(s.id))
+    chat.on('compactFailed', () => guard().actionFailed(s.id))
     chat.on('session', (sid: string) => {
       if (sid !== s.agentSessionId) {
         s.agentSessionId = sid
@@ -585,6 +612,9 @@ export class SessionService extends EventEmitter {
     s.status = 'exited'
     this.mesh.onStatus(s)
     this.sessions.delete(id)
+    guard().forget(id)
+    this.lastSample.delete(id)
+    this.turnStarted.delete(id)
     if (s.temporary && s.agentSessionId) updateChat(s.agentSessionId, { hidden: true })
     broadcast('session:removed', id)
     broadcast('buddy:update', this.list())
@@ -689,6 +719,162 @@ export class SessionService extends EventEmitter {
     }
   }
 
+  // ---------------- context & spend guard ----------------
+  /** A tool step: sample usage now and then, and stop a turn that just crossed a spend limit. */
+  private guardStep(s: LiveSession): void {
+    const g = guard()
+    g.step(s.id)
+    const now = Date.now()
+    if (now - (this.lastSample.get(s.id) ?? 0) < 2000) return
+    this.lastSample.set(s.id, now)
+    g.sample(s.id, s.provider, s.transcriptPath)
+    const started = this.turnStarted.get(s.id)
+    const why = g.paused(s.id)
+    if (why && started !== undefined && g.trippedSince(started)) {
+      this.turnStarted.set(s.id, now)
+      this.chats.get(s.id)?.interrupt()
+      this.pauseForBudget(s, why)
+    }
+  }
+
+  /** A spend limit was crossed: stop automatic continuations and ask the user. */
+  private pauseForBudget(s: LiveSession, why: string): void {
+    if (s.goal?.status === 'active') {
+      s.goal.status = 'paused'
+      s.goal.updatedAt = Date.now()
+    }
+    s.guardContinue = undefined
+    const chat = this.chats.get(s.id)
+    const last = chat?.items[chat.items.length - 1]
+    if (!(last?.kind === 'notice' && last.text.startsWith('Spend limit')))
+      chat?.notice(`Spend limit reached: ${why}. Goal mode, peer wake-ups and automations are paused. Send a message to keep going by hand, or choose Allow more.`, 'warn')
+    notify('question', s, `Spend limit · ${s.name}`, why, {
+      tag: `guard:${s.id}`,
+      actions: [{ label: 'Allow more', run: () => this.guardAllow(s.id) }]
+    })
+  }
+
+  /** Compact a session's conversation now (the composer's context menu). */
+  guardCompact(id: string): void {
+    const chat = this.chats.get(id)
+    if (!chat?.alive) return
+    if (!chat.compact()) toast('Could not compact this conversation', 'error')
+  }
+
+  /** The user chose to keep going past a spend limit. */
+  guardAllow(id?: string): void {
+    guard().allowMore(id)
+    if (id) dismissNotification(`guard:${id}`)
+  }
+
+  /** Shrink a session that grew too large: compact in place, or start fresh with a summary. */
+  private runGuardAction(s: LiveSession, action: 'compact' | 'rotate', cont?: string): void {
+    const chat = this.chats.get(s.id)
+    if (!chat) return guard().actionFailed(s.id)
+    if (action === 'rotate') {
+      setTimeout(() => void this.rotate(s.id, cont), 350)
+      return
+    }
+    const k = Math.round((guard().state(s.id)?.contextTokens ?? 0) / 1000)
+    const before = guard().state(s.id)?.compactions
+    s.guardContinue = cont
+    chat.notice(`Context is ~${k}k tokens and every request re-sends all of it, so the conversation is being compacted.`, 'info')
+    setTimeout(() => {
+      if (!chat.compact()) {
+        guard().actionFailed(s.id)
+        s.guardContinue = undefined
+        if (cont) this.inject(s.id, cont)
+        return
+      }
+      // No compaction after a few minutes: start a fresh session instead.
+      setTimeout(() => {
+        const cur = this.sessions.get(s.id)
+        if (cur && this.chats.get(s.id) === chat && guard().state(s.id)?.compactions === before) void this.rotate(s.id, cur.guardContinue)
+      }, 3 * 60_000)
+    }, 350)
+  }
+
+  private onCompacted(id: string): void {
+    guard().compacted(id)
+    const s = this.sessions.get(id)
+    if (!s?.guardContinue) return
+    const cont = s.guardContinue
+    s.guardContinue = undefined
+    if (s.goal?.status === 'active' && !guard().paused(id)) this.inject(id, cont)
+  }
+
+  /**
+   * Continue a session in a fresh conversation, seeded with a summary of this one, so requests stop
+   * carrying its whole history. The old chat stays in the library; the new one links back to it.
+   */
+  async rotate(id: string, cont?: string): Promise<void> {
+    const s = this.sessions.get(id)
+    const chat = this.chats.get(id)
+    if (!s || !chat || s.kind !== 'agent') return
+    for (let i = 0; i < 120 && chat.meta.busy && this.chats.get(id) === chat; i++) await new Promise((r) => setTimeout(r, 250))
+    if (this.chats.get(id) !== chat) return
+    // Never cut off a running turn; the guard asks again when a later turn ends.
+    if (chat.meta.busy) {
+      guard().actionFailed(id)
+      chat.notice('Could not continue in a fresh session while a turn is running; it will be tried again when a turn ends.', 'warn')
+      return
+    }
+    const before = guard().state(id)?.contextTokens || s.contextTokens || 0
+    chat.notice('Summarizing this conversation to continue it in a fresh session…', 'info')
+    const summary = await this.handoffSummary(s, chat.items)
+    if (this.chats.get(id) !== chat) return
+    const goal = s.goal?.status === 'active' ? s.goal : undefined
+    const prompt = [
+      '[Claude Deck] This conversation was continued in a fresh session because its context grew too large. Summary of the work so far:',
+      summary,
+      goal
+        ? (cont ?? `Keep working toward the goal "${goal.text}". End with GOAL_COMPLETE when it is fully achieved and verified, or GOAL_BLOCKED if you need me.`)
+        : 'Re-read any files you need before editing them. Briefly confirm you have the context, then wait for my next message unless the summary lists a next step already agreed on.'
+    ].join('\n\n')
+    s.rotatedFrom = s.agentSessionId
+    s.agentSessionId = providerOf(s) === 'claude' ? uuid() : undefined
+    s.transcriptPath = undefined
+    s.contextTokens = undefined
+    s.guardContinue = undefined
+    s.launch = { ...s.launch, resumeId: undefined, fork: false, continueLast: false, initialPrompt: prompt, worktree: undefined }
+    guard().rotated(id)
+    if (s.agentSessionId) this.recordChat(s)
+    this.startChat(s)
+    s.launch = { ...s.launch, initialPrompt: undefined }
+    const k = Math.round(before / 1000)
+    this.chats.get(id)?.notice(`Continued in a fresh session (context was ~${k}k tokens). The earlier conversation is still in Chats.`, 'info')
+    pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'start', text: `Rotated to a fresh session (~${k}k tokens summarized)`, group: s.meshGroup })
+    this.changed(s)
+  }
+
+  /** A compact hand-off of a conversation, from the fast model (falls back to a plain digest). */
+  private async handoffSummary(s: LiveSession, items: ChatItem[]): Promise<string> {
+    const files = s.files.slice(0, 40).map((f) => path.relative(s.root, f) || f)
+    const transcript = chatToText(items, 300).slice(-120_000)
+    const prompt =
+      'Summarize the coding conversation on stdin as a hand-off note for an agent continuing it in a new session. Sections: Goal; Done so far; Key decisions and constraints; Files involved; Open problems / TODO; Next step. Be specific (paths, names, commands, errors) and concise: at most 400 words. Output only the note.'
+    const input = `${s.goal ? `Goal: ${s.goal.text}\n` : ''}${files.length ? `Files edited: ${files.join(', ')}\n` : ''}\n${transcript}`
+    for (const p of new Set<ProviderId>(['claude', providerOf(s)])) {
+      try {
+        if (!this.auth.statusOf(p).loggedIn) continue
+        const out = (await adapter(p).complete(prompt, { cwd: s.cwd, input })).trim()
+        if (out) return out
+      } catch {
+        /* try the next one */
+      }
+    }
+    const prompts = items.flatMap((i) => (i.kind === 'user' && !i.injected ? [`- ${truncate(i.text.replace(/\s+/g, ' '), 300)}`] : [])).slice(-5)
+    const last = [...items].reverse().find((i) => i.kind === 'text')
+    return [
+      s.goal ? `Goal: ${s.goal.text}` : '',
+      prompts.length ? `Recent requests:\n${prompts.join('\n')}` : '',
+      files.length ? `Files edited: ${files.join(', ')}` : '',
+      last?.kind === 'text' ? `Last reply:\n${truncate(last.text, 1500)}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
   // ---------------- goals ----------------
   setGoal(id: string, text: string): void {
     const s = this.sessions.get(id)
@@ -755,7 +941,7 @@ export class SessionService extends EventEmitter {
   }
 
   /** Every agent's lifecycle (Claude via hooks, others via their event streams). */
-  async onLifecycle(s: SessionInfo & { turnFiles?: Set<string> }, ev: AgentEvent): Promise<LifecycleResult> {
+  async onLifecycle(s: LiveSession, ev: AgentEvent): Promise<LifecycleResult> {
     if (!this.sessions.has(s.id)) return {}
     if ('sessionId' in ev && ev.sessionId && ev.sessionId !== s.agentSessionId) {
       s.agentSessionId = ev.sessionId
@@ -772,6 +958,7 @@ export class SessionService extends EventEmitter {
         break
       }
       case 'turn-start': {
+        if (!this.turnStarted.has(s.id) || s.status !== 'working') this.turnStarted.set(s.id, Date.now())
         s.status = 'working'
         s.attention = undefined
         // Injected mesh/scheduler prompts aren't the session's "task".
@@ -813,6 +1000,7 @@ export class SessionService extends EventEmitter {
           if (cmd) pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'tool', text: `$ ${truncate(cmd, 160)}`, group: s.meshGroup })
         }
         result = { context: this.mesh.contextForTool(s) }
+        this.guardStep(s)
         break
       }
       case 'needs-input': {
@@ -833,7 +1021,22 @@ export class SessionService extends EventEmitter {
       }
       case 'turn-end': {
         s.lastAssistant = ev.lastAssistantMessage
-        const goal = this.goalOnStop(s, ev.lastAssistantMessage ?? '')
+        const usage = sessionUsage(s.provider, s.transcriptPath)
+        if (usage) s.contextTokens = usage.context
+        // Size and spend come first: every continuation re-sends the whole conversation.
+        guard().step(s.id)
+        guard().sample(s.id, s.provider, s.transcriptPath)
+        this.lastSample.set(s.id, Date.now())
+        const paused = guard().paused(s.id)
+        const action = paused ? 'none' : guard().evaluate(s.id)
+        if (paused) this.pauseForBudget(s, paused)
+        const goal = paused ? undefined : this.goalOnStop(s, ev.lastAssistantMessage ?? '')
+        if (action !== 'none') {
+          this.runGuardAction(s, action, goal)
+          s.status = 'idle'
+          s.attention = undefined
+          break
+        }
         if (goal) {
           result = { continueWith: goal }
           break
@@ -843,11 +1046,10 @@ export class SessionService extends EventEmitter {
           result = { continueWith: meshReason }
           break
         }
+        this.turnStarted.delete(s.id)
         s.status = 'idle'
         s.attention = undefined
         if (!this.isActive(s)) s.unread = true
-        const usage = sessionUsage(s.provider, s.transcriptPath)
-        if (usage) (s as { contextTokens?: number }).contextTokens = usage.context
         notify('turn', s, `${s.name} is ready`, s.lastAssistant || 'Turn complete')
         pushTimeline({ sessionId: s.id, sessionName: s.name, type: 'stop', text: truncate(s.lastAssistant ?? 'Turn complete', 240), group: s.meshGroup })
         this.nudgeReviewers(s)

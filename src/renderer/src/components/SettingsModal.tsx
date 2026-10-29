@@ -35,6 +35,42 @@ const NAV: [string, string, string][] = [
   ['about', 'About', 'sparkles']
 ]
 
+/** Cost & context: when long conversations are compacted or rotated, and the spend limits. */
+function GuardSettingsRows({ s, update }: { s: Settings; update: (p: Partial<Settings>) => void }) {
+  const g = s.guard
+  const set2 = (patch: Partial<Settings['guard']>): void => update({ guard: { ...g, ...patch } })
+  const pct = (v: number) => Math.round(v * 100)
+  const num = (v: string, min: number, max: number) => Math.min(max, Math.max(min, Number(v) || 0))
+  return (
+    <>
+      <h3>Cost &amp; context</h3>
+      <Row label="Guard long and runaway sessions" desc="Each request re-sends the whole conversation, so cost grows with its size. Watches context size and spend, compacts or restarts large sessions, and pauses automatic work over a spend limit.">
+        <Switch on={g.enabled} onChange={(enabled) => set2({ enabled })} />
+      </Row>
+      <Row label="Compact automatically" desc={`At ${pct(g.compactPct)}% of the context window or ${Math.round(g.compactAtTokens / 1000)}k tokens, whichever comes first (sooner while a large session is making requests quickly).`}>
+        <Switch on={g.autoCompact} onChange={(autoCompact) => set2({ autoCompact })} />
+      </Row>
+      <Row label="Continue in a fresh session automatically" desc={`At ${pct(g.rotatePct)}% of the window, or after ${g.rotateAfterCompactions} compactions: a summary carries over and the old chat stays in Chats.`}>
+        <Switch on={g.autoRotate} onChange={(autoRotate) => set2({ autoRotate })} />
+      </Row>
+      <Row label="Thresholds" desc="Warn / compact / fresh session, as % of the context window; and the compaction cap in thousands of tokens.">
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <input className="input" type="number" min={10} max={95} style={{ width: 64 }} value={pct(g.warnPct)} onChange={(e) => set2({ warnPct: num(e.target.value, 10, 95) / 100 })} />
+          <input className="input" type="number" min={10} max={95} style={{ width: 64 }} value={pct(g.compactPct)} onChange={(e) => set2({ compactPct: num(e.target.value, 10, 95) / 100 })} />
+          <input className="input" type="number" min={10} max={95} style={{ width: 64 }} value={pct(g.rotatePct)} onChange={(e) => set2({ rotatePct: num(e.target.value, 10, 95) / 100 })} />
+          <input className="input" type="number" min={20} max={1000} style={{ width: 72 }} value={Math.round(g.compactAtTokens / 1000)} onChange={(e) => set2({ compactAtTokens: num(e.target.value, 20, 1000) * 1000 })} />k
+        </span>
+      </Row>
+      <Row label="Spend limit per session" desc="Estimated USD. Past it, goal mode, peer wake-ups and automations pause until you allow more (0 = no limit).">
+        <input className="input" type="number" min={0} step={5} style={{ width: 90 }} value={g.sessionUsdLimit} onChange={(e) => set2({ sessionUsdLimit: num(e.target.value, 0, 100000) })} />
+      </Row>
+      <Row label="Spend limit per hour" desc="Estimated USD across all sessions, jobs and scheduled tasks in the last 60 minutes (0 = no limit).">
+        <input className="input" type="number" min={0} step={5} style={{ width: 90 }} value={g.hourlyUsdLimit} onChange={(e) => set2({ hourlyUsdLimit: num(e.target.value, 0, 100000) })} />
+      </Row>
+    </>
+  )
+}
+
 function Row({ label, desc, children }: { label: string; desc?: ReactNode; children: ReactNode }) {
   return (
     <div className="setting">
@@ -150,6 +186,7 @@ function General({ s, update }: P) {
       <Row label="Goal mode limit" desc="Maximum automatic continuation turns before a goal pauses.">
         <input className="input" type="number" min={1} max={200} style={{ width: 90 }} value={s.goalMaxIterations} onChange={(e) => update({ goalMaxIterations: Math.max(1, +e.target.value) })} />
       </Row>
+      <GuardSettingsRows s={s} update={update} />
       <Row label="Prevent sleep while Claude is working">
         <Switch on={s.preventSleep} onChange={(preventSleep) => update({ preventSleep })} />
       </Row>

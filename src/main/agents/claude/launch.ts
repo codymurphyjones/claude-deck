@@ -84,4 +84,10 @@ export function buildClaudeArgs(s: SessionInfo): string[] {
   return args
 }
 
-export const claudeEnv = agentEnv
+export function claudeEnv(s: SessionInfo): Record<string, string> {
+  const env = agentEnv(s)
+  // Have the CLI compact on its own earlier than its near-full default (the guard compacts too).
+  const g = settings().guard
+  if (g.enabled && g.autoCompact && !env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE) env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(Math.round(Math.min(0.95, Math.max(0.1, g.compactPct)) * 100))
+  return env
+}

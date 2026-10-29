@@ -132,6 +132,11 @@ export class ClaudeChat extends ChatBase implements AgentChat {
     void this.control({ subtype: 'interrupt' })
   }
 
+  /** Summarize the conversation in place (the CLI's /compact; queued if a turn is running). */
+  compact(): boolean {
+    return this.send('/compact', { injected: true })
+  }
+
   /** Switch modes live; prompts already waiting that the new mode would allow are approved on the spot. */
   async setPermissionMode(mode: string): Promise<Json> {
     const res = await this.control({ subtype: 'set_permission_mode', mode })
@@ -212,17 +217,12 @@ export class ClaudeChat extends ChatBase implements AgentChat {
       case 'init':
         this.meta.model = j.model as string
         this.meta.tools = (j.tools as string[]) ?? []
-        // The model's context window (the composer's context meter), from the result's per-model usage.
-    const win = Math.max(0, ...Object.values((j.modelUsage as Record<string, { contextWindow?: number }> | undefined) ?? {}).map((m) => Number(m.contextWindow) || 0))
-    if (win > 0 && win !== this.meta.contextWindow) {
-      this.meta.contextWindow = win
-      this.emitMeta()
-    }
-    if (j.session_id) this.emit('session', j.session_id)
+        if (j.session_id) this.emit('session', j.session_id)
         this.emitMeta()
         return
       case 'compact_boundary':
         this.notice('Conversation compacted to free up context.')
+        this.emit('compacted')
         return
       case 'api_retry':
         this.notice(`Retrying the API request${j.attempt ? ` (attempt ${j.attempt})` : ''}…`, 'warn')
@@ -408,7 +408,11 @@ export class ClaudeChat extends ChatBase implements AgentChat {
         error
       }
     })
+    // The model's context window (the composer's context meter), from the result's per-model usage.
+    const win = Math.max(0, ...Object.values((j.modelUsage as Record<string, { contextWindow?: number }> | undefined) ?? {}).map((m) => Number(m.contextWindow) || 0))
+    if (win > 0 && win !== this.meta.contextWindow) this.meta.contextWindow = win
     if (j.session_id) this.emit('session', j.session_id)
+    if (typeof j.total_cost_usd === 'number') this.emit('cost', j.total_cost_usd)
     // A queued message starts the next turn immediately.
     if (this.meta.queued > 0) {
       this.turnStart = Date.now()

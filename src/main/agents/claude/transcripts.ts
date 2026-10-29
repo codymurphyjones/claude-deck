@@ -2,8 +2,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import type { TokenUsage } from '@shared/agent'
+import type { UsageRecord } from '@shared/pricing'
 import { encodeProjectDir } from '@shared/paths'
 import type { AgentHistory, TranscriptDigest, TranscriptFile } from '../types'
+import { readNewLines } from '../../util'
 import { loadConversation } from './history'
 
 /** `$CLAUDE_CONFIG_DIR`, else ~/.claude. */
@@ -179,6 +181,34 @@ function usage(transcriptPath: string | undefined): TokenUsage | undefined {
   return undefined
 }
 
+/** Per-request usage from transcript lines (assistant messages; one line per content block, same usage). */
+export function parseUsage(lines: string[]): UsageRecord[] {
+  const out: UsageRecord[] = []
+  for (const line of lines) {
+    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue
+    try {
+      const j = JSON.parse(line)
+      const m = j.type === 'assistant' ? j.message : undefined
+      const u = m?.usage
+      if (!u) continue
+      const id = typeof m.id === 'string' ? m.id : undefined
+      if (id && out.length && out[out.length - 1].id === id) continue
+      const input = u.input_tokens || 0
+      const cacheWrite = u.cache_creation_input_tokens || 0
+      const cacheRead = u.cache_read_input_tokens || 0
+      out.push({ id, model: m.model, input, cacheWrite, cacheRead, output: u.output_tokens || 0, context: input + cacheWrite + cacheRead })
+    } catch {
+      /* partial or foreign line */
+    }
+  }
+  return out
+}
+
+function usageSince(transcriptPath: string, offset: number | undefined): { records: UsageRecord[]; offset: number } | undefined {
+  const r = readNewLines(transcriptPath, offset)
+  return r && { records: parseUsage(r.lines), offset: r.offset }
+}
+
 export const claudeHistory: AgentHistory = {
   files,
   idOf: (file) => path.basename(file, '.jsonl'),
@@ -187,5 +217,6 @@ export const claudeHistory: AgentHistory = {
   find,
   load: (sessionId) => loadConversation(find(sessionId)),
   usage,
+  usageSince,
   prepareResume
 }
